@@ -101,6 +101,7 @@ struct _GstMsdkDec
   gboolean hardware;
   gboolean report_error;
   guint async_depth;
+  gboolean dec_postproc;
 
   mfxExtBuffer *bs_extra_params[MAX_BS_EXTRA_PARAMS];
   guint num_bs_extra_params;

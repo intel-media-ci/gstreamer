@@ -52,6 +52,7 @@ static GstStaticPadTemplate src_factory = GST_STATIC_PAD_TEMPLATE ("src",
 
 #define PROP_HARDWARE_DEFAULT            TRUE
 #define PROP_ASYNC_DEPTH_DEFAULT         1
+#define PROP_DEC_POSTPROC_DEFAULT        FALSE
 
 #define IS_ALIGNED(i, n) (((i) & ((n)-1)) == 0)
 
@@ -321,10 +322,16 @@ static gboolean
 gst_msdkdec_init_decoder (GstMsdkDec * thiz)
 {
   GstMsdkDecClass *klass = GST_MSDKDEC_GET_CLASS (thiz);
-  GstVideoInfo *info;
+  GstVideoInfo *info, *output_info;
   mfxSession session;
   mfxStatus status;
   mfxFrameAllocRequest request;
+  #if (MFX_VERSION >= 1022)
+  mfxExtDecVideoProcessing ext_dec_video_proc;
+  #endif
+
+  GstVideoCodecState *output_state =
+      gst_video_decoder_get_output_state (GST_VIDEO_DECODER (thiz));
 
   if (thiz->initialized)
     return TRUE;
@@ -339,6 +346,7 @@ gst_msdkdec_init_decoder (GstMsdkDec * thiz)
     return FALSE;
   }
   info = &thiz->input_state->info;
+  output_info = &output_state->info;
 
   GST_OBJECT_LOCK (thiz);
 
@@ -382,6 +390,35 @@ gst_msdkdec_init_decoder (GstMsdkDec * thiz)
   thiz->param.mfx.FrameInfo.ChromaFormat =
       thiz->param.mfx.FrameInfo.ChromaFormat ? thiz->param.mfx.
       FrameInfo.ChromaFormat : MFX_CHROMAFORMAT_YUV420;
+
+#if (MFX_VERSION >= 1022)
+  if (output_info && thiz->dec_postproc) {
+    memset (&ext_dec_video_proc, 0, sizeof (ext_dec_video_proc));
+    ext_dec_video_proc.Header.BufferId = MFX_EXTBUFF_DEC_VIDEO_PROCESSING;
+    ext_dec_video_proc.Header.BufferSz = sizeof (ext_dec_video_proc);
+    ext_dec_video_proc.In.CropW = info->width;
+    ext_dec_video_proc.In.CropH = info->height;
+    ext_dec_video_proc.In.CropX = 0;
+    ext_dec_video_proc.In.CropY = 0;
+    ext_dec_video_proc.Out.FourCC =
+        gst_msdk_get_mfx_fourcc_from_format (output_info->finfo->format);
+    ext_dec_video_proc.Out.ChromaFormat =
+        gst_msdk_get_mfx_chroma_from_format (output_info->finfo->format);
+    ext_dec_video_proc.Out.Width = output_info->width;
+    ext_dec_video_proc.Out.Height = output_info->height;
+    ext_dec_video_proc.Out.CropW = output_info->width;
+    ext_dec_video_proc.Out.CropH = output_info->height;
+    ext_dec_video_proc.Out.CropX = 0;
+    ext_dec_video_proc.Out.CropY = 0;
+    gst_msdkdec_add_bs_extra_param (thiz,
+        (mfxExtBuffer *) & ext_dec_video_proc);
+  }
+#endif
+
+  if (thiz->num_bs_extra_params) {
+    thiz->param.NumExtParam = thiz->num_bs_extra_params;
+    thiz->param.ExtParam = thiz->bs_extra_params;
+  }
 
   session = gst_msdk_context_get_session (thiz->context);
   /* validate parameters and allow MFX to make adjustments */
@@ -524,14 +561,18 @@ done:
 static gboolean
 gst_msdkdec_set_src_caps (GstMsdkDec * thiz, gboolean need_allocation)
 {
+  GstVideoDecoder *decoder = GST_VIDEO_DECODER (thiz);
   GstVideoCodecState *output_state;
   GstVideoInfo *vinfo;
   GstVideoAlignment align;
   GstCaps *allocation_caps = NULL;
+  GstCaps *allowed_caps;
   GstVideoFormat format;
   guint width, height;
   guint alloc_w, alloc_h;
   const gchar *format_str;
+  GstStructure *outs;
+  const gchar *out_format;
 
   /* use display width and display height in output state, which
    * will be used for caps negotiation */
@@ -549,6 +590,15 @@ gst_msdkdec_set_src_caps (GstMsdkDec * thiz, gboolean need_allocation)
   if (format == GST_VIDEO_FORMAT_UNKNOWN) {
     GST_WARNING_OBJECT (thiz, "Failed to find a valid video format");
     return FALSE;
+  }
+
+  /* Here only implement the format conversion for decoder SFC */
+  if (thiz->dec_postproc) {
+    allowed_caps = gst_pad_get_allowed_caps (decoder->srcpad);
+    outs = gst_caps_get_structure (allowed_caps, 0);
+    out_format = gst_structure_get_string (outs, "format");
+    if (out_format && gst_video_format_from_string (out_format) != format)
+      format = gst_video_format_from_string (out_format);
   }
 
   output_state =
@@ -1737,6 +1787,9 @@ gst_msdkdec_set_property (GObject * object, guint prop_id, const GValue * value,
     case GST_MSDKDEC_PROP_ASYNC_DEPTH:
       thiz->async_depth = g_value_get_uint (value);
       break;
+    case GST_MSDKDEC_PROP_DEC_POSTPROC:
+      thiz->dec_postproc = g_value_get_boolean (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -1765,6 +1818,9 @@ gst_msdkdec_get_property (GObject * object, guint prop_id, GValue * value,
       break;
     case GST_MSDKDEC_PROP_ASYNC_DEPTH:
       g_value_set_uint (value, thiz->async_depth);
+      break;
+    case GST_MSDKDEC_PROP_DEC_POSTPROC:
+      g_value_set_boolean (value, thiz->dec_postproc);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -1889,6 +1945,12 @@ gst_msdkdec_class_init (GstMsdkDecClass * klass)
           1, 20, PROP_ASYNC_DEPTH_DEFAULT,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
+  g_object_class_install_property (gobject_class, GST_MSDKDEC_PROP_DEC_POSTPROC,
+      g_param_spec_boolean ("dec-postproc", "Dec Postproc",
+          "Enable decoder to do inline postprocessing",
+          PROP_DEC_POSTPROC_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
   gst_element_class_add_static_pad_template (element_class, &src_factory);
 }
 
@@ -1903,6 +1965,7 @@ gst_msdkdec_init (GstMsdkDec * thiz)
   thiz->do_realloc = TRUE;
   thiz->force_reset_on_res_change = TRUE;
   thiz->report_error = FALSE;
+  thiz->dec_postproc = FALSE;
   thiz->adapter = gst_adapter_new ();
   thiz->input_state = NULL;
   thiz->pool = NULL;

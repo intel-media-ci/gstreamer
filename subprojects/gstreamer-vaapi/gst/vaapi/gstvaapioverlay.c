@@ -191,6 +191,14 @@ gst_vaapi_overlay_sink_pad_init (GstVaapiOverlaySinkPad * pad)
   pad->priv = gst_vaapi_pad_private_new ();
 }
 
+#define DEFAULT_OVERLAY_HINT_FAST FALSE
+
+enum
+{
+  PROP_OVERLAY_0,
+  PROP_OVERLAY_HINT_FAST,
+};
+
 static void
 gst_vaapi_overlay_child_proxy_init (gpointer g_iface, gpointer iface_data);
 
@@ -407,6 +415,7 @@ gst_vaapi_overlay_surface_next (gpointer data)
       blend_surface->target.width = GST_VIDEO_FRAME_WIDTH (inframe);
       blend_surface->target.height = GST_VIDEO_FRAME_HEIGHT (inframe);
       blend_surface->alpha = pad->alpha;
+      blend_surface->hint_fast = generator->overlay->hint_fast;
     }
 
     gst_buffer_unref (inbuf);
@@ -572,6 +581,38 @@ gst_vaapi_overlay_get_vaapi_pad_private (GstVaapiPluginBase * plugin,
 }
 
 static void
+gst_vaapi_overlay_set_property (GObject * object,
+    guint prop_id, const GValue * value, GParamSpec * pspec)
+{
+  GstVaapiOverlay *const overlay = GST_VAAPI_OVERLAY (object);
+
+  switch (prop_id) {
+    case PROP_OVERLAY_HINT_FAST:
+      overlay->hint_fast = g_value_get_boolean (value);
+      break;
+    default:
+      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+      break;
+  }
+}
+
+static void
+gst_vaapi_overlay_get_property (GObject * object,
+    guint prop_id, GValue * value, GParamSpec * pspec)
+{
+  GstVaapiOverlay *const overlay = GST_VAAPI_OVERLAY (object);
+
+  switch (prop_id) {
+    case PROP_OVERLAY_HINT_FAST:
+      g_value_set_boolean (value, overlay->hint_fast);
+      break;
+    default:
+      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+      break;
+  }
+}
+
+static void
 gst_vaapi_overlay_class_init (GstVaapiOverlayClass * klass)
 {
   GObjectClass *const object_class = G_OBJECT_CLASS (klass);
@@ -589,6 +630,10 @@ gst_vaapi_overlay_class_init (GstVaapiOverlayClass * klass)
       GST_DEBUG_FUNCPTR (gst_vaapi_overlay_get_vaapi_pad_private);
 
   object_class->finalize = GST_DEBUG_FUNCPTR (gst_vaapi_overlay_finalize);
+  object_class->set_property =
+      GST_DEBUG_FUNCPTR (gst_vaapi_overlay_set_property);
+  object_class->get_property =
+      GST_DEBUG_FUNCPTR (gst_vaapi_overlay_get_property);
 
   agg_class->sink_query = GST_DEBUG_FUNCPTR (gst_vaapi_overlay_sink_query);
   agg_class->src_query = GST_DEBUG_FUNCPTR (gst_vaapi_overlay_src_query);
@@ -620,6 +665,15 @@ gst_vaapi_overlay_class_init (GstVaapiOverlayClass * klass)
   gst_element_class_add_static_pad_template_with_gtype (element_class,
       &gst_vaapi_overlay_src_factory, GST_TYPE_AGGREGATOR_PAD);
 
+  g_object_class_install_property
+      (object_class,
+      PROP_OVERLAY_HINT_FAST,
+      g_param_spec_boolean ("hint-fast",
+          "Hint Fast",
+          "When enabled, hint fast will be set in VAAPI VPP flags",
+          DEFAULT_OVERLAY_HINT_FAST,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
   gst_element_class_set_static_metadata (element_class,
       "VA-API overlay",
       "Filter/Editor/Video/Compositor/Hardware",
@@ -630,6 +684,8 @@ static void
 gst_vaapi_overlay_init (GstVaapiOverlay * overlay)
 {
   gst_vaapi_plugin_base_init (GST_VAAPI_PLUGIN_BASE (overlay), GST_CAT_DEFAULT);
+
+  overlay->hint_fast = DEFAULT_OVERLAY_HINT_FAST;
 }
 
 /* GstChildProxy implementation */

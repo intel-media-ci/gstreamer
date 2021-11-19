@@ -67,6 +67,8 @@ struct _GstVaapiOverlay
 
   GstVaapiBlend *blend;
   GstVaapiVideoPool *blend_pool;
+
+  guint hint_fast:1;
 };
 
 struct _GstVaapiOverlayClass

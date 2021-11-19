@@ -274,6 +274,9 @@ gst_vaapi_blend_process_unlocked (GstVaapiBlend * blend,
     param->output_region = &dst_rect;
     param->output_background_color = 0xff000000;
 
+    if (current->hint_fast == TRUE)
+      param->pipeline_flags = VA_PROC_PIPELINE_FAST;
+
 #if VA_CHECK_VERSION(1,1,0)
     if (current->alpha < 1.0) {
       blend_state.flags = VA_BLEND_GLOBAL_ALPHA;

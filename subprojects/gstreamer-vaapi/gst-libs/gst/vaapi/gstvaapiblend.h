@@ -43,6 +43,7 @@ struct _GstVaapiBlendSurface
   const GstVaapiRectangle *crop;
   GstVaapiRectangle target;
   gdouble alpha;
+  guint hint_fast:1;
 };
 
 typedef GstVaapiBlendSurface* (*GstVaapiBlendSurfaceNextFunc)(gpointer data);

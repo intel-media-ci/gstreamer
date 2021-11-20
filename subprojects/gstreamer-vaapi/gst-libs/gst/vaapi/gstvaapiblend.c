@@ -273,6 +273,7 @@ gst_vaapi_blend_process_unlocked (GstVaapiBlend * blend,
     param->surface_region = &src_rect;
     param->output_region = &dst_rect;
     param->output_background_color = 0xff000000;
+    param->filter_flags = VA_FILTER_SCALING_DEFAULT;
 
     if (current->hint_fast == TRUE)
       param->pipeline_flags = VA_PROC_PIPELINE_FAST;

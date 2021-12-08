@@ -1549,13 +1549,14 @@ gst_msdkdec_decide_allocation (GstVideoDecoder * decoder, GstQuery * query)
     }
   }
 
-  if (gst_query_find_allocation_meta (query, GST_VIDEO_META_API_TYPE, NULL)
-      && gst_buffer_pool_has_option (pool,
-          GST_BUFFER_POOL_OPTION_VIDEO_ALIGNMENT)) {
+  if ((gst_query_find_allocation_meta (query, GST_VIDEO_META_API_TYPE, NULL)
+          && gst_buffer_pool_has_option (pool,
+              GST_BUFFER_POOL_OPTION_VIDEO_ALIGNMENT)) || thiz->use_dmabuf) {
     GstStructure *config;
     GstAllocator *allocator;
 
     /* If downstream supports video meta and video alignment,
+     * or if downstream requests for DMABuf mem type,
      * we can replace with our own msdk bufferpool and use it
      */
     /* Remove downstream's pool */

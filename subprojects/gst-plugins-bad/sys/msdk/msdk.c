@@ -531,6 +531,9 @@ gst_msdk_set_mfx_frame_info_from_video_info (mfxFrameInfo * mfx_info,
 #endif
 
     default:
+      mfx_info->BitDepthLuma = 8;
+      mfx_info->BitDepthChroma = 8;
+
       break;
   }
 

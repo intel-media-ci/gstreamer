@@ -616,6 +616,8 @@ gst_msdkdec_set_src_caps (GstMsdkDec * thiz, gboolean need_allocation)
   GstStructure *outs = NULL;
   const gchar *out_format;
   GValue v_format = G_VALUE_INIT;
+  GValue v_width = G_VALUE_INIT;
+  GValue v_height = G_VALUE_INIT;
 
   /* use display width and display height in output state, which
    * will be used for caps negotiation */
@@ -638,18 +640,27 @@ gst_msdkdec_set_src_caps (GstMsdkDec * thiz, gboolean need_allocation)
   /* SFC is triggered (for AVC and HEVC) when default output format is not
    * accepted by downstream or when downstream requests for a smaller
    * resolution (i.e. SFC supports down-scaling)
-   * For SFC csc, need to do the query twice: the first time uses default
-   * color format to query peer pad, empty caps means default format is
-   * not accepted by downstream; then we need the second query to decide
-   * src caps color format and let SFC work. */
+   * Here we need to do the query twice: the first time uses default color
+   * format and bitstream's original size to query peer pad, empty caps
+   * means default format and/or size are not accepted by downstream;
+   * then we need the second query to decide src caps' color format and size,
+   * and let SFC work. */
   if (thiz->param.mfx.CodecId == MFX_CODEC_AVC ||
       thiz->param.mfx.CodecId == MFX_CODEC_HEVC) {
     temp_caps = gst_pad_query_caps (GST_VIDEO_DECODER (thiz)->srcpad, NULL);
     temp_caps = gst_caps_make_writable (temp_caps);
 
     g_value_init (&v_format, G_TYPE_STRING);
+    g_value_init (&v_width, G_TYPE_INT);
+    g_value_init (&v_height, G_TYPE_INT);
+
     g_value_set_string (&v_format, gst_video_format_to_string (format));
+    g_value_set_int (&v_width, width);
+    g_value_set_int (&v_height, height);
+
     gst_caps_set_value (temp_caps, "format", &v_format);
+    gst_caps_set_value (temp_caps, "width", &v_width);
+    gst_caps_set_value (temp_caps, "height", &v_height);
 
     if (gst_caps_is_empty (gst_pad_peer_query_caps (GST_VIDEO_DECODER
                 (thiz)->srcpad, temp_caps))) {
@@ -657,34 +668,28 @@ gst_msdkdec_set_src_caps (GstMsdkDec * thiz, gboolean need_allocation)
           gst_pad_get_allowed_caps (GST_VIDEO_DECODER (thiz)->srcpad);
       outs = gst_caps_get_structure (allowed_caps, 0);
       out_format = gst_structure_get_string (outs, "format");
+      gst_structure_get_int (outs, "width", &out_width);
+      gst_structure_get_int (outs, "height", &out_height);
+
       if (out_format) {
         format = gst_video_format_from_string (out_format);
         thiz->sfc = TRUE;
       }
+
+      if (out_width && out_height && (out_width != width
+              || out_height != height)) {
+        if (out_width > width || out_height > height)
+          GST_WARNING_OBJECT (thiz, "Decoder SFC cannot do up-scaling");
+        else {
+          GST_LOG_OBJECT (thiz, "Decoder SFC is doing down-scaling");
+          thiz->sfc = TRUE;
+          width = out_width;
+          height = out_height;
+        }
+      }
+      gst_caps_unref (allowed_caps);
     }
     gst_caps_unref (temp_caps);
-
-    /* SFC scaling, need to check if downstream asking for a different resolution */
-    if (!allowed_caps) {
-      allowed_caps =
-          gst_pad_get_allowed_caps (GST_VIDEO_DECODER (thiz)->srcpad);
-      outs = gst_caps_get_structure (allowed_caps, 0);
-    }
-
-    gst_structure_get_int (outs, "width", &out_width);
-    gst_structure_get_int (outs, "height", &out_height);
-    gst_caps_unref (allowed_caps);
-
-    if (out_width && out_height && (out_width != width || out_height != height)) {
-      if (out_width > width || out_height > height)
-        GST_WARNING_OBJECT (thiz, "Decoder SFC cannot do up-scaling");
-      else {
-        GST_LOG_OBJECT (thiz, "Decoder SFC is doing down-scaling");
-        thiz->sfc = TRUE;
-        width = out_width;
-        height = out_height;
-      }
-    }
   }
 #endif
 

@@ -78,7 +78,7 @@ static GstStaticPadTemplate sink_factory = GST_STATIC_PAD_TEMPLATE ("sink",
     GST_PAD_SINK,
     GST_PAD_ALWAYS,
     GST_STATIC_CAPS (GST_MSDK_CAPS_STR (COMMON_FORMAT,
-            "{ NV12, P010_10LE }") "; "
+            "{ NV12, VUYA, P010_10LE, Y410 }") "; "
         GST_MSDK_CAPS_MAKE_WITH_VA_FEATURE ("NV12")));
 #endif
 

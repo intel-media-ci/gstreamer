@@ -144,6 +144,11 @@ if have_mfx_ver134
   cdata.set('USE_MSDK_AV1_DEC', 1)
 endif
 
+if use_onevpl
+  msdk_sources += [ 'gstmsdkav1enc.c' ]
+  cdata.set10('USE_MSDK_AV1_ENC', 1)
+endif
+
 if host_machine.system() == 'windows'
   if cc.get_id() != 'msvc' and msdk_option.enabled()
     error('msdk plugin can only be built with MSVC')

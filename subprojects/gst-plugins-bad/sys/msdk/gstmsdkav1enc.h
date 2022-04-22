@@ -69,6 +69,7 @@ struct _GstMsdkAV1Enc
   GstBuffer *out_buf;
   GQueue *bitstream_queue;
   gsize parsed_offset;
+  GQueue *timestamp;
 };
 
 struct _GstMsdkAV1EncClass

@@ -61,6 +61,7 @@ struct _GstMsdkSurface
 {
   mfxFrameSurface1 *surface;
   GstBuffer *buf;
+  gboolean from_qdata;
 };
 
 mfxStatus gst_msdk_frame_alloc(mfxHDL pthis, mfxFrameAllocRequest *req, mfxFrameAllocResponse *resp);

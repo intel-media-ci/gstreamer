@@ -76,6 +76,7 @@ struct _GstMsdkDec
   gboolean use_dmabuf;
   gboolean initialized;
   gboolean sfc;
+  gboolean non_msdk_allocator;
 
   /* for packetization */
   GstAdapter *adapter;

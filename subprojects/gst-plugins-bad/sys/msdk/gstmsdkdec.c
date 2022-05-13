@@ -1674,6 +1674,7 @@ gst_msdkdec_decide_allocation (GstVideoDecoder * decoder, GstQuery * query)
   GstStructure *pool_config = NULL;
   GstCaps *pool_caps /*, *negotiated_caps */ ;
   guint size, min_buffers, max_buffers;
+  GstAllocator *allocator = NULL;
 
   if (!thiz->param.mfx.FrameInfo.Width || !thiz->param.mfx.FrameInfo.Height)
     return FALSE;
@@ -1734,9 +1735,16 @@ gst_msdkdec_decide_allocation (GstVideoDecoder * decoder, GstQuery * query)
     }
   }
 
-  if (gst_query_find_allocation_meta (query, GST_VIDEO_META_API_TYPE, NULL)
-      && gst_buffer_pool_has_option (pool,
-          GST_BUFFER_POOL_OPTION_VIDEO_ALIGNMENT)) {
+  gst_query_parse_nth_allocation_param (query, 0, &allocator, NULL);
+  if (!(GST_IS_MSDK_VIDEO_ALLOCATOR (allocator) ||
+          GST_IS_MSDK_DMABUF_ALLOCATOR (allocator) ||
+          GST_IS_MSDK_SYSTEM_ALLOCATOR (allocator)))
+    thiz->non_msdk_allocator = TRUE;
+
+  if ((gst_query_find_allocation_meta (query, GST_VIDEO_META_API_TYPE, NULL)
+          && gst_buffer_pool_has_option
+          (pool, GST_BUFFER_POOL_OPTION_VIDEO_ALIGNMENT))
+      || thiz->non_msdk_allocator) {
     GstStructure *config;
     GstAllocator *allocator;
 
@@ -2139,6 +2147,7 @@ gst_msdkdec_init (GstMsdkDec * thiz)
   thiz->force_reset_on_res_change = TRUE;
   thiz->report_error = FALSE;
   thiz->sfc = FALSE;
+  thiz->non_msdk_allocator = FALSE;
   thiz->adapter = gst_adapter_new ();
   thiz->input_state = NULL;
   thiz->pool = NULL;

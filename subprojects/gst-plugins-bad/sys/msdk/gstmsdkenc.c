@@ -82,15 +82,13 @@ GST_DEBUG_CATEGORY_EXTERN (gst_msdkenc_debug);
 static GstStaticPadTemplate sink_factory = GST_STATIC_PAD_TEMPLATE ("sink",
     GST_PAD_SINK,
     GST_PAD_ALWAYS,
-    GST_STATIC_CAPS (GST_MSDK_CAPS_STR
-        ("{ NV12, I420, YV12, YUY2, UYVY, BGRA }", "NV12"))
+    GST_STATIC_CAPS (GST_MSDK_CAPS_STR ("NV12", "NV12"))
     );
 #else
 static GstStaticPadTemplate sink_factory = GST_STATIC_PAD_TEMPLATE ("sink",
     GST_PAD_SINK,
     GST_PAD_ALWAYS,
-    GST_STATIC_CAPS (GST_MSDK_CAPS_STR
-        ("{ NV12, I420, YV12, YUY2, UYVY, BGRA }", "NV12") "; "
+    GST_STATIC_CAPS (GST_MSDK_CAPS_STR ("NV12", "NV12") "; "
         GST_MSDK_CAPS_MAKE_WITH_VA_FEATURE ("NV12"))
     );
 #endif

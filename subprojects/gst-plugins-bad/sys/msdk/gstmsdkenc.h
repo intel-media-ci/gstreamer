@@ -102,7 +102,6 @@ struct _GstMsdkEnc
   GstMsdkContext *context;
   GstMsdkContext *old_context;
   mfxVideoParam param;
-  guint num_surfaces;
   guint num_tasks;
   MsdkEncTask *tasks;
   guint next_task;
@@ -110,11 +109,6 @@ struct _GstMsdkEnc
    * the default value is 0 */
   guint num_extra_frames;
 
-  gboolean has_vpp;
-  mfxVideoParam vpp_param;
-  guint num_vpp_surfaces;
-  /* Input interfaces, output above */
-  mfxFrameAllocResponse vpp_alloc_resp;
   mfxFrameAllocResponse alloc_resp;
 
   mfxExtBuffer *extra_params[MAX_EXTRA_PARAMS];

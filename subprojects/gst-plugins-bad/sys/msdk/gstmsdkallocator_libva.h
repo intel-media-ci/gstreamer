@@ -45,6 +45,14 @@ gboolean
 gst_msdk_export_dmabuf_to_vasurface (GstMsdkContext *context,
     GstVideoInfo *vinfo, gint fd, VASurfaceID *surface_id);
 
+VASurfaceID
+_get_va_surface (GstBuffer * buf, GstVideoInfo * info,
+    GstMsdkContext * msdk_context);
+
+GstMsdkSurface *
+import_to_msdk_surface (GstBuffer * buf, GstMsdkContext * msdk_context,
+    GstVideoInfo * info);
+
 gboolean
 gst_msdk_replace_mfx_memid (GstMsdkContext *context,
     mfxFrameSurface1 *mfx_surface, VASurfaceID surface_id);

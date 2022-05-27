@@ -37,6 +37,8 @@
 #include "gstmsdkallocator_libva.h"
 #include "msdk_libva.h"
 
+#include <gst/va/gstvaallocator.h>
+
 mfxStatus
 gst_msdk_frame_alloc (mfxHDL pthis, mfxFrameAllocRequest * req,
     mfxFrameAllocResponse * resp)
@@ -702,6 +704,92 @@ error_create_surface:
     GST_ERROR ("Failed to create the VASurface from DRM_PRIME FD");
     return FALSE;
   }
+}
+
+VASurfaceID
+_get_va_surface (GstBuffer * buf, GstVideoInfo * info,
+    GstMsdkContext * msdk_context)
+{
+  VASurfaceID va_surface = VA_INVALID_ID;
+
+  if (info == NULL) {
+    va_surface = gst_va_buffer_get_surface (buf);
+  } else {
+    GstVideoMeta *vmeta;
+    GstMemory *mem;
+    guint i, fd;
+
+    mem = gst_buffer_peek_memory (buf, 0);
+    fd = gst_dmabuf_memory_get_fd (mem);
+    if (fd < 0)
+      return va_surface;
+
+    vmeta = gst_buffer_get_video_meta (buf);
+    if (vmeta) {
+      if (GST_VIDEO_INFO_FORMAT (info) != vmeta->format ||
+          GST_VIDEO_INFO_WIDTH (info) != vmeta->width ||
+          GST_VIDEO_INFO_HEIGHT (info) != vmeta->height ||
+          GST_VIDEO_INFO_N_PLANES (info) != vmeta->n_planes) {
+        GST_ERROR ("VideoMeta attached to buffer is not matching"
+            "the negotiated width/height/format");
+        return va_surface;
+      }
+      for (i = 0; i < GST_VIDEO_INFO_N_PLANES (info); ++i) {
+        GST_VIDEO_INFO_PLANE_OFFSET (info, i) = vmeta->offset[i];
+        GST_VIDEO_INFO_PLANE_STRIDE (info, i) = vmeta->stride[i];
+      }
+      GST_VIDEO_INFO_SIZE (info) = gst_buffer_get_size (buf);
+    }
+    /* export dmabuf to vasurface */
+    if (!gst_msdk_export_dmabuf_to_vasurface (msdk_context, info, fd,
+            &va_surface)) {
+      return VA_INVALID_ID;
+    }
+  }
+
+  return va_surface;
+}
+
+GstMsdkSurface *
+import_to_msdk_surface (GstBuffer * buf, GstMsdkContext * msdk_context,
+    GstVideoInfo * info)
+{
+  VASurfaceID va_surface = VA_INVALID_ID;
+  GstMemory *mem = NULL;
+  mfxFrameInfo frame_info = { 0, };
+  GstMsdkSurface *msdk_surface = NULL;
+  mfxFrameSurface1 *mfx_surface = NULL;
+  GstMsdkMemoryID *msdk_mid = NULL;
+  mfxMemId *mfx_mid = NULL;
+
+  mem = gst_buffer_peek_memory (buf, 0);
+
+  if (gst_msdk_is_va_mem (mem)) {
+    va_surface = _get_va_surface (buf, NULL, NULL);
+  } else if (gst_is_dmabuf_memory (mem)) {
+    va_surface = _get_va_surface (buf, info, msdk_context);
+  }
+
+  if (va_surface == VA_INVALID_ID)
+    return NULL;
+
+  msdk_surface = g_slice_new0 (GstMsdkSurface);
+  mfx_surface = (mfxFrameSurface1 *) g_slice_new0 (mfxFrameSurface1);
+  msdk_mid = (GstMsdkMemoryID *) g_slice_alloc0 (sizeof (GstMsdkMemoryID));
+  mfx_mid = (mfxMemId *) g_slice_alloc0 (sizeof (mfxMemId));
+
+  msdk_mid->surface = (VASurfaceID *) g_slice_alloc0 (sizeof (VASurfaceID));
+  *msdk_mid->surface = va_surface;
+
+  mfx_mid = (mfxMemId *) msdk_mid;
+  mfx_surface->Data.MemId = mfx_mid;
+
+  gst_msdk_set_mfx_frame_info_from_video_info (&frame_info, info);
+  mfx_surface->Info = frame_info;
+
+  msdk_surface->surface = mfx_surface;
+
+  return msdk_surface;
 }
 
 /**

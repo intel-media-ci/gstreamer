@@ -39,6 +39,7 @@
 G_BEGIN_DECLS
 
 typedef struct _GstMsdkMemoryID GstMsdkMemoryID;
+typedef struct _GstMsdkSurface GstMsdkSurface;
 
 struct _GstMsdkMemoryID {
   mfxU32 fourcc;
@@ -54,6 +55,12 @@ struct _GstMsdkMemoryID {
   gint pitch;
   guint offset;
 #endif
+};
+
+struct _GstMsdkSurface
+{
+  mfxFrameSurface1 *surface;
+  GstBuffer *buf;
 };
 
 mfxStatus gst_msdk_frame_alloc(mfxHDL pthis, mfxFrameAllocRequest *req, mfxFrameAllocResponse *resp);

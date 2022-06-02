@@ -889,8 +889,7 @@ gst_msdkh265enc_need_conversion (GstMsdkEnc * encoder, GstVideoInfo * info,
 
     case GST_VIDEO_FORMAT_YUY2:
 #if (MFX_VERSION >= 1027)
-      if (encoder->codename >= MFX_PLATFORM_ICELAKE &&
-          h265enc->tune_mode == MFX_CODINGOPTION_OFF)
+      if (encoder->codename >= MFX_PLATFORM_ICELAKE)
         return FALSE;
 #endif
     default:

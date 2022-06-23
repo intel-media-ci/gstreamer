@@ -113,6 +113,7 @@ struct _GstVaVpp
   gboolean add_borders;
   gint borders_h;
   gint borders_w;
+  guint32 scale_method;
 
   gboolean hdr_mapping;
   gboolean has_hdr_meta;
@@ -230,6 +231,9 @@ _update_properties_unlocked (GstVaVpp * self)
   } else {
     self->op_flags &= ~VPP_CONVERT_DIRECTION;
   }
+
+  if (!gst_va_filter_set_scale_method (btrans->filter, self->scale_method))
+    GST_WARNING_OBJECT (self, "could not set the filter scale method.");
 }
 
 static void
@@ -305,6 +309,9 @@ gst_va_vpp_set_property (GObject * object, guint prop_id,
       self->hdr_mapping = g_value_get_boolean (value);
       g_atomic_int_set (&self->rebuild_filters, TRUE);
       break;
+    case GST_VA_FILTER_PROP_SCALE_METHOD:
+      self->scale_method = g_value_get_enum (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -368,6 +375,9 @@ gst_va_vpp_get_property (GObject * object, guint prop_id, GValue * value,
       break;
     case GST_VA_FILTER_PROP_HDR:
       g_value_set_boolean (value, self->hdr_mapping);
+      break;
+    case GST_VA_FILTER_PROP_SCALE_METHOD:
+      g_value_set_enum (value, self->scale_method);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -2129,6 +2139,7 @@ gst_va_vpp_class_init (gpointer g_class, gpointer class_data)
       GST_DEBUG_FUNCPTR (gst_va_vpp_update_properties);
 
   gst_va_filter_install_properties (filter, object_class);
+  gst_va_filter_install_scale_method_properties (filter, object_class);
 
   g_free (long_name);
   g_free (cdata->description);

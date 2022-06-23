@@ -247,12 +247,10 @@ struct CData
 
 enum
 {
-  PROP_DEVICE_PATH = 1,
-  PROP_SCALE_METHOD,
-  N_PROPERTIES
+  PROP_DEVICE_PATH = GST_VA_FILTER_PROP_LAST + 1,
 };
 
-static GParamSpec *properties[N_PROPERTIES];
+static GParamSpec *device_pspec = NULL;
 static GstElementClass *parent_class = NULL;
 
 static void
@@ -262,7 +260,7 @@ gst_va_compositor_set_property (GObject * object, guint prop_id,
   GstVaCompositor *self = GST_VA_COMPOSITOR (object);
 
   switch (prop_id) {
-    case PROP_SCALE_METHOD:
+    case GST_VA_FILTER_PROP_SCALE_METHOD:
     {
       GST_OBJECT_LOCK (object);
       self->scale_method = g_value_get_enum (value);
@@ -290,7 +288,7 @@ gst_va_compositor_get_property (GObject * object, guint prop_id,
       g_object_get_property (G_OBJECT (self->display), "path", value);
       break;
     }
-    case PROP_SCALE_METHOD:
+    case GST_VA_FILTER_PROP_SCALE_METHOD:
     {
       GST_OBJECT_LOCK (object);
       g_value_set_enum (value, self->scale_method);
@@ -312,7 +310,7 @@ gst_va_compositor_start (GstAggregator * agg)
   if (!gst_va_ensure_element_data (element, klass->render_device_path,
           &self->display))
     return FALSE;
-  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_DEVICE_PATH]);
+  g_object_notify_by_pspec (G_OBJECT (self), device_pspec);
 
   self->filter = gst_va_filter_new (self->display);
   if (!gst_va_filter_open (self->filter))
@@ -329,7 +327,7 @@ gst_va_compositor_stop (GstAggregator * agg)
   gst_va_filter_close (self->filter);
   gst_clear_object (&self->filter);
   gst_clear_object (&self->display);
-  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_DEVICE_PATH]);
+  g_object_notify_by_pspec (G_OBJECT (self), device_pspec);
 
   return GST_AGGREGATOR_CLASS (parent_class)->stop (agg);
 }
@@ -1378,15 +1376,13 @@ gst_va_compositor_class_init (gpointer g_class, gpointer class_data)
   vagg_class->create_output_buffer =
       GST_DEBUG_FUNCPTR (gst_va_compositor_create_output_buffer);
 
-  properties[PROP_DEVICE_PATH] = g_param_spec_string ("device-path",
-      "Device Path", "DRM device path", NULL,
-      G_PARAM_READABLE | G_PARAM_STATIC_STRINGS);
+  device_pspec = g_param_spec_string ("device-path", "Device Path",
+      "DRM device path", NULL, G_PARAM_READABLE | G_PARAM_STATIC_STRINGS);
 
-  properties[PROP_SCALE_METHOD] = g_param_spec_enum ("scale-method",
-      "Scale Method", "Scale method to use", GST_TYPE_VA_SCALE_METHOD,
-      VA_FILTER_SCALING_DEFAULT, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
+  g_object_class_install_property (object_class, PROP_DEVICE_PATH,
+      device_pspec);
 
-  g_object_class_install_properties (object_class, N_PROPERTIES, properties);
+  gst_va_filter_install_scale_method_properties (filter, object_class);
 
   g_free (long_name);
   g_free (cdata->description);

@@ -54,6 +54,7 @@ enum {
   GST_VA_FILTER_PROP_DEINTERLACE_METHOD,
   GST_VA_FILTER_PROP_ADD_BORDERS,
   GST_VA_FILTER_PROP_HDR,
+  GST_VA_FILTER_PROP_SCALE_METHOD,
   GST_VA_FILTER_PROP_LAST
 };
 
@@ -118,6 +119,9 @@ gboolean              gst_va_filter_has_filter            (GstVaFilter * self,
 gboolean              gst_va_filter_install_properties    (GstVaFilter * self,
                                                            GObjectClass * klass);
 gboolean              gst_va_filter_install_deinterlace_properties
+                                                          (GstVaFilter * self,
+                                                           GObjectClass * klass);
+gboolean              gst_va_filter_install_scale_method_properties
                                                           (GstVaFilter * self,
                                                            GObjectClass * klass);
 gboolean              gst_va_filter_set_orientation       (GstVaFilter * self,

@@ -838,6 +838,44 @@ gst_va_filter_install_deinterlace_properties (GstVaFilter * self,
   return FALSE;
 }
 
+GType
+gst_va_scale_method_get_type (void)
+{
+  static gsize type = 0;
+  static const GEnumValue values[] = {
+    {VA_FILTER_SCALING_DEFAULT, "Default scaling method", "default"},
+    {VA_FILTER_SCALING_FAST, "Fast scaling method", "fast"},
+    {VA_FILTER_SCALING_HQ, "High quality scaling method", "hq"},
+    {0, NULL, NULL},
+  };
+
+  if (g_once_init_enter (&type)) {
+    const GType _type = g_enum_register_static ("GstVaScaleMethod", values);
+    g_once_init_leave (&type, _type);
+  }
+  return type;
+}
+
+gboolean
+gst_va_filter_install_scale_method_properties (GstVaFilter * self,
+    GObjectClass * klass)
+{
+  /**
+   * GstVaPostProc:scale-method
+   *
+   * Sets the scale method algorithm to use when resizing.
+   *
+   * Since: 1.22
+   */
+  g_object_class_install_property (klass, GST_VA_FILTER_PROP_SCALE_METHOD,
+      g_param_spec_enum ("scale-method", "Scale Method", "Scale method to use",
+          GST_TYPE_VA_SCALE_METHOD, VA_FILTER_SCALING_DEFAULT, G_PARAM_READWRITE
+          | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_PLAYING
+          | GST_PARAM_CONTROLLABLE));
+
+  return TRUE;
+}
+
 gboolean
 gst_va_filter_has_filter (GstVaFilter * self, VAProcFilterType type)
 {
@@ -1924,22 +1962,4 @@ gst_va_filter_has_video_format (GstVaFilter * self, GstVideoFormat format,
   GST_OBJECT_UNLOCK (self);
 
   return FALSE;
-}
-
-GType
-gst_va_scale_method_get_type (void)
-{
-  static gsize type = 0;
-  static const GEnumValue values[] = {
-    {VA_FILTER_SCALING_DEFAULT, "Default scaling method", "default"},
-    {VA_FILTER_SCALING_FAST, "Fast scaling method", "fast"},
-    {VA_FILTER_SCALING_HQ, "High quality scaling method", "hq"},
-    {0, NULL, NULL},
-  };
-
-  if (g_once_init_enter (&type)) {
-    const GType _type = g_enum_register_static ("GstVaScaleMethod", values);
-    g_once_init_leave (&type, _type);
-  }
-  return type;
 }

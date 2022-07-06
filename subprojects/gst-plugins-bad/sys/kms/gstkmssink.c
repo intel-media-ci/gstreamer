@@ -166,8 +166,27 @@ gst_kms_sink_expose (GstVideoOverlay * overlay)
 }
 
 static void
+gst_kms_sink_set_window_handle (GstVideoOverlay * overlay, guintptr id)
+{
+  GstKMSSink *self = GST_KMS_SINK (overlay);
+
+  g_return_if_fail (self->fd < 0);
+  g_return_if_fail (!self->is_running);
+
+  /* If the id is 0, we use an internal device fd */
+  if (id == 0) {
+    self->fd = -1;
+    self->is_internal_fd = TRUE;
+  } else {
+    self->fd = (gint) id;
+    self->is_internal_fd = FALSE;
+  }
+}
+
+static void
 gst_kms_sink_video_overlay_init (GstVideoOverlayInterface * iface)
 {
+  iface->set_window_handle = gst_kms_sink_set_window_handle;
   iface->expose = gst_kms_sink_expose;
   iface->set_render_rectangle = gst_kms_sink_set_render_rectangle;
 }
@@ -729,10 +748,18 @@ gst_kms_sink_start (GstBaseSink * bsink)
   pres = NULL;
   plane = NULL;
 
-  if (self->devname || self->bus_id)
-    self->fd = drmOpen (self->devname, self->bus_id);
-  else
-    self->fd = kms_open (&self->devname);
+  /* notify application to set device fd handle now */
+  if (self->fd < 0)
+    gst_video_overlay_prepare_window_handle (GST_VIDEO_OVERLAY (self));
+
+  /* open our own internal device fd if application did not */
+  if (self->is_internal_fd) {
+    if (self->devname || self->bus_id)
+      self->fd = drmOpen (self->devname, self->bus_id);
+    else
+      self->fd = kms_open (&self->devname);
+  }
+
   if (self->fd < 0)
     goto open_failed;
 
@@ -823,6 +850,7 @@ retry_find_plane:
   gst_kms_sink_update_connector_properties (self);
   gst_kms_sink_update_plane_properties (self);
 
+  self->is_running = TRUE;
   ret = TRUE;
 
 bail:
@@ -838,8 +866,11 @@ bail:
     drmModeFreeResources (res);
 
   if (!ret && self->fd >= 0) {
-    drmClose (self->fd);
+    if (self->is_internal_fd) {
+      drmClose (self->fd);
+    }
     self->fd = -1;
+    self->is_running = FALSE;
   }
 
   return ret;
@@ -945,9 +976,12 @@ gst_kms_sink_stop (GstBaseSink * bsink)
   }
 
   if (self->fd >= 0) {
-    drmClose (self->fd);
+    if (self->is_internal_fd)
+      drmClose (self->fd);
     self->fd = -1;
   }
+
+  self->is_running = FALSE;
 
   GST_OBJECT_LOCK (bsink);
   self->hdisplay = 0;
@@ -1906,6 +1940,8 @@ static void
 gst_kms_sink_init (GstKMSSink * sink)
 {
   sink->fd = -1;
+  sink->is_internal_fd = TRUE;
+  sink->is_running = FALSE;
   sink->conn_id = -1;
   sink->plane_id = -1;
   sink->can_scale = TRUE;

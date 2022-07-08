@@ -39,6 +39,7 @@
 
 #if GST_GL_HAVE_DMABUF
 #include <gst/allocators/gstdmabuf.h>
+#include <drm_fourcc.h>
 #endif
 
 #if GST_GL_HAVE_VIV_DIRECTVIV
@@ -501,6 +502,8 @@ struct DmabufUpload
   GstVideoInfo out_info;
   /* only used for pointer comparison */
   gpointer out_caps;
+
+  guint64 modifier;
 };
 
 static GstStaticCaps _dma_buf_upload_caps =
@@ -515,6 +518,7 @@ _dma_buf_upload_new (GstGLUpload * upload)
   struct DmabufUpload *dmabuf = g_new0 (struct DmabufUpload, 1);
   dmabuf->upload = upload;
   dmabuf->target = GST_GL_TEXTURE_TARGET_2D;
+  dmabuf->modifier = DRM_FORMAT_MOD_LINEAR;
   return dmabuf;
 }
 
@@ -544,10 +548,16 @@ _dma_buf_upload_transform_caps (gpointer impl, GstGLContext * context,
       (GST_CAPS_FEATURE_META_GST_VIDEO_OVERLAY_COMPOSITION);
 
   if (direction == GST_PAD_SINK) {
-    GstCaps *tmp;
+    GstCaps *tmp, *tmp2;
+
+    tmp2 = caps;
+    if (gst_egl_caps_has_feature (tmp2, GST_CAPS_FEATURE_MEMORY_DMABUF) &&
+        gst_caps_is_fixed (tmp2)) {
+      tmp2 = gst_egl_caps_remove_modifier (tmp2);
+    }
 
     ret =
-        _set_caps_features_with_passthrough (caps,
+        _set_caps_features_with_passthrough (tmp2,
         GST_CAPS_FEATURE_MEMORY_GL_MEMORY, passthrough);
 
     tmp = _caps_intersect_texture_target (ret, 1 << GST_GL_TEXTURE_TARGET_2D);
@@ -555,10 +565,15 @@ _dma_buf_upload_transform_caps (gpointer impl, GstGLContext * context,
     ret = tmp;
   } else {
     gint i, n;
+    GstCaps *tmp;
 
     ret =
         _set_caps_features_with_passthrough (caps,
         GST_CAPS_FEATURE_MEMORY_DMABUF, passthrough);
+    tmp =
+        _set_caps_features_with_passthrough (caps,
+        GST_CAPS_FEATURE_MEMORY_SYSTEM_MEMORY, passthrough);
+    gst_caps_append (ret, tmp);
 
     n = gst_caps_get_size (ret);
     for (i = 0; i < n; i++) {
@@ -746,10 +761,10 @@ _dma_buf_upload_accept (gpointer impl, GstBuffer * buffer, GstCaps * in_caps,
     if (dmabuf->direct)
       dmabuf->eglimage[i] =
           gst_egl_image_from_dmabuf_direct_target (dmabuf->upload->context, fd,
-          offset, in_info, dmabuf->target);
+          offset, in_info, dmabuf->target, dmabuf->modifier);
     else
       dmabuf->eglimage[i] = gst_egl_image_from_dmabuf (dmabuf->upload->context,
-          fd[i], in_info, i, offset[i]);
+          fd[i], in_info, i, offset[i], dmabuf->modifier);
 
     if (!dmabuf->eglimage[i]) {
       GST_DEBUG_OBJECT (dmabuf->upload, "could not create eglimage");
@@ -1297,13 +1312,19 @@ _raw_data_upload_transform_caps (gpointer impl, GstGLContext * context,
       gst_caps_features_from_string
       (GST_CAPS_FEATURE_META_GST_VIDEO_OVERLAY_COMPOSITION);
   GstCaps *ret;
+  GstCaps *tmp2 = caps;
+
+  if (gst_egl_caps_has_feature (tmp2, GST_CAPS_FEATURE_MEMORY_DMABUF) &&
+      gst_caps_is_fixed (tmp2)) {
+    tmp2 = gst_egl_caps_remove_modifier (tmp2);
+  }
 
   if (direction == GST_PAD_SINK) {
     GstGLTextureTarget target_mask = 0;
     GstCaps *tmp;
 
     ret =
-        _set_caps_features_with_passthrough (caps,
+        _set_caps_features_with_passthrough (tmp2,
         GST_CAPS_FEATURE_MEMORY_GL_MEMORY, passthrough);
 
     target_mask |= 1 << GST_GL_TEXTURE_TARGET_2D;
@@ -1315,7 +1336,7 @@ _raw_data_upload_transform_caps (gpointer impl, GstGLContext * context,
     gint i, n;
 
     ret =
-        _set_caps_features_with_passthrough (caps,
+        _set_caps_features_with_passthrough (tmp2,
         GST_CAPS_FEATURE_MEMORY_SYSTEM_MEMORY, passthrough);
 
     n = gst_caps_get_size (ret);
@@ -2391,6 +2412,10 @@ gst_gl_upload_transform_caps (GstGLUpload * upload, GstGLContext * context,
         upload_methods[i]->transform_caps (upload->priv->upload_impl[i],
         context, direction, caps);
 
+    if (GST_IS_CAPS (tmp2) && gst_egl_caps_has_feature (tmp2, GST_CAPS_FEATURE_MEMORY_DMABUF)) {
+      tmp2 = gst_egl_caps_embed_modifiers (tmp2, NULL);
+    }
+
     if (tmp2)
       tmp = gst_caps_merge (tmp, tmp2);
   }
@@ -2439,7 +2464,10 @@ _gst_gl_upload_set_caps_unlocked (GstGLUpload * upload, GstCaps * in_caps,
   gst_caps_replace (&upload->priv->in_caps, in_caps);
   gst_caps_replace (&upload->priv->out_caps, out_caps);
 
-  gst_video_info_from_caps (&upload->priv->in_info, in_caps);
+  GstCaps *tmp = gst_egl_caps_has_feature (in_caps, GST_CAPS_FEATURE_MEMORY_DMABUF) ?
+      gst_egl_caps_remove_modifier (in_caps) : in_caps;
+
+  gst_video_info_from_caps (&upload->priv->in_info, tmp);
   gst_video_info_from_caps (&upload->priv->out_info, out_caps);
 
   upload->priv->method = NULL;
@@ -2464,9 +2492,18 @@ gst_gl_upload_set_caps (GstGLUpload * upload, GstCaps * in_caps,
     GstCaps * out_caps)
 {
   gboolean ret;
+  GstCaps *tmp = in_caps;
 
   GST_OBJECT_LOCK (upload);
-  ret = _gst_gl_upload_set_caps_unlocked (upload, in_caps, out_caps);
+
+  if (upload->priv->method_impl &&
+      gst_egl_caps_has_feature (tmp, GST_CAPS_FEATURE_MEMORY_DMABUF)) {
+    struct DmabufUpload *dmabuf = upload->priv->method_impl;
+    dmabuf->modifier = gst_egl_caps_get_modifier (tmp);
+    tmp = gst_egl_caps_remove_modifier (tmp);
+  }
+
+  ret = _gst_gl_upload_set_caps_unlocked (upload, tmp, out_caps);
   GST_OBJECT_UNLOCK (upload);
 
   return ret;

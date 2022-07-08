@@ -538,6 +538,7 @@ if need_platform_egl != 'no'
   if egl_dep.found()
     gl_egl_sources += files([
       'egl/gstegl.c',
+      'egl/gsteglcaps.c',
       'egl/gsteglimage.c',
       'egl/gstglcontext_egl.c',
       'egl/gstgldisplay_egl.c',
@@ -547,6 +548,7 @@ if need_platform_egl != 'no'
     gl_egl_headers += files([
       'egl/egl.h',
       'egl/gstegl.h',
+      'egl/gsteglcaps.h',
       'egl/gsteglimage.h',
       'egl/gstgldisplay_egl.h',
       'egl/gstglmemoryegl.h',

@@ -34,6 +34,7 @@
 #include "egl/gsteglimage_private.h"
 #include "egl/gstglmemoryegl.h"
 #include "egl/gstglcontext_egl.h"
+#include "gst/gl/egl/gsteglcaps.h"
 #endif
 
 #if GST_GL_HAVE_DMABUF
@@ -2255,6 +2256,11 @@ gst_gl_upload_get_input_template_caps (void)
   for (i = 0; i < G_N_ELEMENTS (upload_methods); i++) {
     GstCaps *template =
         gst_static_caps_get (upload_methods[i]->input_template_caps);
+
+    if (gst_egl_caps_has_feature (template, GST_CAPS_FEATURE_MEMORY_DMABUF)) {
+      template = gst_egl_caps_embed_modifiers (template, NULL);
+    }
+
     ret = ret == NULL ? template : gst_caps_merge (ret, template);
   }
 

@@ -217,21 +217,21 @@ static const GstDxgiColorSpace rgb_colorspace_map[] = {
    */
 
   /* 1) RGB_FULL_G22_NONE_P709 */
+  MAKE_COLOR_MAP (RGB_FULL_G22_NONE_P709, _0_255, UNKNOWN, SRGB, BT709),
+  /* 1-1) Approximation for RGB_FULL_G22_NONE_P709 */
   MAKE_COLOR_MAP (RGB_FULL_G22_NONE_P709, _0_255, UNKNOWN, BT709, BT709),
   MAKE_COLOR_MAP (RGB_FULL_G22_NONE_P709, _0_255, UNKNOWN, BT601, BT709),
   MAKE_COLOR_MAP (RGB_FULL_G22_NONE_P709, _0_255, UNKNOWN, BT2020_10, BT709),
   MAKE_COLOR_MAP (RGB_FULL_G22_NONE_P709, _0_255, UNKNOWN, BT2020_12, BT709),
+  MAKE_COLOR_MAP (RGB_FULL_G22_NONE_P709, _0_255, UNKNOWN, SRGB, BT470BG),
   MAKE_COLOR_MAP (RGB_FULL_G22_NONE_P709, _0_255, UNKNOWN, BT709, BT470BG),
   MAKE_COLOR_MAP (RGB_FULL_G22_NONE_P709, _0_255, UNKNOWN, BT601, BT470BG),
   MAKE_COLOR_MAP (RGB_FULL_G22_NONE_P709, _0_255, UNKNOWN, BT2020_10, BT470BG),
   MAKE_COLOR_MAP (RGB_FULL_G22_NONE_P709, _0_255, UNKNOWN, BT2020_12, BT470BG),
 
-  /* 1-1) Approximation for RGB_FULL_G22_NONE_P709 */
-  MAKE_COLOR_MAP (RGB_FULL_G22_NONE_P709, _0_255, UNKNOWN, SRGB, BT709),
-  MAKE_COLOR_MAP (RGB_FULL_G22_NONE_P709, _0_255, UNKNOWN, SRGB, BT470BG),
-
   /* 2) RGB_FULL_G10_NONE_P709 */
   MAKE_COLOR_MAP (RGB_FULL_G10_NONE_P709, _0_255, UNKNOWN, GAMMA10, BT709),
+  /* 2-1 ) Approximation for RGB_FULL_G10_NONE_P709 */
   MAKE_COLOR_MAP (RGB_FULL_G10_NONE_P709, _0_255, UNKNOWN, GAMMA10, BT470BG),
 
   /* 3) RGB_STUDIO_G22_NONE_P709 */
@@ -239,14 +239,13 @@ static const GstDxgiColorSpace rgb_colorspace_map[] = {
   MAKE_COLOR_MAP (RGB_STUDIO_G22_NONE_P709, _16_235, UNKNOWN, BT601, BT709),
   MAKE_COLOR_MAP (RGB_STUDIO_G22_NONE_P709, _16_235, UNKNOWN, BT2020_10, BT709),
   MAKE_COLOR_MAP (RGB_STUDIO_G22_NONE_P709, _16_235, UNKNOWN, BT2020_12, BT709),
+  /* 3-1) Approximation for RGB_STUDIO_G22_NONE_P709 */
   MAKE_COLOR_MAP (RGB_STUDIO_G22_NONE_P709, _16_235, UNKNOWN, BT709, BT470BG),
   MAKE_COLOR_MAP (RGB_STUDIO_G22_NONE_P709, _16_235, UNKNOWN, BT601, BT470BG),
   MAKE_COLOR_MAP (RGB_STUDIO_G22_NONE_P709, _16_235, UNKNOWN, BT2020_10,
       BT470BG),
   MAKE_COLOR_MAP (RGB_STUDIO_G22_NONE_P709, _16_235, UNKNOWN, BT2020_12,
       BT470BG),
-
-  /* 3-1) Approximation for RGB_STUDIO_G22_NONE_P709 */
   MAKE_COLOR_MAP (RGB_STUDIO_G22_NONE_P709, _16_235, UNKNOWN, SRGB, BT709),
   MAKE_COLOR_MAP (RGB_STUDIO_G22_NONE_P709, _16_235, UNKNOWN, SRGB, BT470BG),
 
@@ -271,12 +270,12 @@ static const GstDxgiColorSpace rgb_colorspace_map[] = {
   MAKE_COLOR_MAP (RGB_FULL_G22_NONE_P2020, _0_255, UNKNOWN, BT601, BT2020),
   MAKE_COLOR_MAP (RGB_FULL_G22_NONE_P2020, _0_255, UNKNOWN, BT2020_10, BT2020),
   MAKE_COLOR_MAP (RGB_FULL_G22_NONE_P2020, _0_255, UNKNOWN, BT2020_12, BT2020),
-
   /* 7-1) Approximation for RGB_FULL_G22_NONE_P2020 */
   MAKE_COLOR_MAP (RGB_FULL_G22_NONE_P2020, _0_255, UNKNOWN, SRGB, BT2020),
 
   /* 8) RGB_STUDIO_G24_NONE_P709 */
   MAKE_COLOR_MAP (RGB_STUDIO_G24_NONE_P709, _16_235, UNKNOWN, SRGB, BT709),
+  /* 8-1) Approximation for RGB_STUDIO_G24_NONE_P709 */
   MAKE_COLOR_MAP (RGB_STUDIO_G24_NONE_P709, _16_235, UNKNOWN, SRGB, BT470BG),
 
   /* 9) RGB_STUDIO_G24_NONE_P2020 */
@@ -525,6 +524,157 @@ gst_d3d11_video_info_to_dxgi_color_space (const GstVideoInfo * info,
 }
 
 gboolean
+gst_d3d11_colorimetry_from_dxgi_color_space (DXGI_COLOR_SPACE_TYPE colorspace,
+    GstVideoColorimetry * colorimetry)
+{
+  /* XXX: because of ancient MinGW header */
+  GST_DXGI_COLOR_SPACE_TYPE type = (GST_DXGI_COLOR_SPACE_TYPE) colorspace;
+  GstVideoColorimetry color;
+
+  switch (type) {
+    case GST_DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709:
+      color.range = GST_VIDEO_COLOR_RANGE_0_255;
+      color.matrix = GST_VIDEO_COLOR_MATRIX_RGB;
+      color.transfer = GST_VIDEO_TRANSFER_SRGB;
+      color.primaries = GST_VIDEO_COLOR_PRIMARIES_BT709;
+      break;
+    case GST_DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709:
+      color.range = GST_VIDEO_COLOR_RANGE_0_255;
+      color.matrix = GST_VIDEO_COLOR_MATRIX_RGB;
+      color.transfer = GST_VIDEO_TRANSFER_GAMMA10;
+      color.primaries = GST_VIDEO_COLOR_PRIMARIES_BT709;
+      break;
+    case GST_DXGI_COLOR_SPACE_RGB_STUDIO_G22_NONE_P709:
+      color.range = GST_VIDEO_COLOR_RANGE_16_235;
+      color.matrix = GST_VIDEO_COLOR_MATRIX_RGB;
+      color.transfer = GST_VIDEO_TRANSFER_BT709;
+      color.primaries = GST_VIDEO_COLOR_PRIMARIES_BT709;
+      break;
+    case GST_DXGI_COLOR_SPACE_RGB_STUDIO_G22_NONE_P2020:
+      color.range = GST_VIDEO_COLOR_RANGE_16_235;
+      color.matrix = GST_VIDEO_COLOR_MATRIX_RGB;
+      color.transfer = GST_VIDEO_TRANSFER_BT2020_10;
+      color.primaries = GST_VIDEO_COLOR_PRIMARIES_BT2020;
+      break;
+    case GST_DXGI_COLOR_SPACE_YCBCR_FULL_G22_NONE_P709_X601:
+      color.range = GST_VIDEO_COLOR_RANGE_0_255;
+      color.matrix = GST_VIDEO_COLOR_MATRIX_BT601;
+      color.transfer = GST_VIDEO_TRANSFER_BT601;
+      color.primaries = GST_VIDEO_COLOR_PRIMARIES_BT709;
+      break;
+    case GST_DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P601:
+      color.range = GST_VIDEO_COLOR_RANGE_16_235;
+      color.matrix = GST_VIDEO_COLOR_MATRIX_BT601;
+      color.transfer = GST_VIDEO_TRANSFER_BT601;
+      color.primaries = GST_VIDEO_COLOR_PRIMARIES_SMPTE170M;
+      break;
+    case GST_DXGI_COLOR_SPACE_YCBCR_FULL_G22_LEFT_P601:
+      color.range = GST_VIDEO_COLOR_RANGE_0_255;
+      color.matrix = GST_VIDEO_COLOR_MATRIX_BT601;
+      color.transfer = GST_VIDEO_TRANSFER_BT601;
+      color.primaries = GST_VIDEO_COLOR_PRIMARIES_SMPTE170M;
+      break;
+    case GST_DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709:
+      color.range = GST_VIDEO_COLOR_RANGE_16_235;
+      color.matrix = GST_VIDEO_COLOR_MATRIX_BT709;
+      color.transfer = GST_VIDEO_TRANSFER_BT709;
+      color.primaries = GST_VIDEO_COLOR_PRIMARIES_BT709;
+      break;
+    case GST_DXGI_COLOR_SPACE_YCBCR_FULL_G22_LEFT_P709:
+      color.range = GST_VIDEO_COLOR_RANGE_0_255;
+      color.matrix = GST_VIDEO_COLOR_MATRIX_BT709;
+      color.transfer = GST_VIDEO_TRANSFER_BT709;
+      color.primaries = GST_VIDEO_COLOR_PRIMARIES_BT709;
+      break;
+    case GST_DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P2020:
+      color.range = GST_VIDEO_COLOR_RANGE_16_235;
+      color.matrix = GST_VIDEO_COLOR_MATRIX_BT2020;
+      color.transfer = GST_VIDEO_TRANSFER_BT2020_10;
+      color.primaries = GST_VIDEO_COLOR_PRIMARIES_BT2020;
+      break;
+    case GST_DXGI_COLOR_SPACE_YCBCR_FULL_G22_LEFT_P2020:
+      color.range = GST_VIDEO_COLOR_RANGE_0_255;
+      color.matrix = GST_VIDEO_COLOR_MATRIX_BT2020;
+      color.transfer = GST_VIDEO_TRANSFER_BT2020_10;
+      color.primaries = GST_VIDEO_COLOR_PRIMARIES_BT2020;
+      break;
+    case GST_DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020:
+      color.range = GST_VIDEO_COLOR_RANGE_0_255;
+      color.matrix = GST_VIDEO_COLOR_MATRIX_RGB;
+      color.transfer = GST_VIDEO_TRANSFER_SMPTE2084;
+      color.primaries = GST_VIDEO_COLOR_PRIMARIES_BT2020;
+      break;
+    case GST_DXGI_COLOR_SPACE_RGB_STUDIO_G2084_NONE_P2020:
+      color.range = GST_VIDEO_COLOR_RANGE_16_235;
+      color.matrix = GST_VIDEO_COLOR_MATRIX_RGB;
+      color.transfer = GST_VIDEO_TRANSFER_SMPTE2084;
+      color.primaries = GST_VIDEO_COLOR_PRIMARIES_BT2020;
+      break;
+    case GST_DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_TOPLEFT_P2020:
+      color.range = GST_VIDEO_COLOR_RANGE_16_235;
+      color.matrix = GST_VIDEO_COLOR_MATRIX_BT2020;
+      color.transfer = GST_VIDEO_TRANSFER_BT2020_10;
+      color.primaries = GST_VIDEO_COLOR_PRIMARIES_BT2020;
+      break;
+    case GST_DXGI_COLOR_SPACE_YCBCR_STUDIO_G2084_TOPLEFT_P2020:
+      color.range = GST_VIDEO_COLOR_RANGE_16_235;
+      color.matrix = GST_VIDEO_COLOR_MATRIX_BT2020;
+      color.transfer = GST_VIDEO_TRANSFER_SMPTE2084;
+      color.primaries = GST_VIDEO_COLOR_PRIMARIES_BT2020;
+      break;
+    case GST_DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P2020:
+      color.range = GST_VIDEO_COLOR_RANGE_0_255;
+      color.matrix = GST_VIDEO_COLOR_MATRIX_RGB;
+      color.transfer = GST_VIDEO_TRANSFER_SMPTE2084;
+      color.primaries = GST_VIDEO_COLOR_PRIMARIES_BT2020;
+      break;
+    case GST_DXGI_COLOR_SPACE_YCBCR_STUDIO_GHLG_TOPLEFT_P2020:
+      color.range = GST_VIDEO_COLOR_RANGE_16_235;
+      color.matrix = GST_VIDEO_COLOR_MATRIX_BT2020;
+      color.transfer = GST_VIDEO_TRANSFER_ARIB_STD_B67;
+      color.primaries = GST_VIDEO_COLOR_PRIMARIES_BT2020;
+      break;
+    case GST_DXGI_COLOR_SPACE_YCBCR_FULL_GHLG_TOPLEFT_P2020:
+      color.range = GST_VIDEO_COLOR_RANGE_0_255;
+      color.matrix = GST_VIDEO_COLOR_MATRIX_BT2020;
+      color.transfer = GST_VIDEO_TRANSFER_ARIB_STD_B67;
+      color.primaries = GST_VIDEO_COLOR_PRIMARIES_BT2020;
+      break;
+    case GST_DXGI_COLOR_SPACE_RGB_STUDIO_G24_NONE_P709:
+      color.range = GST_VIDEO_COLOR_RANGE_16_235;
+      color.matrix = GST_VIDEO_COLOR_MATRIX_RGB;
+      color.transfer = GST_VIDEO_TRANSFER_SRGB;
+      color.primaries = GST_VIDEO_COLOR_PRIMARIES_BT709;
+      break;
+    case GST_DXGI_COLOR_SPACE_RGB_STUDIO_G24_NONE_P2020:
+      color.range = GST_VIDEO_COLOR_RANGE_16_235;
+      color.matrix = GST_VIDEO_COLOR_MATRIX_RGB;
+      color.transfer = GST_VIDEO_TRANSFER_SRGB;
+      color.primaries = GST_VIDEO_COLOR_PRIMARIES_BT2020;
+      break;
+    case GST_DXGI_COLOR_SPACE_YCBCR_STUDIO_G24_LEFT_P709:
+      color.range = GST_VIDEO_COLOR_RANGE_16_235;
+      color.matrix = GST_VIDEO_COLOR_MATRIX_RGB;
+      color.transfer = GST_VIDEO_TRANSFER_SRGB;
+      color.primaries = GST_VIDEO_COLOR_PRIMARIES_BT709;
+      break;
+    case GST_DXGI_COLOR_SPACE_YCBCR_STUDIO_G24_LEFT_P2020:
+    case GST_DXGI_COLOR_SPACE_YCBCR_STUDIO_G24_TOPLEFT_P2020:
+      color.range = GST_VIDEO_COLOR_RANGE_16_235;
+      color.matrix = GST_VIDEO_COLOR_MATRIX_RGB;
+      color.transfer = GST_VIDEO_TRANSFER_SRGB;
+      color.primaries = GST_VIDEO_COLOR_PRIMARIES_BT2020;
+      break;
+    default:
+      return FALSE;
+  }
+
+  *colorimetry = color;
+
+  return TRUE;
+}
+
+gboolean
 gst_d3d11_find_swap_chain_color_space (const GstVideoInfo * info,
     IDXGISwapChain3 * swapchain, GstDxgiColorSpace * color_space)
 {
@@ -565,7 +715,7 @@ gst_d3d11_find_swap_chain_color_space (const GstVideoInfo * info,
         GST_DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
     color_space->range = GST_VIDEO_COLOR_RANGE_0_255;
     color_space->matrix = GST_VIDEO_COLOR_MATRIX_RGB;
-    color_space->transfer = GST_VIDEO_TRANSFER_BT709;
+    color_space->transfer = GST_VIDEO_TRANSFER_SRGB;
     color_space->primaries = GST_VIDEO_COLOR_PRIMARIES_BT709;
     return TRUE;
   }

@@ -87,18 +87,21 @@ GstEGLImage *           gst_egl_image_from_dmabuf               (GstGLContext * 
                                                                  gint dmabuf,
                                                                  const GstVideoInfo * in_info,
                                                                  gint plane,
-                                                                 gsize offset);
+                                                                 gsize offset,
+                                                                 guint64 modifier);
 GST_GL_API
 GstEGLImage *           gst_egl_image_from_dmabuf_direct        (GstGLContext * context,
                                                                  gint *fd,
                                                                  const gsize *offset,
-                                                                 const GstVideoInfo * in_info);
+                                                                 const GstVideoInfo * in_info,
+                                                                 guint64 modifier);
 GST_GL_API
 GstEGLImage *           gst_egl_image_from_dmabuf_direct_target (GstGLContext * context,
                                                                  gint *fd,
                                                                  const gsize *offset,
                                                                  const GstVideoInfo * in_info,
-                                                                 GstGLTextureTarget target);
+                                                                 GstGLTextureTarget target,
+                                                                 guint64 modifier);
 
 GST_GL_API
 gboolean                gst_egl_image_export_dmabuf             (GstEGLImage *image, int *fd, gint *stride, gsize *offset);

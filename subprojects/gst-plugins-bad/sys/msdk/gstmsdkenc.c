@@ -53,7 +53,7 @@
 
 #ifndef _WIN32
 #include "gstmsdkallocator_libva.h"
-#include "gstmsdk_va.h"
+#include <gst/va/gstvaallocator.h>
 #endif
 
 static inline void *
@@ -126,16 +126,6 @@ static GstStaticPadTemplate sink_factory = GST_STATIC_PAD_TEMPLATE ("sink",
 
 #define gst_msdkenc_parent_class parent_class
 G_DEFINE_TYPE (GstMsdkEnc, gst_msdkenc, GST_TYPE_VIDEO_ENCODER);
-
-typedef struct
-{
-  mfxFrameSurface1 *surface;
-  GstBuffer *buf;
-  GstBuffer *buf_external;
-#ifndef _WIN32
-  VASurfaceID cache_surface;
-#endif
-} MsdkSurface;
 
 void
 gst_msdkenc_add_extra_param (GstMsdkEnc * thiz, mfxExtBuffer * param)
@@ -948,8 +938,8 @@ gst_msdkenc_close_encoder (GstMsdkEnc * thiz)
 typedef struct
 {
   GstVideoCodecFrame *frame;
-  MsdkSurface *frame_surface;
-  MsdkSurface *converted_surface;
+  GstMsdkSurface *frame_surface;
+  GstMsdkSurface *converted_surface;
 } FrameData;
 
 static FrameData *
@@ -966,37 +956,13 @@ gst_msdkenc_queue_frame (GstMsdkEnc * thiz, GstVideoCodecFrame * frame,
   return fdata;
 }
 
-static MsdkSurface *
-gst_msdkenc_create_surface (mfxFrameSurface1 * surface, GstBuffer * buf)
-{
-  MsdkSurface *msdk_surface;
-  msdk_surface = g_slice_new0 (MsdkSurface);
-  msdk_surface->surface = surface;
-  msdk_surface->buf = buf;
-
-  return msdk_surface;
-}
-
 static void
-gst_msdkenc_free_surface (MsdkSurface * surface)
+gst_msdkenc_free_surface (GstMsdkSurface * surface)
 {
-  if (surface->buf_external) {
-    GstMsdkMemoryID *msdk_mid = NULL;
-    mfxFrameSurface1 *mfx_surface = NULL;
-
-    mfx_surface = surface->surface;
-    msdk_mid = (GstMsdkMemoryID *) mfx_surface->Data.MemId;
-#ifndef _WIN32
-    *msdk_mid->surface = surface->cache_surface;
-#endif
-
-    gst_buffer_unref (surface->buf_external);
-  }
-
   if (surface->buf)
     gst_buffer_unref (surface->buf);
 
-  g_slice_free (MsdkSurface, surface);
+  g_slice_free (GstMsdkSurface, surface);
 }
 
 static void
@@ -1369,26 +1335,60 @@ gst_msdkenc_set_src_caps (GstMsdkEnc * thiz)
   return TRUE;
 }
 
+#ifndef _WIN32
+static GstBufferPool *
+gst_msdk_create_va_pool (GstMsdkEnc * thiz, guint num_buffers)
+{
+  GstBufferPool *pool = NULL;
+  GstAllocator *allocator;
+  GArray *formats = NULL;;
+  GstAllocationParams alloc_params = { 0, 31, 0, 0 };
+  GstVaDisplay *display = NULL;
+  GstCaps *aligned_caps = NULL;
+  GstVideoInfo info = thiz->input_state->info;
+
+  display = (GstVaDisplay *) gst_msdk_context_get_display (thiz->context);
+
+  if (thiz->use_dmabuf) {
+    allocator = gst_va_dmabuf_allocator_new (display);
+  } else {
+    formats = g_array_new (FALSE, FALSE, sizeof (GstVideoFormat));
+    g_array_append_val (formats, GST_VIDEO_INFO_FORMAT (&info));
+    allocator = gst_va_allocator_new (display, formats);
+  }
+
+  if (!allocator) {
+    GST_ERROR_OBJECT (thiz, "failed to create allocator");
+    if (formats)
+      g_array_unref (formats);
+    return NULL;
+  }
+
+  aligned_caps = gst_video_info_to_caps (&info);
+  pool =
+      gst_va_pool_new_with_config (aligned_caps,
+      GST_VIDEO_INFO_SIZE (&info), num_buffers, 0,
+      VA_SURFACE_ATTRIB_USAGE_HINT_GENERIC, GST_VA_FEATURE_AUTO,
+      allocator, &alloc_params);
+
+  gst_object_unref (allocator);
+  gst_caps_unref (aligned_caps);
+  GST_LOG_OBJECT (thiz, "Creating va pool");
+  return pool;
+}
+#endif
+
 static GstBufferPool *
 gst_msdkenc_create_buffer_pool (GstMsdkEnc * thiz, GstCaps * caps,
     guint num_buffers, gboolean set_align)
 {
   GstBufferPool *pool = NULL;
   GstStructure *config;
-  GstAllocator *allocator = NULL;
   GstVideoInfo info;
+  GstCaps *aligned_caps;
   GstVideoAlignment align;
-  GstAllocationParams params = { 0, 31, 0, 0, };
-  mfxFrameAllocResponse *alloc_resp = NULL;
 
-  if (thiz->has_vpp)
-    alloc_resp = set_align ? &thiz->vpp_alloc_resp : &thiz->alloc_resp;
-  else
-    alloc_resp = &thiz->alloc_resp;
-
-  pool = gst_msdk_buffer_pool_new (thiz->context, alloc_resp);
-  if (!pool)
-    goto error_no_pool;
+  aligned_caps = gst_video_info_to_caps (&thiz->input_state->info);
 
   if (!gst_video_info_from_caps (&info, caps)) {
     GST_INFO_OBJECT (thiz, "failed to get video info");
@@ -1398,19 +1398,17 @@ gst_msdkenc_create_buffer_pool (GstMsdkEnc * thiz, GstCaps * caps,
   gst_msdk_set_video_alignment (&info, 0, 0, &align);
   gst_video_info_align (&info, &align);
 
-  if (thiz->use_dmabuf)
-    allocator =
-        gst_msdk_dmabuf_allocator_new (thiz->context, &info, alloc_resp);
-  else if (thiz->use_video_memory)
-    allocator = gst_msdk_video_allocator_new (thiz->context, &info, alloc_resp);
-  else
-    allocator = gst_msdk_system_allocator_new (&info);
-
-  if (!allocator)
-    goto error_no_allocator;
+#ifndef _WIN32
+  pool = gst_msdk_create_va_pool (thiz, num_buffers);
+#else
+  GST_ERROR ("D3D11 pool not implemented yet");
+#endif
+  if (!pool)
+    goto error_no_pool;
 
   config = gst_buffer_pool_get_config (GST_BUFFER_POOL_CAST (pool));
-  gst_buffer_pool_config_set_params (config, caps, info.size, num_buffers, 0);
+  gst_buffer_pool_config_set_params (config, aligned_caps,
+      GST_VIDEO_INFO_SIZE (&thiz->aligned_info), num_buffers, 0);
   gst_buffer_pool_config_add_option (config, GST_BUFFER_POOL_OPTION_VIDEO_META);
   gst_buffer_pool_config_add_option (config,
       GST_BUFFER_POOL_OPTION_VIDEO_ALIGNMENT);
@@ -1424,11 +1422,11 @@ gst_msdkenc_create_buffer_pool (GstMsdkEnc * thiz, GstCaps * caps,
   }
 
   gst_buffer_pool_config_set_video_alignment (config, &align);
-  gst_buffer_pool_config_set_allocator (config, allocator, &params);
-  gst_object_unref (allocator);
 
   if (!gst_buffer_pool_set_config (pool, config))
     goto error_pool_config;
+
+  gst_caps_unref (aligned_caps);
 
   if (set_align)
     thiz->aligned_info = info;
@@ -1440,17 +1438,10 @@ error_no_pool:
     GST_INFO_OBJECT (thiz, "failed to create bufferpool");
     return NULL;
   }
-error_no_allocator:
-  {
-    GST_INFO_OBJECT (thiz, "failed to create allocator");
-    gst_object_unref (pool);
-    return NULL;
-  }
 error_pool_config:
   {
     GST_INFO_OBJECT (thiz, "failed to set config");
     gst_object_unref (pool);
-    gst_object_unref (allocator);
     return NULL;
   }
 }
@@ -1626,13 +1617,12 @@ done:
   return TRUE;
 }
 
-static MsdkSurface *
+static GstMsdkSurface *
 gst_msdkenc_get_surface_from_pool (GstMsdkEnc * thiz, GstBufferPool * pool,
     GstBufferPoolAcquireParams * params)
 {
   GstBuffer *new_buffer;
-  mfxFrameSurface1 *new_surface;
-  MsdkSurface *msdk_surface;
+  GstMsdkSurface *msdk_surface = NULL;
 
   if (!gst_buffer_pool_is_active (pool) &&
       !gst_buffer_pool_set_active (pool, TRUE)) {
@@ -1644,175 +1634,46 @@ gst_msdkenc_get_surface_from_pool (GstMsdkEnc * thiz, GstBufferPool * pool,
     GST_ERROR_OBJECT (pool, "failed to acquire a buffer from pool");
     return NULL;
   }
+#ifndef _WIN32
+  msdk_surface = gst_msdk_import_to_msdk_surface (new_buffer, thiz->context,
+      &thiz->aligned_info);
 
-  if (gst_msdk_is_msdk_buffer (new_buffer))
-    new_surface = gst_msdk_get_surface_from_buffer (new_buffer);
-  else {
-    GST_ERROR_OBJECT (pool, "the acquired memory is not MSDK memory");
-    return NULL;
-  }
-
-  msdk_surface = gst_msdkenc_create_surface (new_surface, new_buffer);
+  if (msdk_surface)
+    msdk_surface->buf = new_buffer;
+#endif
 
   return msdk_surface;
 }
 
-#ifndef _WIN32
-static gboolean
-import_dmabuf_to_msdk_surface (GstMsdkEnc * thiz, GstBuffer * buf,
-    MsdkSurface * msdk_surface)
-{
-  GstMemory *mem = NULL;
-  GstVideoInfo vinfo;
-  GstVideoMeta *vmeta;
-  GstMsdkMemoryID *msdk_mid = NULL;
-  mfxFrameSurface1 *mfx_surface = NULL;
-  gint fd, i;
-  mem = gst_buffer_peek_memory (buf, 0);
-  fd = gst_dmabuf_memory_get_fd (mem);
-  if (fd < 0)
-    return FALSE;
-
-  vinfo = thiz->input_state->info;
-  /* Update offset/stride/size if there is VideoMeta attached to
-   * the buffer */
-  vmeta = gst_buffer_get_video_meta (buf);
-  if (vmeta) {
-    if (GST_VIDEO_INFO_FORMAT (&vinfo) != vmeta->format ||
-        GST_VIDEO_INFO_WIDTH (&vinfo) != vmeta->width ||
-        GST_VIDEO_INFO_HEIGHT (&vinfo) != vmeta->height ||
-        GST_VIDEO_INFO_N_PLANES (&vinfo) != vmeta->n_planes) {
-      GST_ERROR_OBJECT (thiz, "VideoMeta attached to buffer is not matching"
-          "the negotiated width/height/format");
-      return FALSE;
-    }
-    for (i = 0; i < GST_VIDEO_INFO_N_PLANES (&vinfo); ++i) {
-      GST_VIDEO_INFO_PLANE_OFFSET (&vinfo, i) = vmeta->offset[i];
-      GST_VIDEO_INFO_PLANE_STRIDE (&vinfo, i) = vmeta->stride[i];
-    }
-    GST_VIDEO_INFO_SIZE (&vinfo) = gst_buffer_get_size (buf);
-  }
-
-  /* Upstream neither accepted the msdk pool nor the msdk buffer size restrictions.
-   * Current media-driver and GMMLib will fail due to strict memory size restrictions.
-   * Ideally, media-driver should accept what ever memory coming from other drivers
-   * in case of dmabuf-import and this is how the intel-vaapi-driver works.
-   * For now, in order to avoid any crash we check the buffer size and fallback
-   * to copy frame method.
-   *
-   * See this: https://github.com/intel/media-driver/issues/169
-   * */
-  if (GST_VIDEO_INFO_SIZE (&vinfo) < GST_VIDEO_INFO_SIZE (&thiz->aligned_info))
-    return FALSE;
-
-  mfx_surface = msdk_surface->surface;
-  msdk_mid = (GstMsdkMemoryID *) mfx_surface->Data.MemId;
-
-  /* release the internal memory storage of associated mfxSurface */
-  gst_msdk_replace_mfx_memid (thiz->context, mfx_surface, VA_INVALID_ID);
-
-  /* export dmabuf to vasurface */
-  if (!gst_msdk_export_dmabuf_to_vasurface (thiz->context, &vinfo, fd,
-          msdk_mid->surface))
-    return FALSE;
-
-  return TRUE;
-}
-
-static gboolean
-import_va_surface_to_msdk (GstMsdkEnc * thiz, GstBuffer * buf,
-    MsdkSurface * msdk_surface)
-{
-  GstVideoInfo vinfo;
-  GstVideoMeta *vmeta;
-  GstMsdkMemoryID *msdk_mid = NULL;
-  mfxFrameSurface1 *mfx_surface = NULL;
-  VASurfaceID surface;
-  gint i;
-
-  surface = gst_msdk_va_peek_buffer_surface (buf);
-  if (surface == VA_INVALID_SURFACE)
-    return FALSE;
-
-  vinfo = thiz->input_state->info;
-  /* Update offset/stride/size if there is VideoMeta attached to
-   * the buffer */
-  vmeta = gst_buffer_get_video_meta (buf);
-  if (vmeta) {
-    if (GST_VIDEO_INFO_FORMAT (&vinfo) != vmeta->format ||
-        GST_VIDEO_INFO_WIDTH (&vinfo) != vmeta->width ||
-        GST_VIDEO_INFO_HEIGHT (&vinfo) != vmeta->height ||
-        GST_VIDEO_INFO_N_PLANES (&vinfo) != vmeta->n_planes) {
-      GST_ERROR_OBJECT (thiz, "VideoMeta attached to buffer is not matching"
-          "the negotiated width/height/format");
-      return FALSE;
-    }
-    for (i = 0; i < GST_VIDEO_INFO_N_PLANES (&vinfo); ++i) {
-      GST_VIDEO_INFO_PLANE_OFFSET (&vinfo, i) = vmeta->offset[i];
-      GST_VIDEO_INFO_PLANE_STRIDE (&vinfo, i) = vmeta->stride[i];
-    }
-    GST_VIDEO_INFO_SIZE (&vinfo) = gst_buffer_get_size (buf);
-  }
-
-  if (GST_VIDEO_INFO_SIZE (&vinfo) < GST_VIDEO_INFO_SIZE (&thiz->aligned_info))
-    return FALSE;
-
-  msdk_surface->buf_external = gst_buffer_ref (buf);
-
-  mfx_surface = msdk_surface->surface;
-  msdk_mid = (GstMsdkMemoryID *) mfx_surface->Data.MemId;
-
-  msdk_surface->cache_surface = *msdk_mid->surface;
-  *msdk_mid->surface = surface;
-  return TRUE;
-}
-#endif
-
-static MsdkSurface *
+static GstMsdkSurface *
 gst_msdkenc_get_surface_from_frame (GstMsdkEnc * thiz,
     GstVideoCodecFrame * frame)
 {
   GstVideoFrame src_frame, out_frame;
-  MsdkSurface *msdk_surface;
+  GstMsdkSurface *msdk_surface;
   GstBuffer *inbuf;
-#ifndef _WIN32
-  GstMemory *mem = NULL;
-#endif
 
   inbuf = frame->input_buffer;
   if (gst_msdk_is_msdk_buffer (inbuf)) {
-    msdk_surface = g_slice_new0 (MsdkSurface);
+    msdk_surface = g_slice_new0 (GstMsdkSurface);
     msdk_surface->surface = gst_msdk_get_surface_from_buffer (inbuf);
     return msdk_surface;
   }
+#ifndef _WIN32
+  msdk_surface = gst_msdk_import_to_msdk_surface (inbuf, thiz->context,
+      &thiz->input_state->info);
+  if (msdk_surface) {
+    msdk_surface->buf = gst_buffer_ref (inbuf);
+    return msdk_surface;
+  }
+#endif
 
   /* If upstream hasn't accpeted the proposed msdk bufferpool,
-   * just copy frame (if not dmabuf backed )to msdk buffer and take a surface from it.
+   * just copy frame to msdk buffer and take a surface from it.
    */
   if (!(msdk_surface =
           gst_msdkenc_get_surface_from_pool (thiz, thiz->msdk_pool, NULL)))
     goto error;
-
-#ifndef _WIN32
-    /************** VA import *****************/
-  if (thiz->use_va) {
-    if (import_va_surface_to_msdk (thiz, inbuf, msdk_surface)) {
-      return msdk_surface;
-    }
-  }
-
-  /************ dmabuf-import ************* */
-  /* if upstream provided a dmabuf backed memory, but not an msdk
-   * buffer, we could try to export the dmabuf to underlined vasurface */
-  mem = gst_buffer_peek_memory (inbuf, 0);
-  if (gst_is_dmabuf_memory (mem)) {
-    if (import_dmabuf_to_msdk_surface (thiz, inbuf, msdk_surface))
-      return msdk_surface;
-    else
-      GST_INFO_OBJECT (thiz, "Upstream dmabuf-backed memory is not imported"
-          "to the msdk surface, fall back to the copy input frame method");
-  }
-#endif
 
   if (!gst_video_frame_map (&src_frame, &thiz->input_state->info, inbuf,
           GST_MAP_READ)) {
@@ -1847,7 +1708,7 @@ error:
   if (msdk_surface) {
     if (msdk_surface->buf)
       gst_buffer_unref (msdk_surface->buf);
-    g_slice_free (MsdkSurface, msdk_surface);
+    g_slice_free (GstMsdkSurface, msdk_surface);
   }
   return NULL;
 }
@@ -1859,7 +1720,7 @@ gst_msdkenc_handle_frame (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
   GstMsdkEncClass *klass = GST_MSDKENC_GET_CLASS (thiz);
   GstVideoInfo *info = &thiz->input_state->info;
   FrameData *fdata;
-  MsdkSurface *surface;
+  GstMsdkSurface *surface;
 
   if (thiz->reconfig || klass->need_reconfig (thiz, frame)) {
     gst_msdkenc_flush_frames (thiz, FALSE);
@@ -1875,7 +1736,7 @@ gst_msdkenc_handle_frame (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
     goto not_inited;
 
   if (thiz->has_vpp) {
-    MsdkSurface *vpp_surface;
+    GstMsdkSurface *vpp_surface;
     GstVideoFrame vframe;
     mfxSession session;
     mfxSyncPoint vpp_sync_point = NULL;
@@ -2129,7 +1990,7 @@ gst_msdkenc_propose_allocation (GstVideoEncoder * encoder, GstQuery * query)
   }
 
   num_buffers = gst_msdkenc_maximum_delayed_frames (thiz) + 1;
-  pool = gst_msdkenc_create_buffer_pool (thiz, caps, num_buffers, TRUE);
+  pool = gst_msdkenc_create_buffer_pool (thiz, caps, num_buffers, FALSE);
 
   gst_query_add_allocation_pool (query, pool, GST_VIDEO_INFO_SIZE (&info),
       num_buffers, 0);

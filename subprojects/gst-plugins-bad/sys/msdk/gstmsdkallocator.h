@@ -75,6 +75,9 @@ mfxStatus gst_msdk_frame_get_hdl(mfxHDL pthis, mfxMemId mid, mfxHDL *hdl);
 
 void gst_msdk_set_frame_allocator (GstMsdkContext * context);
 
+GQuark
+gst_msdk_frame_surface_quark_get (void);
+
 G_END_DECLS
 
 #endif /* GST_MSDK_ALLOCATOR_H_ */

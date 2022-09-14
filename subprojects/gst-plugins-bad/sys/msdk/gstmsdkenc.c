@@ -1631,8 +1631,15 @@ gst_msdkenc_get_surface_from_frame (GstMsdkEnc * thiz,
     return msdk_surface;
   }
 #ifndef _WIN32
-  msdk_surface = gst_msdk_import_to_msdk_surface (inbuf, thiz->context,
-      &thiz->input_state->info);
+  GstVideoInfo info;
+  GstVideoFormat format;
+
+  format = gst_msdk_get_video_format_from_mfx_fourcc
+      (thiz->param.mfx.FrameInfo.FourCC);
+  gst_video_info_set_format (&info, format, thiz->param.mfx.FrameInfo.Width,
+      thiz->param.mfx.FrameInfo.Height);
+
+  msdk_surface = gst_msdk_import_to_msdk_surface (inbuf, thiz->context, &info);
   if (msdk_surface) {
     msdk_surface->buf = gst_buffer_ref (inbuf);
     return msdk_surface;

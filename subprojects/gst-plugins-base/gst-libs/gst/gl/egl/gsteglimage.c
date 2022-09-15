@@ -643,11 +643,12 @@ get_egl_stride (const GstVideoInfo * info, gint plane)
  */
 GstEGLImage *
 gst_egl_image_from_dmabuf (GstGLContext * context,
-    gint dmabuf, const GstVideoInfo * in_info, gint plane, gsize offset)
+    gint dmabuf, const GstVideoInfo * in_info,
+    gint plane, gsize offset, guint64 modifier)
 {
   gint comp[GST_VIDEO_MAX_COMPONENTS];
   GstGLFormat format = 0;
-  guintptr attribs[13];
+  guintptr attribs[17];
   EGLImageKHR img;
   gint atti = 0;
   gint fourcc;
@@ -672,6 +673,10 @@ gst_egl_image_from_dmabuf (GstGLContext * context,
   attribs[atti++] = offset;
   attribs[atti++] = EGL_DMA_BUF_PLANE0_PITCH_EXT;
   attribs[atti++] = get_egl_stride (in_info, plane);
+  attribs[atti++] = EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT;
+  attribs[atti++] = modifier & 0xffffffff;
+  attribs[atti++] = EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT;
+  attribs[atti++] = (modifier >> 32) & 0xffffffff;
   attribs[atti] = EGL_NONE;
   g_assert (atti == G_N_ELEMENTS (attribs) - 1);
 
@@ -932,7 +937,7 @@ gst_egl_image_check_dmabuf_direct (GstGLContext * context,
 GstEGLImage *
 gst_egl_image_from_dmabuf_direct_target (GstGLContext * context,
     gint * fd, const gsize * offset, const GstVideoInfo * in_info,
-    GstGLTextureTarget target)
+    GstGLTextureTarget target, guint64 modifier)
 {
 
   EGLImageKHR img;
@@ -978,9 +983,9 @@ gst_egl_image_from_dmabuf_direct_target (GstGLContext * context,
     attribs[atti++] = get_egl_stride (in_info, 0);
     if (with_modifiers) {
       attribs[atti++] = EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT;
-      attribs[atti++] = DRM_FORMAT_MOD_LINEAR & 0xffffffff;
+      attribs[atti++] = modifier & 0xffffffff;
       attribs[atti++] = EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT;
-      attribs[atti++] = (DRM_FORMAT_MOD_LINEAR >> 32) & 0xffffffff;
+      attribs[atti++] = (modifier >> 32) & 0xffffffff;
     }
   }
 
@@ -994,9 +999,9 @@ gst_egl_image_from_dmabuf_direct_target (GstGLContext * context,
     attribs[atti++] = get_egl_stride (in_info, 1);
     if (with_modifiers) {
       attribs[atti++] = EGL_DMA_BUF_PLANE1_MODIFIER_LO_EXT;
-      attribs[atti++] = DRM_FORMAT_MOD_LINEAR & 0xffffffff;
+      attribs[atti++] = modifier & 0xffffffff;
       attribs[atti++] = EGL_DMA_BUF_PLANE1_MODIFIER_HI_EXT;
-      attribs[atti++] = (DRM_FORMAT_MOD_LINEAR >> 32) & 0xffffffff;
+      attribs[atti++] = (modifier >> 32) & 0xffffffff;
     }
   }
 
@@ -1010,9 +1015,9 @@ gst_egl_image_from_dmabuf_direct_target (GstGLContext * context,
     attribs[atti++] = get_egl_stride (in_info, 2);
     if (with_modifiers) {
       attribs[atti++] = EGL_DMA_BUF_PLANE2_MODIFIER_LO_EXT;
-      attribs[atti++] = DRM_FORMAT_MOD_LINEAR & 0xffffffff;
+      attribs[atti++] = modifier & 0xffffffff;
       attribs[atti++] = EGL_DMA_BUF_PLANE2_MODIFIER_HI_EXT;
-      attribs[atti++] = (DRM_FORMAT_MOD_LINEAR >> 32) & 0xffffffff;
+      attribs[atti++] = (modifier >> 32) & 0xffffffff;
     }
   }
 
@@ -1096,10 +1101,11 @@ gst_egl_image_from_dmabuf_direct_target (GstGLContext * context,
  */
 GstEGLImage *
 gst_egl_image_from_dmabuf_direct (GstGLContext * context,
-    gint * fd, const gsize * offset, const GstVideoInfo * in_info)
+    gint * fd, const gsize * offset,
+    const GstVideoInfo * in_info, guint64 modifier)
 {
   return gst_egl_image_from_dmabuf_direct_target (context, fd, offset, in_info,
-      GST_GL_TEXTURE_TARGET_2D);
+      GST_GL_TEXTURE_TARGET_2D, modifier);
 }
 
 gboolean

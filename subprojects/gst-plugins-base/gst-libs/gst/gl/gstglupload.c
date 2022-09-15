@@ -36,6 +36,8 @@
 #include "egl/gstglcontext_egl.h"
 #endif
 
+#include <gst/video/video-drm-format.h>
+
 #if GST_GL_HAVE_DMABUF
 #include <gst/allocators/gstdmabuf.h>
 #endif
@@ -501,6 +503,8 @@ struct DmabufUpload
   GstVideoInfo out_info;
   /* only used for pointer comparison */
   gpointer out_caps;
+
+  guint64 modifier;
 };
 
 static GstStaticCaps _dma_buf_upload_caps =
@@ -515,6 +519,7 @@ _dma_buf_upload_new (GstGLUpload * upload)
   struct DmabufUpload *dmabuf = g_new0 (struct DmabufUpload, 1);
   dmabuf->upload = upload;
   dmabuf->target = GST_GL_TEXTURE_TARGET_2D;
+  dmabuf->modifier = DRM_FORMAT_MOD_INVALID;
   return dmabuf;
 }
 
@@ -746,6 +751,9 @@ _dma_buf_upload_accept (gpointer impl, GstBuffer * buffer, GstCaps * in_caps,
   } else
     dmabuf->n_mem = n_planes;
 
+  if (dmabuf->modifier == DRM_FORMAT_MOD_INVALID)
+    dmabuf->modifier = gst_video_drm_format_get_modifier (in_caps);
+
   /* Now create an EGLImage for each dmabufs */
   for (i = 0; i < dmabuf->n_mem; i++) {
     gint cache_id = dmabuf->direct ? 4 : i;
@@ -761,10 +769,10 @@ _dma_buf_upload_accept (gpointer impl, GstBuffer * buffer, GstCaps * in_caps,
     if (dmabuf->direct)
       dmabuf->eglimage[i] =
           gst_egl_image_from_dmabuf_direct_target (dmabuf->upload->context, fd,
-          offset, in_info, dmabuf->target);
+          offset, in_info, dmabuf->target, dmabuf->modifier);
     else
       dmabuf->eglimage[i] = gst_egl_image_from_dmabuf (dmabuf->upload->context,
-          fd[i], in_info, i, offset[i]);
+          fd[i], in_info, i, offset[i], dmabuf->modifier);
 
     if (!dmabuf->eglimage[i]) {
       GST_DEBUG_OBJECT (dmabuf->upload, "could not create eglimage");

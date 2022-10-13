@@ -70,6 +70,14 @@ enum
 
 #define DEFAULT_QUALITY 85
 
+static GstStaticPadTemplate sink_factory = GST_STATIC_PAD_TEMPLATE ("sink",
+    GST_PAD_SINK,
+    GST_PAD_ALWAYS,
+    GST_STATIC_CAPS (GST_MSDK_CAPS_STR
+        ("{ NV12, YUY2, BGRA }", "NV12") "; "
+        GST_MSDK_CAPS_MAKE_WITH_VA_FEATURE ("NV12"))
+    );
+
 static GstStaticPadTemplate src_factory = GST_STATIC_PAD_TEMPLATE ("src",
     GST_PAD_SRC,
     GST_PAD_ALWAYS,
@@ -196,6 +204,7 @@ gst_msdkmjpegenc_class_init (GstMsdkMJPEGEncClass * klass)
       "MJPEG video encoder based on " MFX_API_SDK,
       "Scott D Phillips <scott.d.phillips@intel.com>");
 
+  gst_element_class_add_static_pad_template (element_class, &sink_factory);
   gst_element_class_add_static_pad_template (element_class, &src_factory);
 }
 

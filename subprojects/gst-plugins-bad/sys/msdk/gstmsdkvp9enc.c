@@ -56,7 +56,7 @@
 GST_DEBUG_CATEGORY_EXTERN (gst_msdkvp9enc_debug);
 #define GST_CAT_DEFAULT gst_msdkvp9enc_debug
 
-#define RAW_FORMATS "NV12, I420, YV12, YUY2, UYVY, BGRA, P010_10LE, VUYA"
+#define RAW_FORMATS "NV12, P010_10LE, VUYA"
 #define PROFILES    "0, 1, 2"
 
 #if (MFX_VERSION >= 1027)

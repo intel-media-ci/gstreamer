@@ -101,7 +101,7 @@ enum
 #define PROP_INTRA_REFRESH_CYCLE_DIST_DEFAULT 0
 #define PROP_DBLK_IDC_DEFAULT                 0
 
-#define RAW_FORMATS "NV12, I420, YV12, YUY2, UYVY, BGRA, BGR10A2_LE, P010_10LE, VUYA"
+#define RAW_FORMATS "NV12, BGR10A2_LE, P010_10LE, VUYA"
 #define PROFILES    "main, main-10, main-444, main-still-picture, main-10-still-picture"
 #define COMMON_FORMAT "{ " RAW_FORMATS " }"
 #define PRFOLIE_STR   "{ " PROFILES " }"

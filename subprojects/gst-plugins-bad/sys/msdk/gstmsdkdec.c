@@ -45,6 +45,8 @@
 #ifndef _WIN32
 #include <gstmsdkallocator_libva.h>
 #include <gst/va/gstvaallocator.h>
+#else
+#include <gst/d3d11/gstd3d11.h>
 #endif
 
 GST_DEBUG_CATEGORY_EXTERN (gst_msdkdec_debug);
@@ -750,6 +752,12 @@ gst_msdkdec_set_src_caps (GstMsdkDec * thiz, gboolean need_allocation)
           output_state->caps)) {
     gst_caps_set_features (output_state->caps, 0,
         gst_caps_features_new (GST_CAPS_FEATURE_MEMORY_DMABUF, NULL));
+  }
+#else
+  if (pad_accept_memory (thiz, GST_CAPS_FEATURE_MEMORY_D3D11_MEMORY,
+          output_state->caps)) {
+    gst_caps_set_features (output_state->caps, 0,
+        gst_caps_features_new (GST_CAPS_FEATURE_MEMORY_D3D11_MEMORY, NULL));
   }
 #endif
 

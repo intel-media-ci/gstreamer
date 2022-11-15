@@ -647,6 +647,25 @@ gst_msdk_get_video_format_from_mfx_fourcc (mfxU32 fourcc)
 }
 
 void
+gst_msdk_get_video_format_list (GValue * formats)
+{
+  const gchar *fmt_str = NULL;
+  GValue gfmt = G_VALUE_INIT;
+  const struct map *m = gst_msdk_video_format_to_mfx_map;
+
+  g_value_init (&gfmt, G_TYPE_STRING);
+  for (; m->mfx_fourcc != 0; m++) {
+    fmt_str = gst_video_format_to_string (m->format);
+    if (!fmt_str)
+      continue;
+
+    g_value_set_static_string (&gfmt, fmt_str);
+    gst_value_list_append_value (formats, &gfmt);
+  }
+  g_value_unset (&gfmt);
+}
+
+void
 gst_msdk_update_mfx_frame_info_from_mfx_video_param (mfxFrameInfo * mfx_info,
     mfxVideoParam * param)
 {

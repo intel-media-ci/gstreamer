@@ -36,6 +36,7 @@
 #include <stdlib.h>
 
 #include "gstmsdkdec.h"
+#include "gstmsdkcaps.h"
 #include "gstmsdkbufferpool.h"
 #include "gstmsdkvideomemory.h"
 #include "gstmsdksystemmemory.h"
@@ -545,24 +546,6 @@ failed:
   return FALSE;
 }
 
-
-static gboolean
-_gst_caps_has_feature (const GstCaps * caps, const gchar * feature)
-{
-  guint i;
-
-  for (i = 0; i < gst_caps_get_size (caps); i++) {
-    GstCapsFeatures *const features = gst_caps_get_features (caps, i);
-    /* Skip ANY features, we need an exact match for correct evaluation */
-    if (gst_caps_features_is_any (features))
-      continue;
-    if (gst_caps_features_contains (features, feature))
-      return TRUE;
-  }
-
-  return FALSE;
-}
-
 static gboolean
 srcpad_can_dmabuf (GstMsdkDec * thiz)
 {
@@ -581,7 +564,7 @@ srcpad_can_dmabuf (GstMsdkDec * thiz)
       || out_caps == caps)
     goto done;
 
-  if (_gst_caps_has_feature (out_caps, GST_CAPS_FEATURE_MEMORY_DMABUF))
+  if (gst_msdkcaps_has_feature (out_caps, GST_CAPS_FEATURE_MEMORY_DMABUF))
     ret = TRUE;
 
 done:
@@ -1748,7 +1731,7 @@ gst_msdkdec_decide_allocation (GstVideoDecoder * decoder, GstQuery * query)
   /* this will get updated with msdk requirement */
   thiz->min_prealloc_buffers = min_buffers;
 
-  if (_gst_caps_has_feature (pool_caps, GST_CAPS_FEATURE_MEMORY_DMABUF)) {
+  if (gst_msdkcaps_has_feature (pool_caps, GST_CAPS_FEATURE_MEMORY_DMABUF)) {
     GST_INFO_OBJECT (decoder, "This MSDK decoder uses DMABuf memory");
     thiz->use_video_memory = thiz->use_dmabuf = TRUE;
   } else if (thiz->sfc)

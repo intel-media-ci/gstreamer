@@ -66,23 +66,6 @@ GST_DEBUG_CATEGORY_EXTERN (gst_msdkvp9enc_debug);
 #define GST_IS_MSDKVP9ENC_CLASS(klass) \
   (G_TYPE_CHECK_CLASS_TYPE((klass), G_TYPE_FROM_CLASS (klass)))
 
-#define PROFILES    "0, 1, 2"
-
-#if (MFX_VERSION >= 1027)
-#define SRC_PROFILES  "{ " PROFILES ", 3 }"
-#else
-#define SRC_PROFILES  "{ " PROFILES " }"
-#endif
-
-static GstStaticPadTemplate src_factory = GST_STATIC_PAD_TEMPLATE ("src",
-    GST_PAD_SRC,
-    GST_PAD_ALWAYS,
-    GST_STATIC_CAPS ("video/x-vp9, "
-        "framerate = (fraction) [0/1, MAX], "
-        "width = (int) [ 1, MAX ], height = (int) [ 1, MAX ], "
-        "profile = (string) " SRC_PROFILES)
-    );
-
 static GstElementClass *parent_class = NULL;
 
 typedef struct
@@ -95,50 +78,41 @@ static gboolean
 gst_msdkvp9enc_set_format (GstMsdkEnc * encoder)
 {
   GstMsdkVP9Enc *thiz = GST_MSDKVP9ENC (encoder);
-  GstCaps *template_caps;
   GstCaps *allowed_caps = NULL;
+  GstStructure *s;
+  const gchar *profile;
 
   thiz->profile = MFX_PROFILE_VP9_0;
-  template_caps = gst_static_pad_template_get_caps (&src_factory);
+
   allowed_caps = gst_pad_get_allowed_caps (GST_VIDEO_ENCODER_SRC_PAD (encoder));
+  if (allowed_caps == NULL)
+    return FALSE;
 
-  /* If downstream has ANY caps let encoder decide profile and level */
-  if (allowed_caps == template_caps) {
-    GST_INFO_OBJECT (thiz,
-        "downstream has ANY caps, profile/level set to auto");
-  } else if (allowed_caps) {
-    GstStructure *s;
-    const gchar *profile;
-
-    if (gst_caps_is_empty (allowed_caps)) {
-      gst_caps_unref (allowed_caps);
-      gst_caps_unref (template_caps);
-      return FALSE;
-    }
-
-    allowed_caps = gst_caps_make_writable (allowed_caps);
-    allowed_caps = gst_caps_fixate (allowed_caps);
-    s = gst_caps_get_structure (allowed_caps, 0);
-    profile = gst_structure_get_string (s, "profile");
-
-    if (profile) {
-      if (!strcmp (profile, "3")) {
-        thiz->profile = MFX_PROFILE_VP9_3;
-      } else if (!strcmp (profile, "2")) {
-        thiz->profile = MFX_PROFILE_VP9_2;
-      } else if (!strcmp (profile, "1")) {
-        thiz->profile = MFX_PROFILE_VP9_1;
-      } else if (!strcmp (profile, "0")) {
-        thiz->profile = MFX_PROFILE_VP9_0;
-      } else {
-        g_assert_not_reached ();
-      }
-    }
-
+  if (gst_caps_is_empty (allowed_caps)) {
     gst_caps_unref (allowed_caps);
+    return FALSE;
   }
 
-  gst_caps_unref (template_caps);
+  allowed_caps = gst_caps_make_writable (allowed_caps);
+  allowed_caps = gst_caps_fixate (allowed_caps);
+  s = gst_caps_get_structure (allowed_caps, 0);
+  profile = gst_structure_get_string (s, "profile");
+
+  if (profile) {
+    if (!strcmp (profile, "3")) {
+      thiz->profile = MFX_PROFILE_VP9_3;
+    } else if (!strcmp (profile, "2")) {
+      thiz->profile = MFX_PROFILE_VP9_2;
+    } else if (!strcmp (profile, "1")) {
+      thiz->profile = MFX_PROFILE_VP9_1;
+    } else if (!strcmp (profile, "0")) {
+      thiz->profile = MFX_PROFILE_VP9_0;
+    } else {
+      g_assert_not_reached ();
+    }
+  }
+
+  gst_caps_unref (allowed_caps);
 
   return TRUE;
 }

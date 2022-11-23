@@ -111,42 +111,6 @@ enum
 #define PROP_INTRA_REFRESH_CYCLE_DIST_DEFAULT 0
 #define PROP_DBLK_IDC_DEFAULT                 0
 
-#define PROFILES    "main, main-10, main-444, main-still-picture, main-10-still-picture"
-#define PRFOLIE_STR   "{ " PROFILES " }"
-
-#if (MFX_VERSION >= 1027)
-#undef  COMMON_FORMAT
-#undef  PRFOLIE_STR
-#define PROFILES_1027   PROFILES ", main-444-10, main-422-10"
-#define PRFOLIE_STR     "{ " PROFILES_1027 " }"
-#endif
-
-#if (MFX_VERSION >= 1031)
-#undef  COMMON_FORMAT
-#undef  PRFOLIE_STR
-#define PROFILES_1031   PROFILES_1027  ", main-12"
-#define PRFOLIE_STR     "{ " PROFILES_1031 " }"
-#endif
-
-#if (MFX_VERSION >= 1032)
-#undef  COMMON_FORMAT
-#undef  PRFOLIE_STR
-#define PROFILES_1032   PROFILES_1031  ", screen-extended-main, " \
-  "screen-extended-main-10, screen-extended-main-444, " \
-  "screen-extended-main-444-10"
-#define PRFOLIE_STR     "{ " PROFILES_1032 " }"
-#endif
-
-static GstStaticPadTemplate src_factory = GST_STATIC_PAD_TEMPLATE ("src",
-    GST_PAD_SRC,
-    GST_PAD_ALWAYS,
-    GST_STATIC_CAPS ("video/x-h265, "
-        "framerate = (fraction) [0/1, MAX], "
-        "width = (int) [ 1, MAX ], height = (int) [ 1, MAX ], "
-        "stream-format = (string) byte-stream , alignment = (string) au , "
-        "profile = (string) " PRFOLIE_STR)
-    );
-
 static GstElementClass *parent_class = NULL;
 
 typedef struct
@@ -374,7 +338,9 @@ static gboolean
 gst_msdkh265enc_set_format (GstMsdkEnc * encoder)
 {
   GstMsdkH265Enc *thiz = GST_MSDKH265ENC (encoder);
-  GstCaps *template_caps, *allowed_caps;
+  GstCaps *allowed_caps;
+  GstStructure *s;
+  const gchar *profile;
 
   g_free (thiz->profile_name);
   thiz->profile_name = NULL;
@@ -387,27 +353,16 @@ gst_msdkh265enc_set_format (GstMsdkEnc * encoder)
     return FALSE;
   }
 
-  template_caps = gst_static_pad_template_get_caps (&src_factory);
+  allowed_caps = gst_caps_make_writable (allowed_caps);
+  allowed_caps = gst_caps_fixate (allowed_caps);
+  s = gst_caps_get_structure (allowed_caps, 0);
+  profile = gst_structure_get_string (s, "profile");
 
-  if (gst_caps_is_equal (allowed_caps, template_caps)) {
-    GST_INFO_OBJECT (thiz,
-        "downstream have the same caps, profile set to auto");
-  } else {
-    GstStructure *s;
-    const gchar *profile;
-
-    allowed_caps = gst_caps_make_writable (allowed_caps);
-    allowed_caps = gst_caps_fixate (allowed_caps);
-    s = gst_caps_get_structure (allowed_caps, 0);
-    profile = gst_structure_get_string (s, "profile");
-
-    if (profile) {
-      thiz->profile_name = g_strdup (profile);
-    }
+  if (profile) {
+    thiz->profile_name = g_strdup (profile);
   }
 
   gst_caps_unref (allowed_caps);
-  gst_caps_unref (template_caps);
 
   return TRUE;
 }

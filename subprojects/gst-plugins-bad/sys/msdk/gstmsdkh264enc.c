@@ -113,16 +113,6 @@ enum
 #define PROP_INTRA_REFRESH_CYCLE_DIST_DEFAULT 0
 #define PROP_DBLK_IDC_DEFAULT                 0
 
-static GstStaticPadTemplate src_factory = GST_STATIC_PAD_TEMPLATE ("src",
-    GST_PAD_SRC,
-    GST_PAD_ALWAYS,
-    GST_STATIC_CAPS ("video/x-h264, "
-        "framerate = (fraction) [0/1, MAX], "
-        "width = (int) [ 1, MAX ], height = (int) [ 1, MAX ], "
-        "stream-format = (string) byte-stream , alignment = (string) au , "
-        "profile = (string) { high, main, baseline, constrained-baseline }")
-    );
-
 static GstElementClass *parent_class = NULL;
 
 typedef struct
@@ -273,58 +263,48 @@ static gboolean
 gst_msdkh264enc_set_format (GstMsdkEnc * encoder)
 {
   GstMsdkH264Enc *thiz = GST_MSDKH264ENC (encoder);
-  GstCaps *template_caps;
   GstCaps *allowed_caps = NULL;
+  GstStructure *s;
+  const gchar *profile;
+  const gchar *level;
 
   thiz->profile = 0;
   thiz->level = 0;
 
-  template_caps = gst_static_pad_template_get_caps (&src_factory);
   allowed_caps = gst_pad_get_allowed_caps (GST_VIDEO_ENCODER_SRC_PAD (encoder));
+  if (allowed_caps == NULL)
+    return FALSE;
 
-  /* If downstream has ANY caps let encoder decide profile and level */
-  if (allowed_caps == template_caps) {
-    GST_INFO_OBJECT (thiz,
-        "downstream has ANY caps, profile/level set to auto");
-  } else if (allowed_caps) {
-    GstStructure *s;
-    const gchar *profile;
-    const gchar *level;
-
-    if (gst_caps_is_empty (allowed_caps)) {
-      gst_caps_unref (allowed_caps);
-      gst_caps_unref (template_caps);
-      return FALSE;
-    }
-
-    allowed_caps = gst_caps_make_writable (allowed_caps);
-    allowed_caps = gst_caps_fixate (allowed_caps);
-    s = gst_caps_get_structure (allowed_caps, 0);
-
-    profile = gst_structure_get_string (s, "profile");
-    if (profile) {
-      if (!strcmp (profile, "high")) {
-        thiz->profile = MFX_PROFILE_AVC_HIGH;
-      } else if (!strcmp (profile, "main")) {
-        thiz->profile = MFX_PROFILE_AVC_MAIN;
-      } else if (!strcmp (profile, "baseline")) {
-        thiz->profile = MFX_PROFILE_AVC_BASELINE;
-      } else if (!strcmp (profile, "constrained-baseline")) {
-        thiz->profile = MFX_PROFILE_AVC_CONSTRAINED_BASELINE;
-      } else {
-        g_assert_not_reached ();
-      }
-    }
-
-    level = gst_structure_get_string (s, "level");
-    if (level) {
-      thiz->level = gst_codec_utils_h264_get_level_idc (level);
-    }
-
+  if (gst_caps_is_empty (allowed_caps)) {
     gst_caps_unref (allowed_caps);
+    return FALSE;
   }
 
-  gst_caps_unref (template_caps);
+  allowed_caps = gst_caps_make_writable (allowed_caps);
+  allowed_caps = gst_caps_fixate (allowed_caps);
+  s = gst_caps_get_structure (allowed_caps, 0);
+
+  profile = gst_structure_get_string (s, "profile");
+  if (profile) {
+    if (!strcmp (profile, "high")) {
+      thiz->profile = MFX_PROFILE_AVC_HIGH;
+    } else if (!strcmp (profile, "main")) {
+      thiz->profile = MFX_PROFILE_AVC_MAIN;
+    } else if (!strcmp (profile, "baseline")) {
+      thiz->profile = MFX_PROFILE_AVC_BASELINE;
+    } else if (!strcmp (profile, "constrained-baseline")) {
+      thiz->profile = MFX_PROFILE_AVC_CONSTRAINED_BASELINE;
+   } else {
+     g_assert_not_reached ();
+    }
+  }
+
+  level = gst_structure_get_string (s, "level");
+  if (level) {
+    thiz->level = gst_codec_utils_h264_get_level_idc (level);
+  }
+
+  gst_caps_unref (allowed_caps);
 
   if (thiz->frame_packing_sei) {
     gst_memory_unref (thiz->frame_packing_sei);

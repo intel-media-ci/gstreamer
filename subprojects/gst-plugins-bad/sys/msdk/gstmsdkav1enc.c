@@ -79,15 +79,6 @@ enum
 #define PROP_B_PYRAMID_DEFAULT          MFX_B_REF_UNKNOWN
 #define PROP_P_PYRAMID_DEFAULT          MFX_P_REF_DEFAULT
 
-static GstStaticPadTemplate src_factory = GST_STATIC_PAD_TEMPLATE ("src",
-    GST_PAD_SRC,
-    GST_PAD_ALWAYS,
-    GST_STATIC_CAPS ("video/x-av1, "
-        "framerate = (fraction) [0/1, MAX], "
-        "width = (int) [ 1, MAX ], height = (int) [ 1, MAX ], "
-        "profile = (string) main")
-    );
-
 static GstElementClass *parent_class = NULL;
 
 typedef struct
@@ -100,8 +91,9 @@ static gboolean
 gst_msdkav1enc_set_format (GstMsdkEnc * encoder)
 {
   GstMsdkAV1Enc *thiz = GST_MSDKAV1ENC (encoder);
-  GstCaps *template_caps;
   GstCaps *allowed_caps = NULL;
+  GstStructure *s;
+  const gchar *profile;
 
   thiz->profile = MFX_PROFILE_AV1_MAIN;
 
@@ -113,31 +105,19 @@ gst_msdkav1enc_set_format (GstMsdkEnc * encoder)
     return FALSE;
   }
 
-  template_caps = gst_static_pad_template_get_caps (&src_factory);
+  allowed_caps = gst_caps_make_writable (allowed_caps);
+  allowed_caps = gst_caps_fixate (allowed_caps);
+  s = gst_caps_get_structure (allowed_caps, 0);
+  profile = gst_structure_get_string (s, "profile");
 
-  /* If downstream has ANY caps let encoder decide profile and level */
-  if (gst_caps_is_equal (allowed_caps, template_caps)) {
-    GST_INFO_OBJECT (thiz,
-        "downstream has ANY caps, profile/level set to auto");
-  } else {
-    GstStructure *s;
-    const gchar *profile;
-
-    allowed_caps = gst_caps_make_writable (allowed_caps);
-    allowed_caps = gst_caps_fixate (allowed_caps);
-    s = gst_caps_get_structure (allowed_caps, 0);
-    profile = gst_structure_get_string (s, "profile");
-
-    if (profile) {
-      if (!strcmp (profile, "main"))
-        thiz->profile = MFX_PROFILE_AV1_MAIN;
-      else
-        g_assert_not_reached ();
-    }
+  if (profile) {
+    if (!strcmp (profile, "main"))
+      thiz->profile = MFX_PROFILE_AV1_MAIN;
+    else
+      g_assert_not_reached ();
   }
 
   gst_caps_unref (allowed_caps);
-  gst_caps_unref (template_caps);
 
   return TRUE;
 }

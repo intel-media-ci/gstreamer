@@ -80,14 +80,6 @@ enum
 
 #define DEFAULT_QUALITY 85
 
-static GstStaticPadTemplate src_factory = GST_STATIC_PAD_TEMPLATE ("src",
-    GST_PAD_SRC,
-    GST_PAD_ALWAYS,
-    GST_STATIC_CAPS ("image/jpeg, "
-        "framerate = (fraction) [0/1, MAX], "
-        "width = (int) [ 1, MAX ], height = (int) [ 1, MAX ]")
-    );
-
 static GstElementClass *parent_class = NULL;
 
 typedef struct

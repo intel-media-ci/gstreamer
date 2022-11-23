@@ -64,16 +64,6 @@ GST_DEBUG_CATEGORY_EXTERN (gst_msdkmpeg2enc_debug);
 #define GST_IS_MSDKMPEG2ENC_CLASS(klass) \
   (G_TYPE_CHECK_CLASS_TYPE((klass), G_TYPE_FROM_CLASS (klass)))
 
-static GstStaticPadTemplate src_factory = GST_STATIC_PAD_TEMPLATE ("src",
-    GST_PAD_SRC,
-    GST_PAD_ALWAYS,
-    GST_STATIC_CAPS ("video/mpeg, "
-        "framerate = (fraction) [0/1, MAX], "
-        "width = (int) [ 1, MAX ], height = (int) [ 1, MAX ], "
-        "mpegversion = (int) 2 , systemstream = (bool) false, "
-        "profile = (string) { high, main, simple }")
-    );
-
 static GstElementClass *parent_class = NULL;
 
 typedef struct
@@ -86,49 +76,40 @@ static gboolean
 gst_msdkmpeg2enc_set_format (GstMsdkEnc * encoder)
 {
   GstMsdkMPEG2Enc *thiz = GST_MSDKMPEG2ENC (encoder);
-  GstCaps *template_caps;
   GstCaps *allowed_caps = NULL;
+  GstStructure *s;
+  const gchar *profile;
+
 
   thiz->profile = 0;
 
-  template_caps = gst_static_pad_template_get_caps (&src_factory);
   allowed_caps = gst_pad_get_allowed_caps (GST_VIDEO_ENCODER_SRC_PAD (encoder));
+  if (allowed_caps == NULL)
+    return FALSE;
 
-  /* If downstream has ANY caps let encoder decide profile and level */
-  if (allowed_caps == template_caps) {
-    GST_INFO_OBJECT (thiz,
-        "downstream has ANY caps, profile/level set to auto");
-  } else if (allowed_caps) {
-    GstStructure *s;
-    const gchar *profile;
-
-    if (gst_caps_is_empty (allowed_caps)) {
-      gst_caps_unref (allowed_caps);
-      gst_caps_unref (template_caps);
-      return FALSE;
-    }
-
-    allowed_caps = gst_caps_make_writable (allowed_caps);
-    allowed_caps = gst_caps_fixate (allowed_caps);
-    s = gst_caps_get_structure (allowed_caps, 0);
-
-    profile = gst_structure_get_string (s, "profile");
-    if (profile) {
-      if (!strcmp (profile, "high")) {
-        thiz->profile = MFX_PROFILE_MPEG2_HIGH;
-      } else if (!strcmp (profile, "main")) {
-        thiz->profile = MFX_PROFILE_MPEG2_MAIN;
-      } else if (!strcmp (profile, "simple")) {
-        thiz->profile = MFX_PROFILE_MPEG2_SIMPLE;
-      } else {
-        g_assert_not_reached ();
-      }
-    }
-
+  if (gst_caps_is_empty (allowed_caps)) {
     gst_caps_unref (allowed_caps);
+    return FALSE;
   }
 
-  gst_caps_unref (template_caps);
+  allowed_caps = gst_caps_make_writable (allowed_caps);
+  allowed_caps = gst_caps_fixate (allowed_caps);
+  s = gst_caps_get_structure (allowed_caps, 0);
+
+  profile = gst_structure_get_string (s, "profile");
+  if (profile) {
+    if (!strcmp (profile, "high")) {
+      thiz->profile = MFX_PROFILE_MPEG2_HIGH;
+    } else if (!strcmp (profile, "main")) {
+      thiz->profile = MFX_PROFILE_MPEG2_MAIN;
+    } else if (!strcmp (profile, "simple")) {
+      thiz->profile = MFX_PROFILE_MPEG2_SIMPLE;
+    } else {
+      g_assert_not_reached ();
+    }
+  }
+
+  gst_caps_unref (allowed_caps);
 
   return TRUE;
 }
@@ -287,3 +268,4 @@ gst_msdk_mpeg2_enc_register (GstPlugin * plugin,
 
   return ret;
 }
+

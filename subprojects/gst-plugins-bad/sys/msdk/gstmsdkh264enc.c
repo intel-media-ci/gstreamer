@@ -50,6 +50,7 @@
 #endif
 
 #include "gstmsdkh264enc.h"
+#include "gstmsdkcaps.h"
 
 #include <gst/base/base.h>
 #include <gst/pbutils/pbutils.h>
@@ -57,6 +58,15 @@
 
 GST_DEBUG_CATEGORY_EXTERN (gst_msdkh264enc_debug);
 #define GST_CAT_DEFAULT gst_msdkh264enc_debug
+
+#define GST_MSDKH264ENC(obj) \
+  (G_TYPE_CHECK_INSTANCE_CAST((obj), G_TYPE_FROM_INSTANCE (obj), GstMsdkH264Enc))
+#define GST_MSDKH264ENC_CLASS(klass) \
+  (G_TYPE_CHECK_CLASS_CAST((klass), G_TYPE_FROM_CLASS (klass), GstMsdkH264EncClass))
+#define GST_IS_MSDKH264ENC(obj) \
+  (G_TYPE_CHECK_INSTANCE_TYPE((obj), G_TYPE_FROM_INSTANCE (obj)))
+#define GST_IS_MSDKH264ENC_CLASS(klass) \
+  (G_TYPE_CHECK_CLASS_TYPE((klass), G_TYPE_FROM_CLASS (klass)))
 
 enum
 {
@@ -113,6 +123,14 @@ static GstStaticPadTemplate src_factory = GST_STATIC_PAD_TEMPLATE ("src",
         "profile = (string) { high, main, baseline, constrained-baseline }")
     );
 
+static GstElementClass *parent_class = NULL;
+
+typedef struct
+{
+  GstCaps *sink_caps;
+  GstCaps *src_caps;
+} MsdkH264EncCData;
+
 static GType
 gst_msdkh264enc_frame_packing_get_type (void)
 {
@@ -132,9 +150,6 @@ gst_msdkh264enc_frame_packing_get_type (void)
 
   return format_type;
 }
-
-#define gst_msdkh264enc_parent_class parent_class
-G_DEFINE_TYPE (GstMsdkH264Enc, gst_msdkh264enc, GST_TYPE_MSDKENC);
 
 static void
 gst_msdkh264enc_insert_sei (GstMsdkH264Enc * thiz, GstVideoCodecFrame * frame,
@@ -733,12 +748,15 @@ gst_msdkh264enc_set_extra_params (GstMsdkEnc * encoder,
 }
 
 static void
-gst_msdkh264enc_class_init (GstMsdkH264EncClass * klass)
+gst_msdkh264enc_class_init (gpointer klass, gpointer data)
 {
   GObjectClass *gobject_class;
   GstElementClass *element_class;
   GstVideoEncoderClass *videoencoder_class;
   GstMsdkEncClass *encoder_class;
+  MsdkH264EncCData *cdata = data;
+
+  parent_class = g_type_class_peek_parent (klass);
 
   gobject_class = G_OBJECT_CLASS (klass);
   element_class = GST_ELEMENT_CLASS (klass);
@@ -860,12 +878,19 @@ gst_msdkh264enc_class_init (GstMsdkH264EncClass * klass)
       "Intel MSDK H264 encoder", "Codec/Encoder/Video/Hardware",
       "H264 video encoder based on " MFX_API_SDK,
       "Josep Torra <jtorra@oblong.com>");
-  gst_element_class_add_static_pad_template (element_class, &src_factory);
+
+  gst_element_class_add_pad_template (element_class,
+      gst_pad_template_new ("sink", GST_PAD_SINK, GST_PAD_ALWAYS,
+          cdata->sink_caps));
+  gst_element_class_add_pad_template (element_class,
+      gst_pad_template_new ("src", GST_PAD_SRC, GST_PAD_ALWAYS,
+          cdata->src_caps));
 }
 
 static void
-gst_msdkh264enc_init (GstMsdkH264Enc * thiz)
+gst_msdkh264enc_init (GTypeInstance * instance, gpointer g_class)
 {
+  GstMsdkH264Enc * thiz = GST_MSDKH264ENC (instance);
   thiz->cabac = PROP_CABAC_DEFAULT;
   thiz->lowpower = PROP_LOWPOWER_DEFAULT;
   thiz->frame_packing = PROP_FRAME_PACKING_DEFAULT;
@@ -882,4 +907,48 @@ gst_msdkh264enc_init (GstMsdkH264Enc * thiz)
   thiz->intra_refresh_qp_delta = PROP_INTRA_REFRESH_QP_DELTA_DEFAULT;
   thiz->intra_refresh_cycle_dist = PROP_INTRA_REFRESH_CYCLE_DIST_DEFAULT;
   thiz->dblk_idc = PROP_DBLK_IDC_DEFAULT;
+}
+
+gboolean
+gst_msdk_h264_enc_register (GstPlugin * plugin,
+    GstCaps * sink_caps, GstCaps * src_caps, guint rank)
+{
+  GType type;
+  MsdkH264EncCData *cdata;
+  gchar *type_name, *feature_name;
+  gboolean ret = FALSE;
+
+  GTypeInfo type_info = {
+    .class_size = sizeof (GstMsdkH264EncClass),
+    .class_init = gst_msdkh264enc_class_init,
+    .instance_size = sizeof (GstMsdkH264Enc),
+    .instance_init = gst_msdkh264enc_init
+  };
+
+  cdata = g_new (MsdkH264EncCData, 1);
+  cdata->sink_caps = gst_caps_ref (sink_caps);
+  cdata->src_caps = gst_caps_copy (src_caps);
+
+  gst_caps_set_simple (cdata->src_caps,
+      "alignment", G_TYPE_STRING, "au",
+      "stream-format", G_TYPE_STRING, "byte-stream", NULL);
+
+  GST_MINI_OBJECT_FLAG_SET (cdata->sink_caps,
+      GST_MINI_OBJECT_FLAG_MAY_BE_LEAKED);
+  GST_MINI_OBJECT_FLAG_SET (cdata->src_caps,
+      GST_MINI_OBJECT_FLAG_MAY_BE_LEAKED);
+
+  type_info.class_data = cdata,
+
+  type_name = g_strdup ("GstMsdkH264Enc");
+  feature_name = g_strdup ("msdkh264enc");
+
+  type = g_type_register_static (GST_TYPE_MSDKENC, type_name, &type_info, 0);
+  if (type)
+    ret = gst_element_register (plugin, feature_name, rank, type);
+
+  g_free (type_name);
+  g_free (feature_name);
+
+  return ret;
 }

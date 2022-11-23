@@ -43,6 +43,7 @@
 
 #include <gst/gst.h>
 
+#include "gstmsdkcaps.h"
 #include "gstmsdkh264dec.h"
 #include "gstmsdkh264enc.h"
 #include "gstmsdkh265dec.h"
@@ -66,11 +67,6 @@
 #include "gstmsdkav1enc.h"
 #endif
 #include "gstmsdkvpp.h"
-
-#if (MFX_VERSION >= 2000)
-#include <mfxjpeg.h>
-#include <mfxvp8.h>
-#endif
 
 GST_DEBUG_CATEGORY (gst_msdk_debug);
 GST_DEBUG_CATEGORY (gst_msdkdec_debug);
@@ -123,36 +119,46 @@ _register_encoders (GstPlugin * plugin,
     MsdkSession * session, mfxEncoderDescription * enc_desc)
 {
   gboolean ret = FALSE;
+  GstCaps *sink_caps = NULL;
+  GstCaps *src_caps = NULL;
 
   for (guint c = 0; c < enc_desc->NumCodecs; c++) {
+    ret = gst_msdkcaps_enc_create_caps (session, enc_desc,
+        enc_desc->Codecs[c].CodecID, &sink_caps, &src_caps);
+    if (!ret) {
+      GST_WARNING ("Failed to create caps for %"GST_FOURCC_FORMAT"ENC",
+          GST_FOURCC_ARGS (enc_desc->Codecs[c].CodecID));
+      continue;
+    }
+
     switch (enc_desc->Codecs[c].CodecID) {
       case MFX_CODEC_AVC:
-        ret = gst_element_register (plugin, "msdkh264enc", GST_RANK_NONE,
-            GST_TYPE_MSDKH264ENC);
+        ret = gst_msdk_h264_enc_register (plugin,
+            sink_caps, src_caps, GST_RANK_NONE);
         break;
       case MFX_CODEC_HEVC:
-        ret = gst_element_register (plugin, "msdkh265enc", GST_RANK_NONE,
-            GST_TYPE_MSDKH265ENC);
+        ret = gst_msdk_h265_enc_register (plugin,
+            sink_caps, src_caps, GST_RANK_NONE);;
         break;
       case MFX_CODEC_MPEG2:
-        ret = gst_element_register (plugin, "msdkmpeg2enc", GST_RANK_NONE,
-            GST_TYPE_MSDKMPEG2ENC);
+        ret = gst_msdk_mpeg2_enc_register (plugin,
+            sink_caps, src_caps, GST_RANK_NONE);
         break;
 #ifdef USE_MSDK_VP9_ENC
       case MFX_CODEC_VP9:
-        ret = gst_element_register (plugin, "msdkvp9enc", GST_RANK_NONE,
-            GST_TYPE_MSDKVP9ENC);
+        ret = gst_msdk_vp9_enc_register (plugin,
+            sink_caps, src_caps, GST_RANK_NONE);
         break;
 #endif
 #ifdef USE_MSDK_AV1_ENC
       case MFX_CODEC_AV1:
-        ret = gst_element_register (plugin, "msdkav1enc", GST_RANK_NONE,
-            GST_TYPE_MSDKAV1ENC);
+        ret = gst_msdk_av1_enc_register (plugin,
+            sink_caps, src_caps, GST_RANK_NONE);
         break;
 #endif
       case MFX_CODEC_JPEG:
-        ret = gst_element_register (plugin, "msdkmjpegenc", GST_RANK_NONE,
-            GST_TYPE_MSDKMJPEGENC);
+        ret = gst_msdk_jpeg_enc_register (plugin,
+            sink_caps, src_caps, GST_RANK_NONE);
         break;
       default:
         ret = FALSE;
@@ -162,7 +168,11 @@ _register_encoders (GstPlugin * plugin,
     if (!ret) {
       GST_WARNING ("Failed to register %"GST_FOURCC_FORMAT"ENC",
           GST_FOURCC_ARGS (enc_desc->Codecs[c].CodecID));
+      continue;
     }
+
+    gst_caps_unref (sink_caps);
+    gst_caps_unref (src_caps);
   }
 }
 
@@ -232,22 +242,36 @@ _register_vpp (GstPlugin * plugin, mfxVPPDescription * vpp_desc)
 static void
 _register_encoders (GstPlugin * plugin)
 {
-  gst_element_register (plugin, "msdkh264enc", GST_RANK_NONE,
-      GST_TYPE_MSDKH264ENC);
-  gst_element_register (plugin, "msdkh265enc", GST_RANK_NONE,
-      GST_TYPE_MSDKH265ENC);
-  gst_element_register (plugin, "msdkmjpegenc", GST_RANK_NONE,
-      GST_TYPE_MSDKMJPEGENC);
-  gst_element_register (plugin, "msdkmpeg2enc", GST_RANK_NONE,
-      GST_TYPE_MSDKMPEG2ENC);
+  GstCaps *sink_caps = NULL;
+  GstCaps *src_caps = NULL;
+
+  gst_msdkcaps_enc_create_caps (NULL, NULL, MFX_CODEC_AVC,
+      &sink_caps, &src_caps);
+  gst_msdk_h264_enc_register (plugin, sink_caps, src_caps, GST_RANK_NONE);
+
+  gst_msdkcaps_enc_create_caps (NULL, NULL, MFX_CODEC_HEVC,
+      &sink_caps, &src_caps);
+  gst_msdk_h265_enc_register (plugin, sink_caps, src_caps, GST_RANK_NONE);
+
+  gst_msdkcaps_enc_create_caps (NULL, NULL, MFX_CODEC_MPEG2,
+      &sink_caps, &src_caps);
+  gst_msdk_mpeg2_enc_register (plugin, sink_caps, src_caps, GST_RANK_NONE);
+
 #ifdef USE_MSDK_VP9_ENC
-  gst_element_register (plugin, "msdkvp9enc", GST_RANK_NONE,
-      GST_TYPE_MSDKVP9ENC);
+  gst_msdkcaps_enc_create_caps (NULL, NULL, MFX_CODEC_VP9,
+      &sink_caps, &src_caps);
+  gst_msdk_vp9_enc_register (plugin, sink_caps, src_caps, GST_RANK_NONE);
 #endif
+
 #ifdef USE_MSDK_AV1_ENC
-  gst_element_register (plugin, "msdkav1enc", GST_RANK_NONE,
-      GST_TYPE_MSDKAV1ENC);
+  gst_msdkcaps_enc_create_caps (NULL, NULL, MFX_CODEC_AV1,
+      &sink_caps, &src_caps);
+  gst_msdk_av1_enc_register (plugin, sink_caps, src_caps, GST_RANK_NONE);
 #endif
+
+  gst_msdkcaps_enc_create_caps (NULL, NULL, MFX_CODEC_JPEG,
+      &sink_caps, &src_caps);
+  gst_msdk_jpeg_enc_register (plugin, sink_caps, src_caps, GST_RANK_NONE);
 }
 
 static void

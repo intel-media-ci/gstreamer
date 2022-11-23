@@ -58,9 +58,19 @@
 #endif
 
 #include "gstmsdkmjpegenc.h"
+#include "gstmsdkcaps.h"
 
 GST_DEBUG_CATEGORY_EXTERN (gst_msdkmjpegenc_debug);
 #define GST_CAT_DEFAULT gst_msdkmjpegenc_debug
+
+#define GST_MSDKMJPEGENC(obj) \
+  (G_TYPE_CHECK_INSTANCE_CAST((obj), G_TYPE_FROM_INSTANCE (obj), GstMsdkMJPEGEnc))
+#define GST_MSDKMJPEGENC_CLASS(klass) \
+  (G_TYPE_CHECK_CLASS_CAST((klass), G_TYPE_FROM_CLASS (klass), GstMsdkMJPEGEncClass))
+#define GST_IS_MSDKMJPEGENC(obj) \
+  (G_TYPE_CHECK_INSTANCE_TYPE((obj), G_TYPE_FROM_INSTANCE (obj)))
+#define GST_IS_MSDKMJPEGENC_CLASS(klass) \
+  (G_TYPE_CHECK_CLASS_TYPE((klass), G_TYPE_FROM_CLASS (klass)))
 
 enum
 {
@@ -78,8 +88,13 @@ static GstStaticPadTemplate src_factory = GST_STATIC_PAD_TEMPLATE ("src",
         "width = (int) [ 1, MAX ], height = (int) [ 1, MAX ]")
     );
 
-#define gst_msdkmjpegenc_parent_class parent_class
-G_DEFINE_TYPE (GstMsdkMJPEGEnc, gst_msdkmjpegenc, GST_TYPE_MSDKENC);
+static GstElementClass *parent_class = NULL;
+
+typedef struct
+{
+  GstCaps *sink_caps;
+  GstCaps *src_caps;
+} MsdkJpegEncCData;
 
 static gboolean
 gst_msdkmjpegenc_set_format (GstMsdkEnc * encoder)
@@ -168,11 +183,14 @@ gst_msdkmjpegenc_need_conversion (GstMsdkEnc * encoder, GstVideoInfo * info,
 }
 
 static void
-gst_msdkmjpegenc_class_init (GstMsdkMJPEGEncClass * klass)
+gst_msdkmjpegenc_class_init (gpointer klass, gpointer data)
 {
   GObjectClass *gobject_class;
   GstElementClass *element_class;
   GstMsdkEncClass *encoder_class;
+  MsdkJpegEncCData *cdata = data;
+
+  parent_class = g_type_class_peek_parent (klass);
 
   gobject_class = G_OBJECT_CLASS (klass);
   element_class = GST_ELEMENT_CLASS (klass);
@@ -196,11 +214,58 @@ gst_msdkmjpegenc_class_init (GstMsdkMJPEGEncClass * klass)
       "MJPEG video encoder based on " MFX_API_SDK,
       "Scott D Phillips <scott.d.phillips@intel.com>");
 
-  gst_element_class_add_static_pad_template (element_class, &src_factory);
+  gst_element_class_add_pad_template (element_class,
+      gst_pad_template_new ("sink", GST_PAD_SINK, GST_PAD_ALWAYS,
+          cdata->sink_caps));
+  gst_element_class_add_pad_template (element_class,
+      gst_pad_template_new ("src", GST_PAD_SRC, GST_PAD_ALWAYS,
+          cdata->src_caps));
 }
 
 static void
-gst_msdkmjpegenc_init (GstMsdkMJPEGEnc * thiz)
+gst_msdkmjpegenc_init (GTypeInstance * instance, gpointer g_class)
 {
+  GstMsdkMJPEGEnc * thiz = GST_MSDKMJPEGENC (instance);
   thiz->quality = DEFAULT_QUALITY;
 }
+
+gboolean
+gst_msdk_jpeg_enc_register (GstPlugin * plugin,
+    GstCaps * sink_caps, GstCaps * src_caps, guint rank)
+{
+  GType type;
+  MsdkJpegEncCData *cdata;
+  gchar *type_name, *feature_name;
+  gboolean ret = FALSE;
+
+  GTypeInfo type_info = {
+    .class_size = sizeof (GstMsdkMJPEGEncClass),
+    .class_init = gst_msdkmjpegenc_class_init,
+    .instance_size = sizeof (GstMsdkMJPEGEnc),
+    .instance_init = gst_msdkmjpegenc_init
+  };
+
+  cdata = g_new (MsdkJpegEncCData, 1);
+  cdata->sink_caps = gst_caps_ref (sink_caps);
+  cdata->src_caps = gst_caps_ref (src_caps);
+
+  GST_MINI_OBJECT_FLAG_SET (cdata->sink_caps,
+      GST_MINI_OBJECT_FLAG_MAY_BE_LEAKED);
+  GST_MINI_OBJECT_FLAG_SET (cdata->src_caps,
+      GST_MINI_OBJECT_FLAG_MAY_BE_LEAKED);
+
+  type_info.class_data = cdata,
+
+  type_name = g_strdup ("GstMsdkMJPEGEnc");
+  feature_name = g_strdup ("msdkmjpegenc");
+
+  type = g_type_register_static (GST_TYPE_MSDKENC, type_name, &type_info, 0);
+  if (type)
+    ret = gst_element_register (plugin, feature_name, rank, type);
+
+  g_free (type_name);
+  g_free (feature_name);
+
+  return ret;
+}
+

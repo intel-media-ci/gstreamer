@@ -481,8 +481,14 @@ _get_supported_formats (MsdkSession * session,
     out.mfx.FrameInfo.BitDepthChroma = in.mfx.FrameInfo.BitDepthChroma;
     out.mfx.FrameInfo.Shift = in.mfx.FrameInfo.Shift;
 
-    if (!func (session, &in, &out))
-      continue;
+    in.mfx.LowPower = MFX_CODINGOPTION_UNKNOWN;
+    if (!func (session, &in, &out)) {
+      in.mfx.LowPower = (out.mfx.LowPower == MFX_CODINGOPTION_ON) ?
+          MFX_CODINGOPTION_OFF : MFX_CODINGOPTION_ON;
+
+      if (!func (session, &in, &out))
+        continue;
+    }
 
     gst_value_list_append_value (supported_fmts, gfmt);
   }
@@ -592,8 +598,15 @@ _enc_get_profiles (MsdkSession * session,
       out.mfx.FrameInfo.BitDepthLuma = in.mfx.FrameInfo.BitDepthLuma;
       out.mfx.FrameInfo.BitDepthChroma = in.mfx.FrameInfo.BitDepthChroma;
       out.mfx.FrameInfo.Shift = in.mfx.FrameInfo.Shift;
-      if (!_enc_is_param_supported (session, &in, &out))
-        continue;
+
+      in.mfx.LowPower = MFX_CODINGOPTION_UNKNOWN;
+      if (!_enc_is_param_supported (session, &in, &out)) {
+        in.mfx.LowPower = (out.mfx.LowPower == MFX_CODINGOPTION_ON) ?
+            MFX_CODINGOPTION_OFF : MFX_CODINGOPTION_ON;
+
+        if (!_enc_is_param_supported (session, &in, &out))
+          continue;
+      }
 
       prof_str = _profile_to_string (codec_id, in.mfx.CodecProfile);
       if (!prof_str)

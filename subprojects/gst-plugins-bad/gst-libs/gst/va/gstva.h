@@ -56,3 +56,5 @@ enum
 #include <gst/va/gstvapool.h>
 
 #include <gst/va/gstvautils.h>
+
+#include <gst/video/video-info-dma.h>

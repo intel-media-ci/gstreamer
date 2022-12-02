@@ -162,11 +162,11 @@ gst_va_base_transform_set_caps (GstBaseTransform * trans, GstCaps * incaps,
   gboolean res;
 
   /* input caps */
-  if (!gst_video_info_from_caps (&in_info, incaps))
+  if (!gst_va_video_info_from_caps (&in_info, NULL, incaps))
     goto invalid_caps;
 
   /* output caps */
-  if (!gst_video_info_from_caps (&out_info, outcaps))
+  if (!gst_va_video_info_from_caps (&out_info, NULL, outcaps))
     goto invalid_caps;
 
   fclass = GST_VA_BASE_TRANSFORM_GET_CLASS (self);
@@ -238,7 +238,7 @@ gst_va_base_transform_propose_allocation (GstBaseTransform * trans,
   gst_query_parse_allocation (query, &caps, NULL);
   if (!caps)
     return FALSE;
-  if (!gst_video_info_from_caps (&info, caps)) {
+  if (!gst_va_video_info_from_caps (&info, NULL, caps)) {
     GST_ERROR_OBJECT (self, "Cannot parse caps %" GST_PTR_FORMAT, caps);
     return FALSE;
   }
@@ -338,7 +338,7 @@ gst_va_base_transform_decide_allocation (GstBaseTransform * trans,
   gst_allocation_params_init (&other_params);
   gst_allocation_params_init (&params);
 
-  if (!gst_video_info_from_caps (&vinfo, outcaps)) {
+  if (!gst_va_video_info_from_caps (&vinfo, NULL, outcaps)) {
     GST_ERROR_OBJECT (self, "Cannot parse caps %" GST_PTR_FORMAT, outcaps);
     return FALSE;
   }
@@ -768,7 +768,7 @@ _get_sinkpad_pool (GstVaBaseTransform * self)
 
   if (self->priv->sinkpad_caps) {
     caps = self->priv->sinkpad_caps;
-    gst_video_info_from_caps (&in_info, caps);
+    gst_va_video_info_from_caps (&in_info, NULL, caps);
   } else {
     caps = self->in_caps;
     in_info = self->in_info;

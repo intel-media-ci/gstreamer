@@ -35,6 +35,13 @@ gboolean              va_create_surfaces                  (GstVaDisplay * displa
                                                            VASurfaceAttribExternalBuffers * ext_buf,
                                                            VASurfaceID * surfaces,
                                                            guint num_surfaces);
+gboolean              va_create_surfaces_with_modifier    (GstVaDisplay * display,
+                                                           guint rt_format, guint fourcc,
+                                                           guint width, guint height,
+                                                           gint usage_hint, guint64 modifier,
+                                                           VASurfaceAttribExternalBuffers * ext_buf,
+                                                           VASurfaceID * surfaces,
+                                                           guint num_surfaces);
 gboolean              va_destroy_surfaces                 (GstVaDisplay * display,
                                                            VASurfaceID * surfaces,
                                                            gint num_surfaces);

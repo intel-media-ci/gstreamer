@@ -54,8 +54,9 @@
 #endif
 
 #include "gstvah265dec.h"
-
 #include "gstvabasedec.h"
+
+#include <gst/va/gstvavideoformat.h>
 
 GST_DEBUG_CATEGORY_STATIC (gst_va_h265dec_debug);
 #ifndef GST_DISABLE_GST_DEBUG

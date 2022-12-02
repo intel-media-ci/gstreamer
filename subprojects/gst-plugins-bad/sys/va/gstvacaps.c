@@ -25,6 +25,7 @@
 #include "gstvacaps.h"
 
 #include <gst/va/gstvavideoformat.h>
+#include <gst/va/vasurfaceimage.h>
 #include <va/va_drmcommon.h>
 
 #include "gstvadisplay_priv.h"
@@ -145,6 +146,38 @@ gst_caps_set_format_array (GstCaps * caps, GArray * formats)
   return TRUE;
 }
 
+static gboolean
+gst_caps_set_drm_format_array (GstCaps * caps, GPtrArray * formats)
+{
+  GValue v_formats = G_VALUE_INIT;
+  const gchar *format;
+  guint i;
+
+  g_return_val_if_fail (GST_IS_CAPS (caps), FALSE);
+  g_return_val_if_fail (formats, FALSE);
+
+  if (formats->len == 1) {
+    format = g_ptr_array_index (formats, 0);
+    g_value_init (&v_formats, G_TYPE_STRING);
+    g_value_set_string (&v_formats, format);
+  } else if (formats->len > 1) {
+
+    gst_value_list_init (&v_formats, formats->len);
+
+    for (i = 0; i < formats->len; i++) {
+      format = g_ptr_array_index (formats, i);
+      _value_list_append_string (&v_formats, format);
+    }
+  } else {
+    return FALSE;
+  }
+
+  gst_caps_set_value (caps, "drm-format", &v_formats);
+  g_value_unset (&v_formats);
+
+  return TRUE;
+}
+
 /* Fix raw frames ill reported by drivers.
  *
  * Mesa Gallium reports P010 and P016 for H264 encoder:
@@ -191,7 +224,79 @@ fix_raw_formats (GstVaDisplay * display, VAConfigID config, GArray * formats)
 }
 
 GstCaps *
-gst_va_create_raw_caps_from_config (GstVaDisplay * display, VAConfigID config)
+gst_va_create_dma_caps (GstVaDisplay * display, VAEntrypoint entrypoint,
+    GArray * formats, gint min_width, gint max_width,
+    gint min_height, gint max_height)
+{
+  guint usage_hint;
+  guint64 modifier;
+  guint32 fourcc;
+  GstVideoFormat fmt;
+  gchar *drm_fmt_str;
+  GPtrArray *drm_formats_str;
+  GstCaps *caps = NULL;
+  guint i;
+
+  switch (entrypoint) {
+    case VAEntrypointVLD:
+      usage_hint = VA_SURFACE_ATTRIB_USAGE_HINT_DECODER;
+      break;
+    case VAEntrypointEncSlice:
+    case VAEntrypointEncSliceLP:
+    case VAEntrypointEncPicture:
+      usage_hint = VA_SURFACE_ATTRIB_USAGE_HINT_ENCODER;
+      break;
+    case VAEntrypointVideoProc:
+      usage_hint = VA_SURFACE_ATTRIB_USAGE_HINT_VPP_READ |
+          VA_SURFACE_ATTRIB_USAGE_HINT_VPP_WRITE;
+      break;
+    default:
+      GST_WARNING ("Not commonly used entrypoint %d,"
+          " just use generic usage hint", entrypoint);
+      usage_hint = VA_SURFACE_ATTRIB_USAGE_HINT_GENERIC;
+      break;
+  }
+
+  drm_formats_str = g_ptr_array_new_with_free_func (g_free);
+
+  for (i = 0; i < formats->len; i++) {
+    fmt = g_array_index (formats, GstVideoFormat, i);
+
+    fourcc = gst_va_fourcc_from_video_format (fmt);
+    g_assert (fourcc != DRM_FORMAT_INVALID);
+
+    modifier = gst_va_dmabuf_get_modifier_for_format (display, fmt, usage_hint);
+    if (modifier == DRM_FORMAT_MOD_INVALID)
+      continue;
+
+    drm_fmt_str = gst_video_dma_drm_fourcc_to_string (fourcc, modifier);
+
+    g_ptr_array_add (drm_formats_str, drm_fmt_str);
+  }
+
+  if (drm_formats_str->len == 0)
+    goto out;
+
+  caps = gst_caps_new_simple ("video/x-raw", "width", GST_TYPE_INT_RANGE,
+      min_width, max_width, "height", GST_TYPE_INT_RANGE, min_height,
+      max_height, NULL);
+
+  gst_caps_set_features_simple (caps,
+      gst_caps_features_from_string (GST_CAPS_FEATURE_MEMORY_DMABUF));
+
+  if (!gst_caps_set_drm_format_array (caps, drm_formats_str)) {
+    gst_clear_caps (&caps);
+    goto out;
+  }
+
+out:
+  g_ptr_array_unref (drm_formats_str);
+  return caps;
+}
+
+GstCaps *
+gst_va_create_raw_caps_from_config (GstVaDisplay * display, VAConfigID config,
+    VAEntrypoint entrypoint)
 {
   GArray *formats;
   GstCaps *caps = NULL, *base_caps, *feature_caps;
@@ -263,10 +368,10 @@ gst_va_create_raw_caps_from_config (GstVaDisplay * display, VAConfigID config)
   }
   if (mem_type & VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME
       || mem_type & VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2) {
-    feature_caps = gst_caps_copy (base_caps);
-    features = gst_caps_features_from_string (GST_CAPS_FEATURE_MEMORY_DMABUF);
-    gst_caps_set_features_simple (feature_caps, features);
-    caps = gst_caps_merge (caps, feature_caps);
+    feature_caps = gst_va_create_dma_caps (display, entrypoint, formats,
+        min_width, max_width, min_height, max_height);
+    if (feature_caps)
+      caps = gst_caps_merge (caps, feature_caps);
   }
 
   /* raw caps */
@@ -302,7 +407,7 @@ gst_va_create_raw_caps (GstVaDisplay * display, VAProfile profile,
     return NULL;
   }
 
-  caps = gst_va_create_raw_caps_from_config (display, config);
+  caps = gst_va_create_raw_caps_from_config (display, config, entrypoint);
 
   status = vaDestroyConfig (dpy, config);
   if (status != VA_STATUS_SUCCESS) {
@@ -311,6 +416,57 @@ gst_va_create_raw_caps (GstVaDisplay * display, VAProfile profile,
   }
 
   return caps;
+}
+
+gboolean
+gst_va_video_info_from_caps (GstVideoInfo * info, guint64 * modifier,
+    GstCaps * caps)
+{
+  GstVideoInfoDmaDrm drm_info;
+  GstVideoFormat video_format;
+
+  if (!gst_video_is_dma_drm_caps (caps))
+    return gst_video_info_from_caps (info, caps);
+
+  if (!gst_video_info_dma_drm_from_caps (&drm_info, caps))
+    return FALSE;
+
+  if (GST_VIDEO_INFO_FORMAT (&drm_info.vinfo) != GST_VIDEO_FORMAT_ENCODED)
+    return TRUE;
+
+  /* The non linear DMA format will be recognized as FORMAT_ENCODED,
+     but we still need to know its real format to set the info such
+     as pitch and stride. Because va plugins have its internal mapping
+     between drm fourcc and video format, we do not use the standard
+     conversion API here. */
+  video_format = gst_va_video_format_from_va_fourcc (drm_info.drm_fourcc);
+  if (video_format == GST_VIDEO_FORMAT_UNKNOWN)
+    return FALSE;
+
+  *info = drm_info.vinfo;
+
+  if (!gst_video_info_set_format (info, video_format,
+          GST_VIDEO_INFO_WIDTH (info), GST_VIDEO_INFO_HEIGHT (info)))
+    return FALSE;
+
+  if (modifier)
+    *modifier = drm_info.drm_modifier;
+
+  return TRUE;
+}
+
+GstCaps *
+gst_va_video_info_to_dma_caps (GstVideoInfo * info, guint64 modifier)
+{
+  GstVideoInfoDmaDrm drm_info;
+
+  gst_video_info_dma_drm_init (&drm_info);
+  drm_info.vinfo = *info;
+  drm_info.drm_fourcc =
+      gst_va_fourcc_from_video_format (GST_VIDEO_INFO_FORMAT (info));
+  drm_info.drm_modifier = modifier;
+
+  return gst_video_info_dma_drm_to_caps (&drm_info);
 }
 
 /* the purpose of this function is to find broken configurations in

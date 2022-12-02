@@ -35,12 +35,25 @@ VASurfaceAttrib *     gst_va_get_surface_attribs          (GstVaDisplay * displa
                                                            VAConfigID config,
                                                            guint * attrib_count);
 
+GstCaps *             gst_va_create_dma_caps              (GstVaDisplay * display,
+                                                           VAEntrypoint entrypoint,
+                                                           GArray * formats,
+                                                           gint min_width,
+                                                           gint max_width,
+                                                           gint min_height,
+                                                           gint max_height);
 GstCaps *             gst_va_create_raw_caps_from_config  (GstVaDisplay * display,
-                                                           VAConfigID config);
+                                                           VAConfigID config,
+                                                           VAEntrypoint entrypoint);
 GstCaps *             gst_va_create_coded_caps            (GstVaDisplay * display,
                                                            VAProfile profile,
                                                            VAEntrypoint entrypoint,
                                                            guint32 * rt_formats_ptr);
+gboolean              gst_va_video_info_from_caps         (GstVideoInfo * info,
+                                                           guint64 * modifier,
+                                                           GstCaps * caps);
+GstCaps *             gst_va_video_info_to_dma_caps       (GstVideoInfo * info,
+                                                           guint64 modifier);
 
 gboolean              gst_caps_set_format_array           (GstCaps * caps,
 							   GArray * formats);

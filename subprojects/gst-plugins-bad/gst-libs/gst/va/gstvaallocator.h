@@ -50,7 +50,8 @@ void                  gst_va_dmabuf_allocator_flush       (GstAllocator * alloca
 GST_VA_API
 gboolean              gst_va_dmabuf_allocator_set_format  (GstAllocator * allocator,
                                                            GstVideoInfo * info,
-                                                           guint usage_hint);
+                                                           guint usage_hint,
+                                                           guint64 modifier);
 GST_VA_API
 gboolean              gst_va_dmabuf_allocator_get_format  (GstAllocator * allocator,
                                                            GstVideoInfo * info,
@@ -64,6 +65,11 @@ gboolean              gst_va_dmabuf_memories_setup        (GstVaDisplay * displa
                                                            uintptr_t * fds,
                                                            gsize offset[GST_VIDEO_MAX_PLANES],
                                                            guint usage_hint);
+
+GST_VA_API
+guint64               gst_va_dmabuf_get_modifier_for_format (GstVaDisplay * display,
+                                                             GstVideoFormat format,
+                                                             guint usage_hint);
 
 #define GST_TYPE_VA_ALLOCATOR (gst_va_allocator_get_type())
 #define GST_VA_ALLOCATOR(obj)            (G_TYPE_CHECK_INSTANCE_CAST((obj), GST_TYPE_VA_ALLOCATOR, GstVaAllocator))

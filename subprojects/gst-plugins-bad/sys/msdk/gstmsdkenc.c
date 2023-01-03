@@ -102,7 +102,7 @@ static GstStaticPadTemplate sink_factory = GST_STATIC_PAD_TEMPLATE ("sink",
 #define PROP_ASYNC_DEPTH_DEFAULT         4
 #define PROP_TARGET_USAGE_DEFAULT        (MFX_TARGETUSAGE_BALANCED)
 #define PROP_RATE_CONTROL_DEFAULT        (MFX_RATECONTROL_CBR)
-#define PROP_BITRATE_DEFAULT             (2 * 1024)
+#define PROP_BITRATE_DEFAULT             0
 #define PROP_QPI_DEFAULT                 0
 #define PROP_QPP_DEFAULT                 0
 #define PROP_QPB_DEFAULT                 0
@@ -171,6 +171,79 @@ gst_msdkenc_set_context (GstElement * element, GstContext * context)
   GST_ELEMENT_CLASS (parent_class)->set_context (element, context);
 }
 
+static guint
+gst_msdkenc_get_preset_target_bitrate (GstMsdkEnc * thiz)
+{
+  mfxInfoMFX *mfx = &thiz->param.mfx;
+  gdouble bitrate = 0;
+  guint low = 0, high = 0;
+  guint pair_cnt = 0;
+  gdouble (*bit_pair)[2] = NULL;
+  gdouble point;
+  guint i;
+
+  /* 3D-array for linear interpolation. The magic number is from MediaSDK
+   * sample_utils CalculateDefaultBitrate function.
+   */
+  static gdouble preset_bitrate[3][5][2] = {
+    {{0, 0}, {25344, 225}, {101376, 1000}, {414720, 4000}, {2058240, 5000}},
+    {{0, 0}, {25344, 225 / 1.3}, {101376, 1000 / 1.3}, {414720, 4000 / 1.3},
+        {2058240, 5000 / 1.3}},
+    {{0, 0}, {414720, 12000}}
+  };
+
+  point = mfx->FrameInfo.Width * mfx->FrameInfo.Height *
+      mfx->FrameInfo.FrameRateExtN / mfx->FrameInfo.FrameRateExtD / 30.0;
+  pair_cnt = sizeof (preset_bitrate[0]) / sizeof (gdouble) / 2;
+
+  if (!point) {
+    GST_ERROR_OBJECT (thiz, "Preset linear interpolation failed");
+    return 0;
+  }
+
+  switch (mfx->CodecId) {
+    case MFX_CODEC_AVC:
+      bit_pair = &preset_bitrate[0][0];
+      break;
+
+    case MFX_CODEC_HEVC:
+      bit_pair = &preset_bitrate[1][0];
+      break;
+
+    default:
+      bit_pair = &preset_bitrate[2][0];
+      pair_cnt = 2;
+      break;
+  }
+
+  for (i = 0; i < pair_cnt; ++i) {
+    if (bit_pair[i][0] >= point) {
+      high = i;
+      break;
+    }
+  }
+
+  high = (high == 0) ? pair_cnt - 1 : high;
+  low = high - 1;
+  /* Linear interpolation */
+  bitrate = (point - bit_pair[low][0]) * (bit_pair[high][1] - bit_pair[low][1])
+      / (bit_pair[high][0] - bit_pair[low][0]) + bit_pair[low][1];
+
+  switch (thiz->target_usage) {
+    case MFX_TARGETUSAGE_BEST_QUALITY:
+      break;
+    case MFX_TARGETUSAGE_BEST_SPEED:
+      bitrate *= 0.5;
+      break;
+    case MFX_TARGETUSAGE_BALANCED:
+    default:
+      bitrate *= 0.75;
+      break;
+  }
+
+  return (guint) bitrate;
+}
+
 static void
 ensure_bitrate_control (GstMsdkEnc * thiz)
 {
@@ -178,6 +251,9 @@ ensure_bitrate_control (GstMsdkEnc * thiz)
   mfxExtCodingOption2 *option2 = &thiz->option2;
   mfxExtCodingOption3 *option3 = &thiz->option3;
 
+  if ((mfx->RateControlMethod != MFX_RATECONTROL_CQP) && !thiz->bitrate) {
+    thiz->bitrate = gst_msdkenc_get_preset_target_bitrate (thiz);
+  }
   GST_DEBUG_OBJECT (thiz, "set target bitrate: %u kbit/sec", thiz->bitrate);
 
   mfx->RateControlMethod = thiz->rate_control;
@@ -755,14 +831,14 @@ gst_msdkenc_init_encoder (GstMsdkEnc * thiz)
   if (0 == thiz->param.mfx.FrameInfo.FrameRateExtN)
     thiz->param.mfx.FrameInfo.FrameRateExtN = 30;
 
-  /* ensure bitrate control parameters */
-  ensure_bitrate_control (thiz);
-
   /* allow subclass configure further */
   if (klass->configure) {
     if (!klass->configure (thiz))
       goto failed;
   }
+
+  /* ensure bitrate control parameters */
+  ensure_bitrate_control (thiz);
 
   /* If color properties are available from upstream, set it and pass to MediaSDK here.
    * MJPEG and VP9 are excluded as MediaSDK does not support to handle video param
@@ -2590,7 +2666,7 @@ gst_msdkenc_install_common_properties (GstMsdkEncClass * klass)
       PROP_RATE_CONTROL_DEFAULT, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
 
   obj_properties[GST_MSDKENC_PROP_BITRATE] =
-      g_param_spec_uint ("bitrate", "Bitrate", "Bitrate in kbit/sec", 1,
+      g_param_spec_uint ("bitrate", "Bitrate", "Bitrate in kbit/sec", 0,
       2000 * 1024, PROP_BITRATE_DEFAULT,
       G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_PLAYING);
 

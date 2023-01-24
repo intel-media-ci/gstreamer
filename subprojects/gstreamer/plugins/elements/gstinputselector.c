@@ -361,7 +361,7 @@ static GstSelectorPadCachedBuffer *
 gst_selector_pad_new_cached_buffer (GstSelectorPad * selpad, GstBuffer * buffer)
 {
   GstSelectorPadCachedBuffer *cached_buffer =
-      g_slice_new (GstSelectorPadCachedBuffer);
+      g_new (GstSelectorPadCachedBuffer, 1);
   cached_buffer->buffer = buffer;
   cached_buffer->segment = selpad->segment;
   return cached_buffer;
@@ -372,7 +372,7 @@ gst_selector_pad_free_cached_buffer (GstSelectorPadCachedBuffer * cached_buffer)
 {
   if (cached_buffer->buffer)
     gst_buffer_unref (cached_buffer->buffer);
-  g_slice_free (GstSelectorPadCachedBuffer, cached_buffer);
+  g_free (cached_buffer);
 }
 
 /* must be called with the SELECTOR_LOCK */
@@ -506,18 +506,21 @@ static gboolean
 gst_input_selector_all_eos (GstInputSelector * sel)
 {
   GList *walk;
+  gboolean ret = TRUE;
 
+  GST_OBJECT_LOCK (sel);
   for (walk = GST_ELEMENT_CAST (sel)->sinkpads; walk; walk = walk->next) {
     GstSelectorPad *selpad;
 
     selpad = GST_SELECTOR_PAD_CAST (walk->data);
     if (!selpad->eos) {
-      return FALSE;
+      ret = FALSE;
+      break;
     }
-
   }
+  GST_OBJECT_UNLOCK (sel);
 
-  return TRUE;
+  return ret;
 }
 
 static gboolean
@@ -900,6 +903,7 @@ gst_input_selector_debug_cached_buffers (GstInputSelector * sel)
   if (gst_debug_category_get_threshold (input_selector_debug) < GST_LEVEL_DEBUG)
     return;
 
+  GST_OBJECT_LOCK (sel);
   for (walk = GST_ELEMENT_CAST (sel)->sinkpads; walk; walk = walk->next) {
     GstSelectorPad *selpad;
     GString *timestamps;
@@ -921,6 +925,7 @@ gst_input_selector_debug_cached_buffers (GstInputSelector * sel)
     GST_DEBUG_OBJECT (selpad, "%s", timestamps->str);
     g_string_free (timestamps, TRUE);
   }
+  GST_OBJECT_UNLOCK (sel);
 }
 #endif
 
@@ -967,6 +972,8 @@ gst_input_selector_cleanup_old_cached_buffers (GstInputSelector * sel,
     return;
 
   GST_DEBUG_OBJECT (sel, "Cleaning up old cached buffers");
+
+  GST_OBJECT_LOCK (sel);
   for (walk = GST_ELEMENT_CAST (sel)->sinkpads; walk; walk = g_list_next (walk)) {
     GstSelectorPad *selpad;
     GstSelectorPadCachedBuffer *cached_buffer;
@@ -1030,6 +1037,7 @@ gst_input_selector_cleanup_old_cached_buffers (GstInputSelector * sel,
       selpad->cached_buffers = NULL;
     }
   }
+  GST_OBJECT_UNLOCK (sel);
 
 #if DEBUG_CACHED_BUFFERS
   gst_input_selector_debug_cached_buffers (sel);
@@ -1926,7 +1934,6 @@ gst_input_selector_request_new_pad (GstElement * element,
 
   GST_OBJECT_FLAG_SET (sinkpad, GST_PAD_FLAG_PROXY_CAPS);
   GST_OBJECT_FLAG_SET (sinkpad, GST_PAD_FLAG_PROXY_ALLOCATION);
-  gst_pad_set_active (sinkpad, TRUE);
   GST_INPUT_SELECTOR_UNLOCK (sel);
   gst_element_add_pad (GST_ELEMENT (sel), sinkpad);
 
@@ -1979,6 +1986,7 @@ gst_input_selector_reset (GstInputSelector * sel)
   sel->eos_sent = FALSE;
 
   /* reset each of our sinkpads state */
+  GST_OBJECT_LOCK (sel);
   for (walk = GST_ELEMENT_CAST (sel)->sinkpads; walk; walk = g_list_next (walk)) {
     GstSelectorPad *selpad = GST_SELECTOR_PAD_CAST (walk->data);
 
@@ -1989,6 +1997,8 @@ gst_input_selector_reset (GstInputSelector * sel)
       selpad->tags = NULL;
     }
   }
+  GST_OBJECT_UNLOCK (sel);
+
   sel->have_group_id = TRUE;
   sel->upstream_latency = 0;
   sel->last_output_ts = GST_CLOCK_TIME_NONE;

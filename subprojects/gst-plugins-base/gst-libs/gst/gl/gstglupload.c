@@ -643,8 +643,7 @@ _dma_buf_upload_accept (gpointer impl, GstBuffer * buffer, GstCaps * in_caps,
   if (dmabuf->target == GST_GL_TEXTURE_TARGET_EXTERNAL_OES &&
       !gst_gl_context_check_feature (dmabuf->upload->context,
           "GL_OES_EGL_image_external")) {
-    GST_DEBUG_OBJECT (dmabuf->upload,
-        "no EGL_KHR_image_base_external extension");
+    GST_DEBUG_OBJECT (dmabuf->upload, "no GL_OES_EGL_image_external extension");
     return FALSE;
   }
 
@@ -1253,12 +1252,12 @@ _raw_upload_frame_new (struct RawUpload *raw, GstBuffer * buffer)
   if (!buffer)
     return NULL;
 
-  frame = g_slice_new (struct RawUploadFrame);
+  frame = g_new (struct RawUploadFrame, 1);
   frame->ref_count = 1;
 
   if (!gst_video_frame_map (&frame->frame, &raw->upload->priv->in_info,
           buffer, GST_MAP_READ)) {
-    g_slice_free (struct RawUploadFrame, frame);
+    g_free (frame);
     return NULL;
   }
 
@@ -1286,7 +1285,7 @@ _raw_upload_frame_unref (struct RawUploadFrame *frame)
 {
   if (g_atomic_int_dec_and_test (&frame->ref_count)) {
     gst_video_frame_unmap (&frame->frame);
-    g_slice_free (struct RawUploadFrame, frame);
+    g_free (frame);
   }
 }
 

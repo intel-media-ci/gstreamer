@@ -26,14 +26,6 @@
 /* libnice */
 #include <agent.h>
 
-#ifndef NICE_CHECK_VERSION
-#define NICE_CHECK_VERSION(major,minor,micro)                                \
-  (NICE_VERSION_MAJOR > (major) ||                                             \
-   (NICE_VERSION_MAJOR == (major) && NICE_VERSION_MINOR > (minor)) ||          \
-   (NICE_VERSION_MAJOR == (major) && NICE_VERSION_MINOR == (minor) &&          \
-    NICE_VERSION_MICRO >= (micro)))
-#endif
-
 #define HTTP_PROXY_PORT_DEFAULT 3128
 
 /* XXX:
@@ -400,47 +392,22 @@ resolve_host_finish (GstWebRTCNice * ice, GAsyncResult * res, GError ** error)
   return g_task_propagate_pointer (G_TASK (res), error);
 }
 
-struct turn_server_data
-{
-  GstUri *uri;
-  guint nice_stream_id;
-};
-
 static void
-turn_server_data_free (struct turn_server_data *data)
+_add_turn_server (GstWebRTCNice * ice, struct NiceStreamItem *item,
+    GstUri * turn_server)
 {
-  gst_uri_unref (data->uri);
-
-  g_free (data);
-}
-
-static void
-on_turn_server_resolved (GstWebRTCICE * ice, GAsyncResult * res,
-    struct turn_server_data *user_data)
-{
-  GList *addresses;
-  GError *error = NULL;
-  GstUri *turn_server = user_data->uri;
-  gboolean ret;
+  GstWebRTCNice *nice = GST_WEBRTC_NICE (ice);
+  const gchar *host;
+  NiceRelayType relays[4] = { 0, };
   gchar *user, *pass;
   const gchar *userinfo, *transport, *scheme;
-  NiceRelayType relays[4] = { 0, };
   int i, relay_n = 0;
-  gchar *ip = NULL;
-  GstWebRTCNice *nice = GST_WEBRTC_NICE (ice);
 
-  if (!(addresses = resolve_host_finish (nice, res, &error))) {
-    GST_WARNING_OBJECT (ice, "failed to resolve turn address: %s",
-        error->message);
-    g_clear_error (&error);
+  host = gst_uri_get_host (turn_server);
+  if (!host) {
+    GST_ERROR_OBJECT (ice, "Turn server has no host");
     return;
   }
-
-  /* XXX: only the first IP is used */
-  ip = g_inet_address_to_string (addresses->data);
-
-  /* Set the resolved IP as the host since that's what libnice wants */
-  gst_uri_set_host (turn_server, ip);
 
   scheme = gst_uri_get_scheme (turn_server);
   transport = gst_uri_get_query_value (turn_server, "transport");
@@ -458,42 +425,20 @@ on_turn_server_resolved (GstWebRTCICE * ice, GAsyncResult * res,
   g_assert (relay_n < G_N_ELEMENTS (relays));
 
   for (i = 0; i < relay_n; i++) {
-    ret = nice_agent_set_relay_info (nice->priv->nice_agent,
-        user_data->nice_stream_id, NICE_COMPONENT_TYPE_RTP,
-        gst_uri_get_host (turn_server), gst_uri_get_port (turn_server),
-        user, pass, relays[i]);
-    if (!ret) {
-      gchar *uri = gst_uri_to_string (turn_server);
-      GST_ERROR_OBJECT (ice, "Failed to set TURN server '%s'", uri);
-      g_free (uri);
-      break;
+    if (!nice_agent_set_relay_info (nice->priv->nice_agent,
+            item->nice_stream_id, NICE_COMPONENT_TYPE_RTP,
+            gst_uri_get_host (turn_server), gst_uri_get_port (turn_server),
+            user, pass, relays[i])) {
+      gchar *uri_str = gst_uri_to_string (turn_server);
+      GST_ERROR_OBJECT (ice, "Could not set TURN server %s on libnice",
+          uri_str);
+      g_free (uri_str);
     }
   }
+
   g_free (user);
   g_free (pass);
 
-  g_free (ip);
-}
-
-static void
-_add_turn_server (GstWebRTCNice * ice, struct NiceStreamItem *item,
-    GstUri * turn_server)
-{
-  struct turn_server_data *data;
-  const gchar *host;
-
-  host = gst_uri_get_host (turn_server);
-  if (!host) {
-    GST_ERROR_OBJECT (ice, "Turn server has no host");
-    return;
-  }
-
-  data = g_new0 (struct turn_server_data, 1);
-  data->nice_stream_id = item->nice_stream_id;
-  data->uri = gst_uri_copy (turn_server);
-
-  resolve_host_async (ice, host, (GAsyncReadyCallback) on_turn_server_resolved,
-      data, (GDestroyNotify) turn_server_data_free);
 }
 
 typedef struct
@@ -507,31 +452,6 @@ _add_turn_server_func (const gchar * uri, GstUri * turn_server,
     AddTurnServerData * data)
 {
   _add_turn_server (data->ice, data->item, turn_server);
-}
-
-static void
-on_stun_server_resolved (GstWebRTCNice * ice, GAsyncResult * res,
-    gpointer user_data)
-{
-  GList *addresses;
-  GError *error = NULL;
-  guint port = GPOINTER_TO_UINT (user_data);
-  char *ip;
-
-  if (!(addresses = resolve_host_finish (ice, res, &error))) {
-    GST_WARNING_OBJECT (ice, "Failed to resolve stun server: %s",
-        error->message);
-    g_clear_error (&error);
-    return;
-  }
-
-  /* XXX: only the first IP is used */
-  ip = g_inet_address_to_string (addresses->data);
-
-  g_object_set (ice->priv->nice_agent, "stun-server", ip,
-      "stun-server-port", port, NULL);
-
-  g_free (ip);
 }
 
 static void
@@ -558,8 +478,8 @@ _add_stun_server (GstWebRTCNice * ice, GstUri * stun_server)
     gst_uri_set_port (stun_server, port);
   }
 
-  resolve_host_async (ice, host, (GAsyncReadyCallback) on_stun_server_resolved,
-      GUINT_TO_POINTER (port), NULL);
+  g_object_set (ice->priv->nice_agent, "stun-server", host,
+      "stun-server-port", port, NULL);
 
 out:
   g_free (s);
@@ -1122,24 +1042,13 @@ _get_server_url (GstWebRTCNice * ice, NiceCandidate * cand)
 {
   switch (cand->type) {
     case NICE_CANDIDATE_TYPE_RELAYED:{
-#if NICE_CHECK_VERSION(0, 1, 19)
       NiceAddress addr;
       gchar ipaddr[NICE_ADDRESS_STRING_LEN];
       nice_candidate_relay_address (cand, &addr);
       nice_address_to_string (&addr, ipaddr);
       return g_strdup (ipaddr);
-#else
-      static gboolean warned = FALSE;
-      if (!warned) {
-        GST_WARNING
-            ("libnice version < 0.1.19 detected, relayed candidate server address might be wrong.");
-        warned = TRUE;
-      }
-      return g_strdup (gst_uri_get_host (ice->priv->turn_server));
-#endif
     }
     case NICE_CANDIDATE_TYPE_SERVER_REFLEXIVE:{
-#if NICE_CHECK_VERSION(0, 1, 20)
       NiceAddress addr;
       gchar ipaddr[NICE_ADDRESS_STRING_LEN];
       if (nice_candidate_stun_server_address (cand, &addr)) {
@@ -1148,15 +1057,6 @@ _get_server_url (GstWebRTCNice * ice, NiceCandidate * cand)
       } else {
         return g_strdup (gst_uri_get_host (ice->priv->stun_server));
       }
-#else
-      static gboolean warned = FALSE;
-      if (!warned) {
-        GST_WARNING
-            ("libnice version < 0.1.20 detected, server-reflexive candidate server "
-            "address might be wrong.");
-        warned = TRUE;
-      }
-#endif
       return g_strdup (gst_uri_get_host (ice->priv->stun_server));
     }
     default:

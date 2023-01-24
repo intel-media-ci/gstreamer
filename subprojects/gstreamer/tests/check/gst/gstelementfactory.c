@@ -19,6 +19,7 @@
  * Boston, MA 02110-1301, USA.
  */
 #include "../../gst/gst_private.h"
+#include "../../gst/glib-compat-private.h"
 
 #include <gst/check/gstcheck.h>
 
@@ -38,7 +39,7 @@ setup_pad_template (GstElementFactory * factory, GstStaticPadTemplate * tmpl)
 {
   GstStaticPadTemplate *template;
 
-  template = g_slice_dup (GstStaticPadTemplate, tmpl);
+  template = g_memdup2 (tmpl, sizeof (GstStaticPadTemplate));
   factory->staticpadtemplates = g_list_append (factory->staticpadtemplates,
       template);
   factory->numpadtemplates++;

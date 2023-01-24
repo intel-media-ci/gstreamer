@@ -18,6 +18,7 @@ use tungstenite::Message as WsMessage;
 
 use gst::glib;
 use gst::prelude::*;
+use gst_rtp::prelude::*;
 
 use serde_derive::{Deserialize, Serialize};
 
@@ -25,6 +26,8 @@ use anyhow::{anyhow, bail, Context};
 
 const STUN_SERVER: &str = "stun://stun.l.google.com:19302";
 const TURN_SERVER: &str = "turn://foo:bar@webrtc.nirbheek.in:3478";
+
+const TWCC_URI: &str = "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01";
 
 // upgrade weak reference or return
 #[macro_export]
@@ -44,8 +47,15 @@ macro_rules! upgrade_weak {
 struct Args {
     #[clap(short, long, default_value = "wss://webrtc.nirbheek.in:8443")]
     server: String,
+    /// Peer ID that should be called. If not given then an incoming call is expected.
     #[clap(short, long)]
     peer_id: Option<u32>,
+    /// Our ID. If not given then a random ID is created.
+    #[clap(short, long)]
+    our_id: Option<u32>,
+    /// Request that the peer creates an offer.
+    #[clap(short, long, default_value = "false")]
+    remote_offerer: bool,
 }
 
 // JSON messages we communicate with
@@ -115,8 +125,8 @@ impl App {
     > {
         // Create the GStreamer pipeline
         let pipeline = gst::parse_launch(
-        "videotestsrc pattern=ball is-live=true ! vp8enc deadline=1 ! rtpvp8pay pt=96 ! webrtcbin. \
-         audiotestsrc is-live=true ! opusenc ! rtpopuspay pt=97 ! webrtcbin. \
+        "videotestsrc pattern=ball is-live=true ! vp8enc deadline=1 keyframe-max-dist=2000 ! rtpvp8pay name=vpay pt=96 picture-id-mode=15-bit ! webrtcbin. \
+         audiotestsrc is-live=true ! opusenc perfect-timestamp=true ! rtpopuspay name=apay pt=97 ! application/x-rtp,encoding-name=OPUS ! webrtcbin. \
          webrtcbin name=webrtcbin"
     )?;
 
@@ -148,7 +158,18 @@ impl App {
         }));
 
         // Connect to on-negotiation-needed to handle sending an Offer
-        if app.args.peer_id.is_some() {
+        if app.args.peer_id.is_some() && !app.args.remote_offerer
+            || app.args.peer_id.is_none() && app.args.remote_offerer
+        {
+            let vpay = app.pipeline.by_name("vpay").unwrap();
+            let apay = app.pipeline.by_name("apay").unwrap();
+
+            for pay in [vpay, apay] {
+                let twcc = gst_rtp::RTPHeaderExtension::create_from_uri(TWCC_URI).unwrap();
+                twcc.set_id(1);
+                pay.emit_by_name::<()>("add-extension", &[&twcc]);
+            }
+
             let app_clone = app.downgrade();
             app.webrtcbin.connect_closure(
                 "on-negotiation-needed",
@@ -200,24 +221,20 @@ impl App {
             }
         });
 
-        // Asynchronously set the pipeline to Playing
-        app.pipeline.call_async(|pipeline| {
-            // If this fails, post an error on the bus so we exit
-            if pipeline.set_state(gst::State::Playing).is_err() {
-                gst::element_error!(
-                    pipeline,
-                    gst::LibraryError::Failed,
-                    ("Failed to set pipeline to Playing")
-                );
-            }
-        });
-
-        // Asynchronously set the pipeline to Playing
-        app.pipeline.call_async(|pipeline| {
-            pipeline
-                .set_state(gst::State::Playing)
-                .expect("Couldn't set pipeline to Playing");
-        });
+        // Asynchronously set the pipeline to Playing if we're creating the offer,
+        // otherwise do that after the offer was received.
+        if app.args.peer_id.is_some() && !app.args.remote_offerer {
+            app.pipeline.call_async(|pipeline| {
+                // If this fails, post an error on the bus so we exit
+                if pipeline.set_state(gst::State::Playing).is_err() {
+                    gst::element_error!(
+                        pipeline,
+                        gst::LibraryError::Failed,
+                        ("Failed to set pipeline to Playing")
+                    );
+                }
+            });
+        }
 
         Ok((app, send_gst_msg_rx, send_ws_msg_rx))
     }
@@ -226,6 +243,21 @@ impl App {
     fn handle_websocket_message(&self, msg: &str) -> Result<(), anyhow::Error> {
         if msg.starts_with("ERROR") {
             bail!("Got error message: {}", msg);
+        }
+
+        if msg == "OFFER_REQUEST" {
+            self.pipeline.call_async(|pipeline| {
+                // If this fails, post an error on the bus so we exit
+                if pipeline.set_state(gst::State::Playing).is_err() {
+                    gst::element_error!(
+                        pipeline,
+                        gst::LibraryError::Failed,
+                        ("Failed to set pipeline to Playing")
+                    );
+                }
+            });
+
+            return Ok(());
         }
 
         let json_msg: JsonMsg = serde_json::from_str(msg)?;
@@ -377,6 +409,84 @@ impl App {
         Ok(())
     }
 
+    fn configure_pipeline_on_offer(
+        &self,
+        offer: &gst_sdp::SDPMessage,
+    ) -> Result<(), anyhow::Error> {
+        // Extract audio/video payload types from the SDP and configure accordingly on the
+        // pipeline as these have to match with the offer
+        let mut opus_id = None;
+        let mut vp8_id = None;
+        for media in offer.medias() {
+            for fmt in media.formats() {
+                if fmt == "webrtc-datachannel" {
+                    continue;
+                }
+
+                let pt = match fmt.parse::<u8>() {
+                    Ok(pt) => pt,
+                    Err(_) => continue,
+                };
+
+                let caps = match media.caps_from_media(pt as i32) {
+                    Some(caps) if caps.size() > 0 => caps,
+                    _ => continue,
+                };
+
+                let s = caps.structure(0).unwrap();
+                let encoding_name = match s.get::<&str>("encoding-name") {
+                    Ok(encoding_name) => encoding_name,
+                    Err(_) => continue,
+                };
+
+                let twcc_id = media.attributes().find_map(|attr| {
+                    let key = attr.key();
+                    let value = attr.value();
+                    if key != "extmap" || !value.map_or(false, |value| value.ends_with(TWCC_URI)) {
+                        return None;
+                    }
+                    let value = value.unwrap();
+
+                    let id = value
+                        .strip_suffix(TWCC_URI)
+                        .and_then(|id| id.trim().parse::<u8>().ok());
+
+                    id
+                });
+
+                if encoding_name == "VP8" && vp8_id.is_none() {
+                    vp8_id = Some((pt, twcc_id));
+                } else if encoding_name == "OPUS" && opus_id.is_none() {
+                    opus_id = Some((pt, twcc_id));
+                }
+            }
+        }
+
+        if let (Some(opus_id), Some(vp8_id)) = (opus_id, vp8_id) {
+            let apay = self.pipeline.by_name("apay").unwrap();
+            let vpay = self.pipeline.by_name("vpay").unwrap();
+
+            for (pay, (pt, twcc_id)) in [(apay, opus_id), (vpay, vp8_id)] {
+                pay.set_property("pt", pt as u32);
+
+                if let Some(twcc_id) = twcc_id {
+                    let twcc = gst_rtp::RTPHeaderExtension::create_from_uri(TWCC_URI).unwrap();
+                    twcc.set_id(twcc_id as u32);
+                    pay.emit_by_name::<()>("add-extension", &[&twcc]);
+                }
+            }
+        } else {
+            gst::element_error!(
+                self.pipeline,
+                gst::LibraryError::Failed,
+                ("Not all streams found in the offer")
+            );
+            bail!("Not all streams found in the offer");
+        }
+
+        Ok(())
+    }
+
     // Handle incoming SDP answers from the peer
     fn handle_sdp(&self, type_: &str, sdp: &str) -> Result<(), anyhow::Error> {
         if type_ == "answer" {
@@ -402,6 +512,20 @@ impl App {
             let app_clone = self.downgrade();
             self.pipeline.call_async(move |_pipeline| {
                 let app = upgrade_weak!(app_clone);
+
+                if app.configure_pipeline_on_offer(&ret).is_err() {
+                    return;
+                }
+
+                // If this fails, post an error on the bus so we exit
+                if app.pipeline.set_state(gst::State::Playing).is_err() {
+                    gst::element_error!(
+                        app.pipeline,
+                        gst::LibraryError::Failed,
+                        ("Failed to set pipeline to Playing")
+                    );
+                    return;
+                }
 
                 let offer = gst_webrtc::WebRTCSessionDescription::new(
                     gst_webrtc::WebRTCSDPType::Offer,
@@ -637,7 +761,9 @@ async fn async_main() -> Result<(), anyhow::Error> {
     println!("connected");
 
     // Say HELLO to the server and see if it replies with HELLO
-    let our_id = rand::thread_rng().gen_range(10..10_000);
+    let our_id = args
+        .our_id
+        .unwrap_or_else(|| rand::thread_rng().gen_range(10..10_000));
     println!("Registering id {} with server", our_id);
     ws.send(WsMessage::Text(format!("HELLO {}", our_id)))
         .await?;
@@ -652,6 +778,8 @@ async fn async_main() -> Result<(), anyhow::Error> {
     }
 
     if let Some(peer_id) = args.peer_id {
+        println!("Setting up call with peer id {}", peer_id);
+
         // Join the given session
         ws.send(WsMessage::Text(format!("SESSION {}", peer_id)))
             .await?;
@@ -664,6 +792,14 @@ async fn async_main() -> Result<(), anyhow::Error> {
         if msg != WsMessage::Text("SESSION_OK".into()) {
             bail!("server error: {:?}", msg);
         }
+
+        // If we expect the peer to create the offer request it now
+        if args.remote_offerer {
+            println!("Requesting offer from peer");
+            ws.send(WsMessage::Text("OFFER_REQUEST".into())).await?;
+        }
+    } else {
+        println!("Waiting for incoming call");
     }
 
     // All good, let's run our message loop

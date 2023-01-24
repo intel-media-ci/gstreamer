@@ -695,6 +695,27 @@ void WPEView::loadUri(const gchar* uri)
     });
 }
 
+static void s_runJavascriptFinished(GObject* object, GAsyncResult* result, gpointer user_data)
+{
+    WebKitJavascriptResult* js_result;
+    GError* error = NULL;
+
+    js_result = webkit_web_view_run_javascript_finish(WEBKIT_WEB_VIEW(object), result, &error);
+    if (!js_result) {
+        GST_WARNING("Error running javascript: %s", error->message);
+        g_error_free(error);
+        return;
+    }
+    webkit_javascript_result_unref(js_result);
+}
+
+void WPEView::runJavascript(const char* script)
+{
+    s_view->dispatch([&]() {
+        webkit_web_view_run_javascript(webkit.view, script, nullptr, s_runJavascriptFinished, nullptr);
+    });
+}
+
 void WPEView::loadData(GBytes* bytes)
 {
     s_view->dispatch([this, bytes = g_bytes_ref(bytes)]() {
@@ -727,7 +748,7 @@ struct ImageContext {
 
 void WPEView::handleExportedImage(gpointer image)
 {
-    ImageContext* imageContext = g_slice_new(ImageContext);
+    ImageContext* imageContext = g_new (ImageContext, 1);
     imageContext->view = this;
     imageContext->image = static_cast<gpointer>(image);
     EGLImageKHR eglImage = wpe_fdo_egl_exported_image_get_egl_image(static_cast<struct wpe_fdo_egl_exported_image*>(image));
@@ -763,7 +784,7 @@ void WPEView::s_releaseSHMBuffer(gpointer data)
 {
     SHMBufferContext* context = static_cast<SHMBufferContext*>(data);
     context->view->releaseSHMBuffer(data);
-    g_slice_free(SHMBufferContext, context);
+    g_free (context);
 }
 
 void WPEView::handleExportedBuffer(struct wpe_fdo_shm_exported_buffer* buffer)
@@ -781,7 +802,7 @@ void WPEView::handleExportedBuffer(struct wpe_fdo_shm_exported_buffer* buffer)
     gsize size = width * height * 4;
     auto* data = static_cast<uint8_t*>(wl_shm_buffer_get_data(shmBuffer));
 
-    SHMBufferContext* bufferContext = g_slice_new(SHMBufferContext);
+    SHMBufferContext* bufferContext = g_new (SHMBufferContext, 1);
     bufferContext->view = this;
     bufferContext->buffer = buffer;
 
@@ -829,7 +850,7 @@ void WPEView::s_releaseImage(GstEGLImage* image, gpointer data)
 {
     ImageContext* context = static_cast<ImageContext*>(data);
     context->view->releaseImage(context->image);
-    g_slice_free(ImageContext, context);
+    g_free (context);
 }
 
 struct wpe_view_backend* WPEView::backend() const

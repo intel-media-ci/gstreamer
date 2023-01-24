@@ -45,6 +45,10 @@
 #include <mmsystem.h>
 #endif
 
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
+
 #include "gst-play-kb.h"
 
 #define VOLUME_STEPS 20
@@ -170,7 +174,7 @@ static GstPlay *
 play_new (gchar ** uris, const gchar * audio_sink, const gchar * video_sink,
     gboolean gapless, gboolean instant_uri, gdouble initial_volume,
     gboolean verbose, const gchar * flags_string, gboolean use_playbin3,
-    gdouble start_position)
+    gdouble start_position, gboolean no_position)
 {
   GstElement *sink, *playbin;
   GstPlay *play;
@@ -250,8 +254,9 @@ play_new (gchar ** uris, const gchar * audio_sink, const gchar * video_sink,
   play->bus_watch = gst_bus_add_watch (GST_ELEMENT_BUS (play->playbin),
       play_bus_msg, play);
 
-  /* FIXME: make configurable incl. 0 for disable */
-  play->timeout = g_timeout_add (100, play_timeout, play);
+  if (!no_position) {
+    play->timeout = g_timeout_add (100, play_timeout, play);
+  }
 
   play->missing = NULL;
   play->buffering = FALSE;
@@ -292,7 +297,8 @@ play_free (GstPlay * play)
   gst_object_unref (play->playbin);
 
   g_source_remove (play->bus_watch);
-  g_source_remove (play->timeout);
+  if (play->timeout != 0)
+    g_source_remove (play->timeout);
   g_main_loop_unref (play->loop);
 
   g_strfreev (play->uris);
@@ -1592,8 +1598,8 @@ clear_winmm_timer_resolution (guint resolution)
 }
 #endif
 
-int
-main (int argc, char **argv)
+static int
+real_main (int argc, char **argv)
 {
   GstPlay *play;
   GPtrArray *playlist;
@@ -1615,6 +1621,7 @@ main (int argc, char **argv)
   GOptionContext *ctx;
   gchar *playlist_file = NULL;
   gboolean use_playbin3 = FALSE;
+  gboolean no_position = FALSE;
 #ifdef HAVE_WINMM
   guint winmm_timer_resolution = 0;
 #endif
@@ -1652,13 +1659,16 @@ main (int argc, char **argv)
     {"quiet", 'q', 0, G_OPTION_ARG_NONE, &quiet,
         N_("Do not print any output (apart from errors)"), NULL},
     {"use-playbin3", 0, 0, G_OPTION_ARG_NONE, &use_playbin3,
-          N_("Use playbin3 pipeline"
+          N_("Use playbin3 pipeline "
               "(default varies depending on 'USE_PLAYBIN' env variable)"),
         NULL},
     {"wait-on-eos", 0, 0, G_OPTION_ARG_NONE, &wait_on_eos,
           N_
           ("Keep showing the last frame on EOS until quit or playlist change command "
               "(gapless is ignored)"),
+        NULL},
+    {"no-position", 0, 0, G_OPTION_ARG_NONE, &no_position,
+          N_("Do not print current position of pipeline"),
         NULL},
     {G_OPTION_REMAINING, 0, 0, G_OPTION_ARG_FILENAME_ARRAY, &filenames, NULL},
     {NULL}
@@ -1771,7 +1781,7 @@ main (int argc, char **argv)
   /* prepare */
   play =
       play_new (uris, audio_sink, video_sink, gapless, instant_uri, volume,
-      verbose, flags, use_playbin3, start_position);
+      verbose, flags, use_playbin3, start_position, no_position);
 
   if (play == NULL) {
     gst_printerr
@@ -1821,4 +1831,14 @@ main (int argc, char **argv)
   gst_print ("\n");
   gst_deinit ();
   return 0;
+}
+
+int
+main (int argc, char *argv[])
+{
+#if defined(__APPLE__) && TARGET_OS_MAC && !TARGET_OS_IPHONE
+  return gst_macos_main ((GstMainFunc) real_main, argc, argv, NULL);
+#else
+  return real_main (argc, argv);
+#endif
 }

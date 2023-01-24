@@ -1,5 +1,5 @@
 project('gstreamer-vaapi', 'c',
-  version : '1.21.3.1',
+  version : '1.23.0.1',
   meson_version : '>= 0.62',
   default_options : [ 'warning_level=1',
                       'buildtype=debugoptimized' ])
@@ -241,6 +241,10 @@ meson.add_dist_script('scripts/gen-changelog.py', meson.project_name(), '1.20.0'
 
 pkgconfig = import('pkgconfig')
 plugins_pkgconfig_install_dir = join_paths(plugins_install_dir, 'pkgconfig')
+if get_option('default_library') == 'shared'
+  # If we don't build static plugins there is no need to generate pc files
+  plugins_pkgconfig_install_dir = disabler()
+endif
 
 plugin_names = []
 gst_plugins = []

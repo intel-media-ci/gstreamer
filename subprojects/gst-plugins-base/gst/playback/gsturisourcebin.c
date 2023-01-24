@@ -30,8 +30,6 @@
  *
  * The main configuration is via the #GstURISourceBin:uri property.
  *
- * > urisourcebin is still experimental API and a technology preview.
- * > Its behaviour and exposed API is subject to change.
  */
 
 #ifdef HAVE_CONFIG_H
@@ -844,6 +842,18 @@ demux_pad_events (GstPad * pad, GstPadProbeInfo * info, OutputSlotInfo * slot)
     }
       break;
     case GST_EVENT_STREAM_START:
+    {
+      /* This is a temporary hack to notify downstream decodebin3 to *not*
+       * plug in an extra parsebin */
+      if (slot->linked_info && slot->linked_info->demuxer_is_parsebin) {
+        GstStructure *s;
+        GST_PAD_PROBE_INFO_DATA (info) = ev = gst_event_make_writable (ev);
+        s = (GstStructure *) gst_event_get_structure (ev);
+        gst_structure_set (s, "urisourcebin-parsed-data", G_TYPE_BOOLEAN, TRUE,
+            NULL);
+      }
+    }
+      /* PASSTHROUGH */
     case GST_EVENT_FLUSH_STOP:
       BUFFERING_LOCK (urisrc);
       slot->is_eos = FALSE;
@@ -1934,6 +1944,10 @@ setup_parsebin_for_slot (ChildSrcPadInfo * info, GstPad * originating_pad)
 
 could_not_link:
   {
+    if (info->pre_parse_queue)
+      gst_element_set_locked_state (info->pre_parse_queue, FALSE);
+    if (info->demuxer)
+      gst_element_set_locked_state (info->demuxer, FALSE);
     GST_URI_SOURCE_BIN_UNLOCK (urisrc);
     GST_STATE_UNLOCK (urisrc);
     GST_ELEMENT_ERROR (urisrc, CORE, NEGOTIATION,
@@ -2143,6 +2157,7 @@ no_typefind:
 could_not_link:
   {
     gst_object_unref (sinkpad);
+    gst_element_set_locked_state (info->typefind, FALSE);
     GST_ELEMENT_ERROR (urisrc, CORE, NEGOTIATION,
         (NULL), ("Can't link source to typefind element"));
     return FALSE;
@@ -3009,11 +3024,13 @@ gst_uri_source_bin_change_state (GstElement * element,
   /* ERRORS */
 source_failed:
   {
+    remove_source (urisrc);
     return GST_STATE_CHANGE_FAILURE;
   }
 setup_failed:
   {
-    /* clean up leftover groups */
+    if (transition == GST_STATE_CHANGE_READY_TO_PAUSED)
+      remove_source (urisrc);
     return GST_STATE_CHANGE_FAILURE;
   }
 }

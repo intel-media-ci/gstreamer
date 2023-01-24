@@ -1,5 +1,3 @@
-#![recursion_limit = "256"]
-
 mod macos_workaround;
 
 use std::collections::BTreeMap;
@@ -157,9 +155,9 @@ impl App {
         // Create the GStreamer pipeline
         let pipeline = gst::parse_launch(
             &format!(
-                "videotestsrc is-live=true ! vp8enc deadline=1 ! rtpvp8pay pt=96 ! tee name=video-tee ! \
+                "videotestsrc is-live=true ! vp8enc deadline=1 keyframe-max-dist=2000 ! rtpvp8pay pt=96 picture-id-mode=15-bit ! tee name=video-tee ! \
                  queue ! fakesink sync=true \
-                 audiotestsrc wave=ticks is-live=true ! opusenc ! rtpopuspay pt=97 ! tee name=audio-tee ! \
+                 audiotestsrc wave=ticks is-live=true ! opusenc perfect-timestamp=true ! rtpopuspay pt=97 ! application/x-rtp,encoding-name=OPUS ! tee name=audio-tee ! \
                  queue ! fakesink sync=true \
                  audiotestsrc wave=silence is-live=true ! audio-mixer. \
                  audiomixer name=audio-mixer sink_0::mute=true ! audioconvert ! audioresample ! autoaudiosink \
@@ -191,13 +189,6 @@ impl App {
 
         // Channel for outgoing WebSocket messages from other threads
         let (send_ws_msg_tx, send_ws_msg_rx) = mpsc::unbounded::<WsMessage>();
-
-        // Asynchronously set the pipeline to Playing
-        pipeline.call_async(|pipeline| {
-            pipeline
-                .set_state(gst::State::Playing)
-                .expect("Couldn't set pipeline to Playing");
-        });
 
         let app = App(Arc::new(AppInner {
             pipeline,

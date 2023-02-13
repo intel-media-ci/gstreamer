@@ -875,41 +875,6 @@ gst_msdkh265enc_set_extra_params (GstMsdkEnc * encoder,
     gst_msdkenc_add_extra_param (encoder, (mfxExtBuffer *) & h265enc->roi[0]);
 }
 
-static gboolean
-gst_msdkh265enc_need_conversion (GstMsdkEnc * encoder, GstVideoInfo * info,
-    GstVideoFormat * out_format)
-{
-  GstMsdkH265Enc *h265enc = GST_MSDKH265ENC (encoder);
-
-  switch (GST_VIDEO_INFO_FORMAT (info)) {
-    case GST_VIDEO_FORMAT_NV12:
-    case GST_VIDEO_FORMAT_BGR10A2_LE:
-    case GST_VIDEO_FORMAT_P010_10LE:
-    case GST_VIDEO_FORMAT_VUYA:
-#if (MFX_VERSION >= 1027)
-    case GST_VIDEO_FORMAT_Y410:
-    case GST_VIDEO_FORMAT_Y210:
-#endif
-#if (MFX_VERSION >= 1031)
-    case GST_VIDEO_FORMAT_P012_LE:
-#endif
-      return FALSE;
-
-    case GST_VIDEO_FORMAT_YUY2:
-#if (MFX_VERSION >= 1027)
-      if (encoder->codename >= MFX_PLATFORM_ICELAKE &&
-          h265enc->tune_mode == MFX_CODINGOPTION_OFF)
-        return FALSE;
-#endif
-    default:
-      if (GST_VIDEO_INFO_COMP_DEPTH (info, 0) == 10)
-        *out_format = GST_VIDEO_FORMAT_P010_10LE;
-      else
-        *out_format = GST_VIDEO_FORMAT_NV12;
-      return TRUE;
-  }
-}
-
 static void
 gst_msdkh265enc_class_init (GstMsdkH265EncClass * klass)
 {
@@ -934,7 +899,6 @@ gst_msdkh265enc_class_init (GstMsdkH265EncClass * klass)
   encoder_class->set_src_caps = gst_msdkh265enc_set_src_caps;
   encoder_class->need_reconfig = gst_msdkh265enc_need_reconfig;
   encoder_class->set_extra_params = gst_msdkh265enc_set_extra_params;
-  encoder_class->need_conversion = gst_msdkh265enc_need_conversion;
 
   gst_msdkenc_install_common_properties (encoder_class);
 

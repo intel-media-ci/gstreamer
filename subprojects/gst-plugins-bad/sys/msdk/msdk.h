@@ -132,8 +132,6 @@ gint gst_msdk_get_mfx_fourcc_from_format (GstVideoFormat format);
 void gst_msdk_set_mfx_frame_info_from_video_info (mfxFrameInfo * mfx_info,
     const GstVideoInfo * info);
 
-gboolean
-gst_msdk_is_msdk_buffer (GstBuffer * buf);
 
 gboolean
 gst_msdk_is_va_mem (GstMemory * mem);

@@ -1307,6 +1307,11 @@ gst_msdkvpp_set_caps (GstBaseTransform * trans, GstCaps * caps,
   gboolean srcpad_info_changed = FALSE;
   gboolean deinterlace;
 
+  thiz->use_sinkpad_dmabuf = gst_msdkcaps_has_feature (caps,
+      GST_CAPS_FEATURE_MEMORY_DMABUF) ? TRUE : FALSE;
+  thiz->use_srcpad_dmabuf = gst_msdkcaps_has_feature (out_caps,
+      GST_CAPS_FEATURE_MEMORY_DMABUF) ? TRUE : FALSE;
+
   if (!gst_caps_features_is_equal (gst_caps_get_features (caps, 0),
           gst_caps_get_features (out_caps, 0)))
     thiz->need_vpp = 1;
@@ -1406,11 +1411,9 @@ gst_msdkvpp_fixate_caps (GstBaseTransform * trans,
 {
   GstMsdkVPP *thiz = GST_MSDKVPP (trans);
   GstCaps *result = NULL;
-  gboolean *use_dmabuf;
 
   if (direction == GST_PAD_SRC) {
     result = gst_caps_fixate (result);
-    use_dmabuf = &thiz->use_sinkpad_dmabuf;
   } else {
     /*
      * Override mirroring & rotation properties once video-direction
@@ -1421,7 +1424,6 @@ gst_msdkvpp_fixate_caps (GstBaseTransform * trans,
           (thiz->video_direction, &thiz->mirroring, &thiz->rotation);
 
     result = gst_msdkvpp_fixate_srccaps (thiz, caps, othercaps);
-    use_dmabuf = &thiz->use_srcpad_dmabuf;
   }
 
   GST_DEBUG_OBJECT (trans, "fixated to %" GST_PTR_FORMAT, result);
@@ -1439,7 +1441,6 @@ gst_msdkvpp_fixate_caps (GstBaseTransform * trans,
           direction == GST_PAD_SRC ? GST_PAD_SINK : GST_PAD_SRC, result)) {
     gst_caps_set_features (result, 0,
         gst_caps_features_new (GST_CAPS_FEATURE_MEMORY_DMABUF, NULL));
-    *use_dmabuf = TRUE;
   }
 #else
   if (pad_accept_memory (thiz, GST_CAPS_FEATURE_MEMORY_D3D11_MEMORY,

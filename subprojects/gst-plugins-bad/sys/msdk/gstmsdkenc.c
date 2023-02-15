@@ -679,6 +679,10 @@ gst_msdkenc_init_encoder (GstMsdkEnc * thiz)
   thiz->param.mfx.NumRefFrame = thiz->ref_frames;
   thiz->param.mfx.EncodedOrder = 0;     /* Take input frames in display order */
 
+  /* WA in the case of zero framerate, we set framerate as 30/1 */
+  if (info->fps_n == 0)
+    info->fps_n = 30;
+
   thiz->param.mfx.FrameInfo.Width = GST_ROUND_UP_16 (info->width);
   thiz->param.mfx.FrameInfo.Height = GST_ROUND_UP_32 (info->height);
   thiz->param.mfx.FrameInfo.CropW = info->width;
@@ -689,6 +693,9 @@ gst_msdkenc_init_encoder (GstMsdkEnc * thiz)
   thiz->param.mfx.FrameInfo.AspectRatioH = info->par_d;
   thiz->param.mfx.FrameInfo.PicStruct = MFX_PICSTRUCT_PROGRESSIVE;
   thiz->param.mfx.FrameInfo.ChromaFormat = MFX_CHROMAFORMAT_YUV420;
+
+  thiz->frame_duration = gst_util_uint64_scale (GST_SECOND, info->fps_d,
+      info->fps_n);
 
   switch (encoder_input_fmt) {
     case GST_VIDEO_FORMAT_P010_10LE:
@@ -1870,7 +1877,15 @@ gst_msdkenc_handle_frame (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
 
     fdata->frame_surface = surface;
 
+    /* It is possible to have input frame without any framerate/pts info,
+     * we need to set the correct pts here. */
+    if (frame->system_frame_number == 0)
+      thiz->start_pts = frame->pts;
+
     if (frame->pts != GST_CLOCK_TIME_NONE) {
+      frame->pts =
+          thiz->start_pts + frame->system_frame_number * thiz->frame_duration;
+      frame->duration = thiz->frame_duration;
       surface->surface->Data.TimeStamp =
           gst_util_uint64_scale (frame->pts, 90000, GST_SECOND);
     } else {

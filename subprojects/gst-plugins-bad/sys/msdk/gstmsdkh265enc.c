@@ -103,7 +103,7 @@ enum
 
 #define RAW_FORMATS "NV12, I420, YV12, YUY2, UYVY, BGRA, BGR10A2_LE, P010_10LE, VUYA"
 #define PROFILES    "main, main-10, main-444, main-still-picture, main-10-still-picture"
-#define COMMON_FORMAT "{ " RAW_FORMATS " }"
+#define COMMON_FORMAT RAW_FORMATS
 #define PRFOLIE_STR   "{ " PROFILES " }"
 
 
@@ -112,7 +112,7 @@ enum
 #undef  PRFOLIE_STR
 #define FORMATS_1027    RAW_FORMATS ", Y410, Y210"
 #define PROFILES_1027   PROFILES ", main-444-10, main-422-10"
-#define COMMON_FORMAT   "{ " FORMATS_1027 " }"
+#define COMMON_FORMAT   FORMATS_1027
 #define PRFOLIE_STR     "{ " PROFILES_1027 " }"
 #endif
 
@@ -121,7 +121,7 @@ enum
 #undef  PRFOLIE_STR
 #define FORMATS_1031    FORMATS_1027 ", P012_LE"
 #define PROFILES_1031   PROFILES_1027  ", main-12"
-#define COMMON_FORMAT   "{ " FORMATS_1031 " }"
+#define COMMON_FORMAT   FORMATS_1031
 #define PRFOLIE_STR     "{ " PROFILES_1031 " }"
 #endif
 
@@ -132,24 +132,18 @@ enum
 #define PROFILES_1032   PROFILES_1031  ", screen-extended-main, " \
   "screen-extended-main-10, screen-extended-main-444, " \
   "screen-extended-main-444-10"
-#define COMMON_FORMAT   "{ " FORMATS_1032 " }"
+#define COMMON_FORMAT   FORMATS_1032
 #define PRFOLIE_STR     "{ " PROFILES_1032 " }"
 #endif
 
 #ifdef _WIN32
-static GstStaticPadTemplate sink_factory = GST_STATIC_PAD_TEMPLATE ("sink",
-    GST_PAD_SINK,
-    GST_PAD_ALWAYS,
-    GST_STATIC_CAPS (GST_MSDK_CAPS_STR (COMMON_FORMAT,
-            "{ NV12, P010_10LE }") "; "
-        GST_MSDK_CAPS_MAKE_WITH_D3D11_FEATURE ("{ NV12, P010_10LE }")));
+#define SINK_CAPS_STR \
+    GST_MSDK_CAPS_MAKE ("{"COMMON_FORMAT"}") "; " \
+    GST_MSDK_CAPS_MAKE_WITH_D3D11_FEATURE ("{ NV12, P010_10LE }")
 #else
-static GstStaticPadTemplate sink_factory = GST_STATIC_PAD_TEMPLATE ("sink",
-    GST_PAD_SINK,
-    GST_PAD_ALWAYS,
-    GST_STATIC_CAPS (GST_MSDK_CAPS_STR (COMMON_FORMAT,
-            "{ NV12, P010_10LE }") "; "
-        GST_MSDK_CAPS_MAKE_WITH_VA_FEATURE ("NV12")));
+#define SINK_CAPS_STR \
+    GST_MSDK_CAPS_MAKE ("{"COMMON_FORMAT"}") "; " \
+    GST_MSDK_CAPS_MAKE_WITH_VA_FEATURE ("NV12")
 #endif
 
 static GstStaticPadTemplate src_factory = GST_STATIC_PAD_TEMPLATE ("src",
@@ -882,6 +876,7 @@ gst_msdkh265enc_class_init (GstMsdkH265EncClass * klass)
   GstElementClass *element_class;
   GstVideoEncoderClass *videoencoder_class;
   GstMsdkEncClass *encoder_class;
+  GstCaps *sink_caps, *drm_caps;
 
   gobject_class = G_OBJECT_CLASS (klass);
   element_class = GST_ELEMENT_CLASS (klass);
@@ -999,7 +994,13 @@ gst_msdkh265enc_class_init (GstMsdkH265EncClass * klass)
       "H265 video encoder based on " MFX_API_SDK,
       "Josep Torra <jtorra@oblong.com>");
 
-  gst_element_class_add_static_pad_template (element_class, &sink_factory);
+  sink_caps = gst_caps_from_string (SINK_CAPS_STR);
+  drm_caps = gst_msdkcaps_create_drm_caps (NULL,
+      GST_MSDK_JOB_ENCODER, "NV12, P010_10LE", 1, G_MAXINT, 1, G_MAXINT);
+  gst_caps_append (sink_caps, drm_caps);
+  gst_element_class_add_pad_template (element_class,
+      gst_pad_template_new ("sink", GST_PAD_SINK, GST_PAD_ALWAYS, sink_caps));
+
   gst_element_class_add_static_pad_template (element_class, &src_factory);
 }
 

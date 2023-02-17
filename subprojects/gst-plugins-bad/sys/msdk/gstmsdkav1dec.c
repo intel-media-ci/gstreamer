@@ -54,13 +54,15 @@
 GST_DEBUG_CATEGORY_EXTERN (gst_msdkav1dec_debug);
 #define GST_CAT_DEFAULT gst_msdkav1dec_debug
 
-#define COMMON_FORMAT "{ NV12, P010_10LE, VUYA, Y410 }"
+#define RAW_FORMATS "NV12, P010_10LE, VUYA, Y410"
 
-#ifndef _WIN32
-#define VA_SRC_CAPS_STR \
-    ";" GST_MSDK_CAPS_MAKE_WITH_VA_FEATURE ("{ NV12 }")
+#ifdef _WIN32
+#define SRC_CAPS_STR \
+    GST_MSDK_CAPS_MAKE ("{" RAW_FORMATS "}")
 #else
-#define VA_SRC_CAPS_STR ""
+#define SRC_CAPS_STR \
+    GST_MSDK_CAPS_MAKE ("{" RAW_FORMATS "}") "; " \
+    GST_MSDK_CAPS_MAKE_WITH_VA_FEATURE ("NV12")
 #endif
 
 static GstStaticPadTemplate sink_factory = GST_STATIC_PAD_TEMPLATE ("sink",
@@ -68,12 +70,6 @@ static GstStaticPadTemplate sink_factory = GST_STATIC_PAD_TEMPLATE ("sink",
     GST_PAD_ALWAYS,
     GST_STATIC_CAPS ("video/x-av1")
     );
-
-static GstStaticPadTemplate src_factory = GST_STATIC_PAD_TEMPLATE ("src",
-    GST_PAD_SRC,
-    GST_PAD_ALWAYS,
-    GST_STATIC_CAPS (GST_MSDK_CAPS_STR (COMMON_FORMAT, COMMON_FORMAT)
-        VA_SRC_CAPS_STR));
 
 #define gst_msdkav1dec_parent_class parent_class
 G_DEFINE_TYPE (GstMsdkAV1Dec, gst_msdkav1dec, GST_TYPE_MSDKDEC);
@@ -113,6 +109,7 @@ gst_msdkav1dec_class_init (GstMsdkAV1DecClass * klass)
 {
   GstElementClass *element_class;
   GstMsdkDecClass *decoder_class;
+  GstCaps *src_caps, *drm_caps;
 
   element_class = GST_ELEMENT_CLASS (klass);
   decoder_class = GST_MSDKDEC_CLASS (klass);
@@ -128,7 +125,13 @@ gst_msdkav1dec_class_init (GstMsdkAV1DecClass * klass)
       "Haihao Xiang <haihao.xiang@intel.com>");
 
   gst_element_class_add_static_pad_template (element_class, &sink_factory);
-  gst_element_class_add_static_pad_template (element_class, &src_factory);
+
+  src_caps = gst_caps_from_string (SRC_CAPS_STR);
+  drm_caps = gst_msdkcaps_create_drm_caps (NULL,
+      GST_MSDK_JOB_DECODER, RAW_FORMATS, 1, G_MAXINT, 1, G_MAXINT);
+  gst_caps_append (src_caps, drm_caps);
+  gst_element_class_add_pad_template (element_class,
+      gst_pad_template_new ("src", GST_PAD_SRC, GST_PAD_ALWAYS, src_caps));
 }
 
 static void

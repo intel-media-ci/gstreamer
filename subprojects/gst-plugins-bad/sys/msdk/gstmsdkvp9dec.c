@@ -56,14 +56,15 @@
 GST_DEBUG_CATEGORY_EXTERN (gst_msdkvp9dec_debug);
 #define GST_CAT_DEFAULT gst_msdkvp9dec_debug
 
-#define COMMON_FORMAT "{ NV12, P010_10LE, VUYA, Y410, P012_LE, Y412_LE }"
-#define SUPPORTED_VA_FORMAT "{ NV12 }"
+#define RAW_FORMAT "NV12, P010_10LE, VUYA, Y410, P012_LE, Y412_LE"
 
-#ifndef _WIN32
-#define VA_SRC_CAPS_STR \
-    "; " GST_MSDK_CAPS_MAKE_WITH_VA_FEATURE (SUPPORTED_VA_FORMAT)
+#ifdef _WIN32
+#define SRC_CAPS_STR \
+    GST_MSDK_CAPS_MAKE ("{"RAW_FORMAT"}")
 #else
-#define VA_SRC_CAPS_STR ""
+#define SRC_CAPS_STR \
+    GST_MSDK_CAPS_MAKE ("{"RAW_FORMAT"}") "; " \
+    GST_MSDK_CAPS_MAKE_WITH_VA_FEATURE ("NV12")
 #endif
 
 static GstStaticPadTemplate sink_factory = GST_STATIC_PAD_TEMPLATE ("sink",
@@ -71,12 +72,6 @@ static GstStaticPadTemplate sink_factory = GST_STATIC_PAD_TEMPLATE ("sink",
     GST_PAD_ALWAYS,
     GST_STATIC_CAPS ("video/x-vp9")
     );
-
-static GstStaticPadTemplate src_factory = GST_STATIC_PAD_TEMPLATE ("src",
-    GST_PAD_SRC,
-    GST_PAD_ALWAYS,
-    GST_STATIC_CAPS (GST_MSDK_CAPS_STR (COMMON_FORMAT, COMMON_FORMAT)
-        VA_SRC_CAPS_STR));
 
 #define gst_msdkvp9dec_parent_class parent_class
 G_DEFINE_TYPE (GstMsdkVP9Dec, gst_msdkvp9dec, GST_TYPE_MSDKDEC);
@@ -177,6 +172,7 @@ gst_msdkvp9dec_class_init (GstMsdkVP9DecClass * klass)
   GObjectClass *gobject_class;
   GstElementClass *element_class;
   GstMsdkDecClass *decoder_class;
+  GstCaps *src_caps, *drm_caps;
 
   gobject_class = G_OBJECT_CLASS (klass);
   element_class = GST_ELEMENT_CLASS (klass);
@@ -198,7 +194,13 @@ gst_msdkvp9dec_class_init (GstMsdkVP9DecClass * klass)
   gst_msdkdec_prop_install_output_oder_property (gobject_class);
 
   gst_element_class_add_static_pad_template (element_class, &sink_factory);
-  gst_element_class_add_static_pad_template (element_class, &src_factory);
+
+  src_caps = gst_caps_from_string (SRC_CAPS_STR);
+  drm_caps = gst_msdkcaps_create_drm_caps (NULL,
+      GST_MSDK_JOB_DECODER, RAW_FORMAT, 1, G_MAXINT, 1, G_MAXINT);
+  gst_caps_append (src_caps, drm_caps);
+  gst_element_class_add_pad_template (element_class,
+      gst_pad_template_new ("src", GST_PAD_SRC, GST_PAD_ALWAYS, src_caps));
 }
 
 static void

@@ -47,12 +47,6 @@
 GST_DEBUG_CATEGORY_EXTERN (gst_msdkdec_debug);
 #define GST_CAT_DEFAULT gst_msdkdec_debug
 
-static GstStaticPadTemplate src_factory = GST_STATIC_PAD_TEMPLATE ("src",
-    GST_PAD_SRC,
-    GST_PAD_ALWAYS,
-    GST_STATIC_CAPS (GST_MSDK_CAPS_STR ("NV12", "NV12"))
-    );
-
 #define PROP_HARDWARE_DEFAULT            TRUE
 #define PROP_ASYNC_DEPTH_DEFAULT         1
 
@@ -552,10 +546,8 @@ pad_accept_memory (GstMsdkDec * thiz, const gchar * mem_type, GstCaps * filter)
   gst_caps_set_features (caps, 0, gst_caps_features_from_string (mem_type));
 
   out_caps = gst_pad_peer_query_caps (pad, caps);
-  if (!out_caps)
-    goto done;
 
-  if (gst_caps_is_any (out_caps) || gst_caps_is_empty (out_caps))
+  if (!out_caps || gst_caps_is_empty (out_caps))
     goto done;
 
   if (gst_msdkcaps_has_feature (out_caps, mem_type))
@@ -594,16 +586,14 @@ gst_msdkdec_set_src_caps (GstMsdkDec * thiz, gboolean need_allocation)
   GstVideoInfo vinfo;
   GstVideoAlignment align;
   GstCaps *allocation_caps = NULL;
-  GstCaps *allowed_caps = NULL, *temp_caps;
+  GstCaps *allowed_caps = NULL, *temp_caps, *out_caps, *src_caps;
   GstVideoFormat format;
   guint width, height;
   guint alloc_w, alloc_h;
   int out_width = 0, out_height = 0;
   gint dar_n = -1, dar_d = -1;
-  const gchar *format_str;
   GstStructure *outs = NULL;
   const gchar *out_format;
-  GValue v_format = G_VALUE_INIT;
   GValue v_width = G_VALUE_INIT;
   GValue v_height = G_VALUE_INIT;
 
@@ -624,6 +614,9 @@ gst_msdkdec_set_src_caps (GstMsdkDec * thiz, gboolean need_allocation)
     GST_WARNING_OBJECT (thiz, "Failed to find a valid video format");
     return FALSE;
   }
+
+  src_caps = gst_pad_query_caps (GST_VIDEO_DECODER (thiz)->srcpad, NULL);
+
 #if (MFX_VERSION >= 1022)
   /* SFC is triggered (for AVC and HEVC) when default output format is not
    * accepted by downstream or when downstream requests for a smaller
@@ -635,18 +628,14 @@ gst_msdkdec_set_src_caps (GstMsdkDec * thiz, gboolean need_allocation)
    * and let SFC work. */
   if (thiz->param.mfx.CodecId == MFX_CODEC_AVC ||
       thiz->param.mfx.CodecId == MFX_CODEC_HEVC) {
-    temp_caps = gst_pad_query_caps (GST_VIDEO_DECODER (thiz)->srcpad, NULL);
-    temp_caps = gst_caps_make_writable (temp_caps);
+    temp_caps = gst_caps_make_writable (src_caps);
 
-    g_value_init (&v_format, G_TYPE_STRING);
+    get_msdkcaps_fixate_format (temp_caps, format);
+
     g_value_init (&v_width, G_TYPE_INT);
     g_value_init (&v_height, G_TYPE_INT);
-
-    g_value_set_string (&v_format, gst_video_format_to_string (format));
     g_value_set_int (&v_width, width);
     g_value_set_int (&v_height, height);
-
-    gst_caps_set_value (temp_caps, "format", &v_format);
     gst_caps_set_value (temp_caps, "width", &v_width);
     gst_caps_set_value (temp_caps, "height", &v_height);
 
@@ -720,17 +709,25 @@ gst_msdkdec_set_src_caps (GstMsdkDec * thiz, gboolean need_allocation)
   else
     gst_msdk_set_video_alignment (&vinfo, alloc_w, alloc_h, &align);
   gst_video_info_align (&vinfo, &align);
-  output_state->caps = gst_video_info_to_caps (&vinfo);
+
+  out_caps = gst_video_info_to_caps (&vinfo);
+
 #ifndef _WIN32
-  if (pad_accept_memory (thiz, GST_CAPS_FEATURE_MEMORY_VA, output_state->caps)) {
-    gst_caps_set_features (output_state->caps, 0,
+  if (pad_accept_memory (thiz, GST_CAPS_FEATURE_MEMORY_VA, out_caps)) {
+    gst_caps_set_features (out_caps, 0,
         gst_caps_features_new (GST_CAPS_FEATURE_MEMORY_VA, NULL));
+    get_msdkcaps_remove_drm_format (out_caps);
   } else if (pad_accept_memory (thiz, GST_CAPS_FEATURE_MEMORY_DMABUF,
-          output_state->caps)) {
-    gst_caps_set_features (output_state->caps, 0,
+          out_caps)) {
+    gst_caps_set_features (out_caps, 0,
         gst_caps_features_new (GST_CAPS_FEATURE_MEMORY_DMABUF, NULL));
+
+    out_caps = gst_msdkcaps_intersect (out_caps, src_caps);
+    thiz->modifier = get_msdkcaps_get_modifier (out_caps);
   }
 #endif
+
+  output_state->caps = out_caps;
 
   if (need_allocation) {
     /* Find allocation width and height */
@@ -744,11 +741,8 @@ gst_msdkdec_set_src_caps (GstMsdkDec * thiz, gboolean need_allocation)
     /* set allocation width and height in allocation_caps,
      * which may or may not be similar to the output_state caps */
     allocation_caps = gst_caps_copy (output_state->caps);
-    format_str =
-        gst_video_format_to_string (GST_VIDEO_INFO_FORMAT
-        (&output_state->info));
     gst_caps_set_simple (allocation_caps, "width", G_TYPE_INT, width, "height",
-        G_TYPE_INT, height, "format", G_TYPE_STRING, format_str, NULL);
+        G_TYPE_INT, height, NULL);
     GST_INFO_OBJECT (thiz, "new alloc caps = %" GST_PTR_FORMAT,
         allocation_caps);
     gst_caps_replace (&output_state->allocation_caps, allocation_caps);
@@ -1686,7 +1680,15 @@ gst_msdk_create_va_pool (GstMsdkDec * thiz, GstVideoInfo * info,
     return NULL;
   }
 
-  caps = gst_video_info_to_caps (info);
+  if (thiz->use_dmabuf && thiz->modifier != DRM_FORMAT_MOD_INVALID) {
+    gst_va_dmabuf_allocator_set_format  (allocator,
+        info, VA_SURFACE_ATTRIB_USAGE_HINT_DECODER, thiz->modifier);
+    caps = gst_msdkcaps_video_info_to_drm_caps (info, thiz->modifier);
+    gst_caps_set_features (caps, 0,
+        gst_caps_features_new (GST_CAPS_FEATURE_MEMORY_DMABUF, NULL));
+  } else
+    caps = gst_video_info_to_caps (info);
+
   pool =
       gst_va_pool_new_with_config (caps,
       GST_VIDEO_INFO_SIZE (info), num_buffers, num_buffers,
@@ -1861,7 +1863,20 @@ gst_msdkdec_decide_allocation (GstVideoDecoder * decoder, GstQuery * query)
         min_buffers, max_buffers);
     if (!gst_buffer_pool_set_config (pool, pool_config))
       goto error_set_config;
-    if (!gst_video_info_from_caps (&thiz->non_msdk_pool_info, pool_caps)) {
+
+
+    if (gst_video_is_dma_drm_caps (pool_caps)) {
+      GstVideoInfoDmaDrm *drm_info =
+          gst_video_info_dma_drm_new_from_caps (pool_caps);
+      if (!drm_info) {
+        GST_ERROR_OBJECT (thiz, "Failed to get video info from caps");
+        return FALSE;
+      }
+
+      thiz->non_msdk_pool_info = drm_info->vinfo;
+      gst_video_info_dma_drm_free (drm_info);
+    } else if (!gst_video_info_from_caps (
+          &thiz->non_msdk_pool_info, pool_caps)) {
       GST_ERROR_OBJECT (thiz, "Failed to get video info from caps");
       return FALSE;
     }
@@ -2196,6 +2211,7 @@ gst_msdkdec_class_init (GstMsdkDecClass * klass)
   GObjectClass *gobject_class;
   GstElementClass *element_class;
   GstVideoDecoderClass *decoder_class;
+  GstCaps *src_caps, *drm_caps;
 
   gobject_class = G_OBJECT_CLASS (klass);
   element_class = GST_ELEMENT_CLASS (klass);
@@ -2239,7 +2255,12 @@ gst_msdkdec_class_init (GstMsdkDecClass * klass)
           1, 20, PROP_ASYNC_DEPTH_DEFAULT,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
-  gst_element_class_add_static_pad_template (element_class, &src_factory);
+  src_caps = gst_caps_from_string (GST_VIDEO_CAPS_MAKE ("NV12"));
+  drm_caps = gst_msdkcaps_create_drm_caps (NULL,
+      GST_MSDK_JOB_DECODER, "NV12", 1, G_MAXINT, 1, G_MAXINT);
+  gst_caps_append (src_caps, drm_caps);
+  gst_element_class_add_pad_template (element_class,
+      gst_pad_template_new ("src", GST_PAD_SRC, GST_PAD_ALWAYS, src_caps));
 }
 
 static void
@@ -2255,6 +2276,7 @@ gst_msdkdec_init (GstMsdkDec * thiz)
   thiz->report_error = FALSE;
   thiz->sfc = FALSE;
   thiz->ds_has_known_allocator = TRUE;
+  thiz->modifier = DRM_FORMAT_MOD_INVALID;
   thiz->adapter = gst_adapter_new ();
   thiz->input_state = NULL;
   thiz->pool = NULL;

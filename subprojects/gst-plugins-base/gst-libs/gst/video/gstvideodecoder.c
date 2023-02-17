@@ -297,6 +297,7 @@
 #include <gst/video/video-event.h>
 #include <gst/video/gstvideopool.h>
 #include <gst/video/gstvideometa.h>
+#include <gst/video/video-info-dma.h>
 #include <string.h>
 
 GST_DEBUG_CATEGORY (videodecoder_debug);
@@ -4221,12 +4222,23 @@ gst_video_decoder_decide_allocation_default (GstVideoDecoder * decoder,
   GstAllocationParams params;
   GstStructure *config;
   gboolean update_pool, update_allocator;
-  GstVideoInfo vinfo;
+  gsize frame_size = 0;
 
   gst_query_parse_allocation (query, &outcaps, NULL);
-  gst_video_info_init (&vinfo);
-  if (outcaps)
-    gst_video_info_from_caps (&vinfo, outcaps);
+
+  if (outcaps)  {
+    if (gst_video_is_dma_drm_caps (outcaps)) {
+      GstVideoInfoDmaDrm *drm_info =
+          gst_video_info_dma_drm_new_from_caps (outcaps);
+      frame_size = drm_info->vinfo.size;
+      gst_video_info_dma_drm_free (drm_info);
+    } else {
+      GstVideoInfo vinfo;
+      gst_video_info_init (&vinfo);
+      gst_video_info_from_caps (&vinfo, outcaps);
+      frame_size = vinfo.size;
+    }
+  }
 
   /* we got configuration from our peer or the decide_allocation method,
    * parse them */
@@ -4242,11 +4254,11 @@ gst_video_decoder_decide_allocation_default (GstVideoDecoder * decoder,
 
   if (gst_query_get_n_allocation_pools (query) > 0) {
     gst_query_parse_nth_allocation_pool (query, 0, &pool, &size, &min, &max);
-    size = MAX (size, vinfo.size);
+    size = MAX (size, frame_size);
     update_pool = TRUE;
   } else {
     pool = NULL;
-    size = vinfo.size;
+    size = frame_size;
     min = max = 0;
 
     update_pool = FALSE;

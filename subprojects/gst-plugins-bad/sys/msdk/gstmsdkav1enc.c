@@ -70,16 +70,11 @@ enum
 #define PROP_P_PYRAMID_DEFAULT          MFX_P_REF_DEFAULT
 
 #define RAW_FORMATS "NV12, P010_10LE"
+#define SINK_CAPS_STR \
+    GST_MSDK_CAPS_MAKE ("{"RAW_FORMATS"}")
+
 #define PROFILES    "main"
-
-#define COMMON_FORMAT "{ " RAW_FORMATS " }"
 #define SRC_PROFILES  "{ " PROFILES " }"
-
-static GstStaticPadTemplate sink_factory = GST_STATIC_PAD_TEMPLATE ("sink",
-    GST_PAD_SINK,
-    GST_PAD_ALWAYS,
-    GST_STATIC_CAPS (GST_MSDK_CAPS_STR (COMMON_FORMAT,
-            COMMON_FORMAT)));
 
 static GstStaticPadTemplate src_factory = GST_STATIC_PAD_TEMPLATE ("src",
     GST_PAD_SRC,
@@ -319,6 +314,7 @@ gst_msdkav1enc_class_init (GstMsdkAV1EncClass * klass)
   GObjectClass *gobject_class;
   GstElementClass *element_class;
   GstMsdkEncClass *encoder_class;
+  GstCaps *sink_caps, *drm_caps;
 
   gobject_class = G_OBJECT_CLASS (klass);
   element_class = GST_ELEMENT_CLASS (klass);
@@ -365,7 +361,13 @@ gst_msdkav1enc_class_init (GstMsdkAV1EncClass * klass)
       "Haihao Xiang <haihao.xiang@intel.com>, "
       "Mengkejiergeli Ba <mengkejiergeli.ba@intel.com>");
 
-  gst_element_class_add_static_pad_template (element_class, &sink_factory);
+  sink_caps = gst_caps_from_string (SINK_CAPS_STR);
+  drm_caps = gst_msdkcaps_create_drm_caps (NULL,
+      GST_MSDK_JOB_ENCODER, RAW_FORMATS, 1, G_MAXINT, 1, G_MAXINT);
+  gst_caps_append (sink_caps, drm_caps);
+  gst_element_class_add_pad_template (element_class,
+      gst_pad_template_new ("sink", GST_PAD_SINK, GST_PAD_ALWAYS, sink_caps));
+
   gst_element_class_add_static_pad_template (element_class, &src_factory);
 }
 

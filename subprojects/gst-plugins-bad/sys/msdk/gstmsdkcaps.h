@@ -42,6 +42,26 @@ G_BEGIN_DECLS
 gboolean
 gst_msdkcaps_has_feature (const GstCaps * caps, const gchar * feature);
 
+GstCaps *
+gst_msdkcaps_create_drm_caps (GstMsdkContext * context,
+    GstMsdkContextJobType job_type, const gchar * dma_fmts_str,
+    gint min_width, gint max_width, gint min_height, gint max_height);
+
+GstCaps *
+gst_msdkcaps_video_info_to_drm_caps (GstVideoInfo * info, guint64 modifier);
+
+GstCaps *
+gst_msdkcaps_intersect (GstCaps * caps, GstCaps * refer_caps);
+
+gboolean
+get_msdkcaps_fixate_format (GstCaps * caps, GstVideoFormat fmt);
+
+guint64
+get_msdkcaps_get_modifier (const GstCaps * caps);
+
+gboolean
+get_msdkcaps_remove_drm_format (GstCaps * caps);
+
 G_END_DECLS
 
 #endif /* __GST_MSDKCAPS_H__ */

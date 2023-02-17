@@ -259,7 +259,9 @@ gst_video_info_dma_drm_from_caps (GstVideoInfoDmaDrm * drm_info,
   /* TODO: Some well known tiled format such as NV12_4L4, NV12_16L16,
      NV12_64Z32, NV12_16L32S */
   format = gst_video_format_from_fourcc (fourcc);
-  if (modifier == DRM_FORMAT_MOD_LINEAR && format != GST_VIDEO_FORMAT_UNKNOWN) {
+
+  // if (modifier == DRM_FORMAT_MOD_LINEAR && format != GST_VIDEO_FORMAT_UNKNOWN) {
+  if (format != GST_VIDEO_FORMAT_UNKNOWN) {
     gst_structure_set (structure, "format", G_TYPE_STRING,
         gst_video_format_to_string (format), NULL);
   } else {

@@ -60,27 +60,21 @@ GST_DEBUG_CATEGORY_EXTERN (gst_msdkvp9enc_debug);
 #define PROFILES    "0, 1, 2"
 
 #if (MFX_VERSION >= 1027)
-#define COMMON_FORMAT "{ " RAW_FORMATS ", Y410 }"
+#define COMMON_FORMAT RAW_FORMATS ", Y410"
 #define SRC_PROFILES  "{ " PROFILES ", 3 }"
 #else
-#define COMMON_FORMAT "{ " RAW_FORMATS " }"
+#define COMMON_FORMAT RAW_FORMATS
 #define SRC_PROFILES  "{ " PROFILES " }"
 #endif
 
 #ifdef _WIN32
-static GstStaticPadTemplate sink_factory = GST_STATIC_PAD_TEMPLATE ("sink",
-    GST_PAD_SINK,
-    GST_PAD_ALWAYS,
-    GST_STATIC_CAPS (GST_MSDK_CAPS_STR (COMMON_FORMAT,
-            "{ NV12, P010_10LE }") "; "
-        GST_MSDK_CAPS_MAKE_WITH_D3D11_FEATURE ("{ NV12, P010_10LE }")));
+#define SINK_CAPS_STR \
+    GST_MSDK_CAPS_MAKE ("{"COMMON_FORMAT"}") "; " \
+    GST_MSDK_CAPS_MAKE_WITH_D3D11_FEATURE ("{ NV12, P010_10LE }")
 #else
-static GstStaticPadTemplate sink_factory = GST_STATIC_PAD_TEMPLATE ("sink",
-    GST_PAD_SINK,
-    GST_PAD_ALWAYS,
-    GST_STATIC_CAPS (GST_MSDK_CAPS_STR (COMMON_FORMAT,
-            "{ NV12, P010_10LE }") "; "
-        GST_MSDK_CAPS_MAKE_WITH_VA_FEATURE ("NV12")));
+#define SINK_CAPS_STR \
+    GST_MSDK_CAPS_MAKE ("{"COMMON_FORMAT"}") "; " \
+    GST_MSDK_CAPS_MAKE_WITH_VA_FEATURE ("NV12")
 #endif
 
 static GstStaticPadTemplate src_factory = GST_STATIC_PAD_TEMPLATE ("src",
@@ -271,6 +265,7 @@ gst_msdkvp9enc_class_init (GstMsdkVP9EncClass * klass)
   GObjectClass *gobject_class;
   GstElementClass *element_class;
   GstMsdkEncClass *encoder_class;
+  GstCaps *sink_caps, *drm_caps;
 
   gobject_class = G_OBJECT_CLASS (klass);
   element_class = GST_ELEMENT_CLASS (klass);
@@ -293,7 +288,13 @@ gst_msdkvp9enc_class_init (GstMsdkVP9EncClass * klass)
       "VP9 video encoder based on " MFX_API_SDK,
       "Haihao Xiang <haihao.xiang@intel.com>");
 
-  gst_element_class_add_static_pad_template (element_class, &sink_factory);
+  sink_caps = gst_caps_from_string (SINK_CAPS_STR);
+  drm_caps = gst_msdkcaps_create_drm_caps (NULL,
+      GST_MSDK_JOB_ENCODER, "NV12, P010_10LE", 1, G_MAXINT, 1, G_MAXINT);
+  gst_caps_append (sink_caps, drm_caps);
+  gst_element_class_add_pad_template (element_class,
+      gst_pad_template_new ("sink", GST_PAD_SINK, GST_PAD_ALWAYS, sink_caps));
+
   gst_element_class_add_static_pad_template (element_class, &src_factory);
 }
 

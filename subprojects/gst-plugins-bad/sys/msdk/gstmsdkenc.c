@@ -77,22 +77,16 @@ static void gst_msdkenc_close_encoder (GstMsdkEnc * thiz);
 GST_DEBUG_CATEGORY_EXTERN (gst_msdkenc_debug);
 #define GST_CAT_DEFAULT gst_msdkenc_debug
 
+#define RAW_FORMAT "NV12, BGRA, BGRx"
+
 #ifdef _WIN32
-static GstStaticPadTemplate sink_factory = GST_STATIC_PAD_TEMPLATE ("sink",
-    GST_PAD_SINK,
-    GST_PAD_ALWAYS,
-    GST_STATIC_CAPS (GST_MSDK_CAPS_STR
-        ("{ NV12, I420, YV12, YUY2, UYVY, BGRA }", "NV12") "; "
-        GST_MSDK_CAPS_MAKE_WITH_D3D11_FEATURE ("NV12"))
-    );
+#define SINK_CAPS_STR \
+    GST_MSDK_CAPS_MAKE ("{"RAW_FORMAT"}") "; " \
+    GST_MSDK_CAPS_MAKE_WITH_D3D11_FEATURE ("NV12")
 #else
-static GstStaticPadTemplate sink_factory = GST_STATIC_PAD_TEMPLATE ("sink",
-    GST_PAD_SINK,
-    GST_PAD_ALWAYS,
-    GST_STATIC_CAPS (GST_MSDK_CAPS_STR
-        ("{ NV12, I420, YV12, YUY2, UYVY, BGRA }", "NV12") "; "
-        GST_MSDK_CAPS_MAKE_WITH_VA_FEATURE ("NV12"))
-    );
+#define SINK_CAPS_STR \
+    GST_MSDK_CAPS_MAKE ("{"RAW_FORMAT"}") "; " \
+    GST_MSDK_CAPS_MAKE_WITH_VA_FEATURE ("NV12")
 #endif
 
 #define PROP_HARDWARE_DEFAULT            TRUE
@@ -1184,6 +1178,11 @@ gst_msdk_create_va_pool (GstMsdkEnc * thiz, GstCaps * caps, guint num_buffers)
     return NULL;
   }
 
+  if (thiz->use_dmabuf && thiz->modifier != DRM_FORMAT_MOD_INVALID) {
+    gst_va_dmabuf_allocator_set_format  (allocator,
+        &info, VA_SURFACE_ATTRIB_USAGE_HINT_ENCODER, thiz->modifier);
+  }
+
   pool =
       gst_va_pool_new_with_config (caps, GST_VIDEO_INFO_SIZE (&info),
       num_buffers, 0, VA_SURFACE_ATTRIB_USAGE_HINT_GENERIC, GST_VA_FEATURE_AUTO,
@@ -1260,7 +1259,17 @@ gst_msdkenc_create_buffer_pool (GstMsdkEnc * thiz, GstCaps * caps,
   GstVideoInfo info;
   GstVideoAlignment align;
 
-  if (!gst_video_info_from_caps (&info, caps)) {
+  if (gst_video_is_dma_drm_caps (caps)) {
+    GstVideoInfoDmaDrm *drm_info =
+        gst_video_info_dma_drm_new_from_caps (caps);
+    if (!drm_info) {
+      GST_INFO_OBJECT (thiz, "failed to get video info");
+      return FALSE;
+    }
+
+    info = drm_info->vinfo;
+    gst_video_info_dma_drm_free (drm_info);
+  } else if (!gst_video_info_from_caps (&info, caps)) {
     GST_INFO_OBJECT (thiz, "failed to get video info");
     return FALSE;
   }
@@ -1356,6 +1365,17 @@ sinkpad_is_d3d11 (GstMsdkEnc * thiz)
 }
 #endif
 
+static GstCaps *
+gst_msdkenc_enc_getcaps (GstVideoEncoder * encoder, GstCaps * filter)
+{
+  GstCaps *tmp, *caps;
+
+  caps = gst_pad_get_pad_template_caps (encoder->sinkpad);
+  tmp = filter ? gst_msdkcaps_intersect (filter, caps) : NULL;
+
+  return gst_video_encoder_proxy_getcaps (encoder, caps, tmp);
+}
+
 static gboolean
 gst_msdkenc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
 {
@@ -1401,6 +1421,7 @@ gst_msdkenc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
     gst_caps_set_features (thiz->input_state->caps, 0,
         gst_caps_features_new (GST_CAPS_FEATURE_MEMORY_DMABUF, NULL));
     thiz->use_dmabuf = TRUE;
+    thiz->modifier = get_msdkcaps_get_modifier (state->caps);
   }
 
   if (!gst_msdkenc_init_encoder (thiz))
@@ -1718,7 +1739,7 @@ static gboolean
 gst_msdkenc_propose_allocation (GstVideoEncoder * encoder, GstQuery * query)
 {
   GstMsdkEnc *thiz = GST_MSDKENC (encoder);
-  GstVideoInfo info;
+  guint size = 0;
   GstBufferPool *pool = NULL;
   GstAllocator *allocator = NULL;
   GstCaps *caps;
@@ -1734,9 +1755,25 @@ gst_msdkenc_propose_allocation (GstVideoEncoder * encoder, GstQuery * query)
     return FALSE;
   }
 
-  if (!gst_video_info_from_caps (&info, caps)) {
-    GST_INFO_OBJECT (encoder, "failed to get video info");
-    return FALSE;
+  if (gst_video_is_dma_drm_caps (caps)) {
+    GstVideoInfoDmaDrm *drm_info =
+        gst_video_info_dma_drm_new_from_caps (caps);
+    if (!drm_info) {
+      GST_INFO_OBJECT (thiz, "failed to get video info");
+      return FALSE;
+    }
+
+    size = GST_VIDEO_INFO_SIZE (&drm_info->vinfo);
+
+    gst_video_info_dma_drm_free (drm_info);
+  } else {
+    GstVideoInfo info;
+    if (!gst_video_info_from_caps (&info, caps)) {
+      GST_INFO_OBJECT (thiz, "failed to get video info");
+      return FALSE;
+    }
+
+    size = GST_VIDEO_INFO_SIZE (&info);
   }
 
   /* if upstream allocation query supports dmabuf-capsfeatures,
@@ -1749,8 +1786,7 @@ gst_msdkenc_propose_allocation (GstVideoEncoder * encoder, GstQuery * query)
   num_buffers = gst_msdkenc_maximum_delayed_frames (thiz) + 1;
   pool = gst_msdkenc_create_buffer_pool (thiz, caps, num_buffers, FALSE);
 
-  gst_query_add_allocation_pool (query, pool, GST_VIDEO_INFO_SIZE (&info),
-      num_buffers, 0);
+  gst_query_add_allocation_pool (query, pool, size, num_buffers, 0);
   gst_query_add_allocation_meta (query, GST_VIDEO_META_API_TYPE, NULL);
 
   if (pool) {
@@ -1933,6 +1969,7 @@ gst_msdkenc_class_init (GstMsdkEncClass * klass)
   GObjectClass *gobject_class;
   GstElementClass *element_class;
   GstVideoEncoderClass *gstencoder_class;
+  GstCaps *sink_caps, *drm_caps;
 
   gobject_class = G_OBJECT_CLASS (klass);
   element_class = GST_ELEMENT_CLASS (klass);
@@ -1947,6 +1984,8 @@ gst_msdkenc_class_init (GstMsdkEncClass * klass)
 
   element_class->set_context = gst_msdkenc_set_context;
 
+  gstencoder_class->getcaps = GST_DEBUG_FUNCPTR (gst_msdkenc_enc_getcaps);
+
   gstencoder_class->set_format = GST_DEBUG_FUNCPTR (gst_msdkenc_set_format);
   gstencoder_class->handle_frame = GST_DEBUG_FUNCPTR (gst_msdkenc_handle_frame);
   gstencoder_class->start = GST_DEBUG_FUNCPTR (gst_msdkenc_start);
@@ -1958,7 +1997,12 @@ gst_msdkenc_class_init (GstMsdkEncClass * klass)
   gstencoder_class->src_query = GST_DEBUG_FUNCPTR (gst_msdkenc_src_query);
   gstencoder_class->sink_query = GST_DEBUG_FUNCPTR (gst_msdkenc_sink_query);
 
-  gst_element_class_add_static_pad_template (element_class, &sink_factory);
+  sink_caps = gst_caps_from_string (SINK_CAPS_STR);
+  drm_caps = gst_msdkcaps_create_drm_caps (NULL,
+      GST_MSDK_JOB_ENCODER, "NV12", 1, G_MAXINT, 1, G_MAXINT);
+  gst_caps_append (sink_caps, drm_caps);
+  gst_element_class_add_pad_template (element_class,
+      gst_pad_template_new ("sink", GST_PAD_SINK, GST_PAD_ALWAYS, sink_caps));
 }
 
 static void
@@ -1988,6 +2032,7 @@ gst_msdkenc_init (GstMsdkEnc * thiz)
   thiz->lowdelay_brc = PROP_LOWDELAY_BRC_DEFAULT;
   thiz->adaptive_i = PROP_ADAPTIVE_I_DEFAULT;
   thiz->adaptive_b = PROP_ADAPTIVE_B_DEFAULT;
+  thiz->modifier = DRM_FORMAT_MOD_INVALID;
 
   thiz->ext_coding_props = gst_structure_new (EC_PROPS_STRUCT_NAME,
       EC_PROPS_EXTBRC, G_TYPE_STRING, "off", NULL);

@@ -420,6 +420,57 @@ gst_va_create_raw_caps (GstVaDisplay * display, VAProfile profile,
   return caps;
 }
 
+gboolean
+gst_va_video_info_from_caps (GstVideoInfo * info, guint64 * modifier,
+    GstCaps * caps)
+{
+  GstVideoInfoDmaDrm drm_info;
+  GstVideoFormat video_format;
+
+  if (!gst_video_is_dma_drm_caps (caps))
+    return gst_video_info_from_caps (info, caps);
+
+  if (!gst_video_info_dma_drm_from_caps (&drm_info, caps))
+    return FALSE;
+
+  if (GST_VIDEO_INFO_FORMAT (&drm_info.vinfo) != GST_VIDEO_FORMAT_ENCODED)
+    return TRUE;
+
+  /* The non linear DMA format will be recognized as FORMAT_ENCODED,
+     but we still need to know its real format to set the info such
+     as pitch and stride. Because va plugins have its internal mapping
+     between drm fourcc and video format, we do not use the standard
+     conversion API here. */
+  video_format = gst_va_video_format_from_va_fourcc (drm_info.drm_fourcc);
+  if (video_format == GST_VIDEO_FORMAT_UNKNOWN)
+    return FALSE;
+
+  *info = drm_info.vinfo;
+
+  if (!gst_video_info_set_format (info, video_format,
+          GST_VIDEO_INFO_WIDTH (info), GST_VIDEO_INFO_HEIGHT (info)))
+    return FALSE;
+
+  if (modifier)
+    *modifier = drm_info.drm_modifier;
+
+  return TRUE;
+}
+
+GstCaps *
+gst_va_video_info_to_dma_caps (GstVideoInfo * info, guint64 modifier)
+{
+  GstVideoInfoDmaDrm drm_info;
+
+  gst_video_info_dma_drm_init (&drm_info);
+  drm_info.vinfo = *info;
+  drm_info.drm_fourcc =
+      gst_va_fourcc_from_video_format (GST_VIDEO_INFO_FORMAT (info));
+  drm_info.drm_modifier = modifier;
+
+  return gst_video_info_dma_drm_to_caps (&drm_info);
+}
+
 /* the purpose of this function is to find broken configurations in
  * JPEG decoders: if the driver doesn't expose a pixel format for a
  * config with a specific sampling, that sampling is not valid */

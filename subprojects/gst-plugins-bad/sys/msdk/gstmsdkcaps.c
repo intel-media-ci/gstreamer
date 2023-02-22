@@ -952,6 +952,7 @@ failed:
       GST_FOURCC_ARGS (codec_id));
   return FALSE;
 }
+#endif
 
 gboolean
 gst_msdkcaps_set_formats (GstCaps * caps, GstCapsFeatures * features,

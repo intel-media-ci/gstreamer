@@ -56,7 +56,7 @@ GstCaps *             gst_va_video_info_to_dma_caps       (GstVideoInfo * info,
                                                            guint64 modifier);
 
 gboolean              gst_caps_set_format_array           (GstCaps * caps,
-							   GArray * formats);
+                                                           GArray * formats);
 
 gboolean              gst_caps_is_dmabuf                  (GstCaps * caps);
 gboolean              gst_caps_is_vamemory                (GstCaps * caps);

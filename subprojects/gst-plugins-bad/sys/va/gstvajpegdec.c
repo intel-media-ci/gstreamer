@@ -386,7 +386,7 @@ gst_va_jpeg_dec_negotiate (GstVideoDecoder * decoder)
     base->rt_format = VA_RT_FORMAT_RGBP;
 
   gst_va_base_dec_get_preferred_format_and_caps_features (base, &format,
-      &capsfeatures);
+      &capsfeatures, NULL);
   if (format == GST_VIDEO_FORMAT_UNKNOWN)
     return FALSE;
 

@@ -25,6 +25,9 @@
 #include "vasurfaceimage.h"
 #include "gstvavideoformat.h"
 #include <va/va.h>
+#ifndef G_OS_WIN32
+#include <libdrm/drm_fourcc.h>
+#endif
 
 /* XXX: find a better log category */
 #define GST_CAT_DEFAULT gst_va_display_debug
@@ -49,14 +52,14 @@ va_destroy_surfaces (GstVaDisplay * display, VASurfaceID * surfaces,
 }
 
 gboolean
-va_create_surfaces (GstVaDisplay * display, guint rt_format, guint fourcc,
-    guint width, guint height, gint usage_hint,
+va_create_surfaces_with_modifier (GstVaDisplay * display, guint rt_format,
+    guint fourcc, guint width, guint height, gint usage_hint, guint64 modifier,
     VASurfaceAttribExternalBuffers * ext_buf, VASurfaceID * surfaces,
     guint num_surfaces)
 {
   VADisplay dpy = gst_va_display_get_va_dpy (display);
   /* *INDENT-OFF* */
-  VASurfaceAttrib attrs[5] = {
+  VASurfaceAttrib attrs[6] = {
     {
       .type = VASurfaceAttribUsageHint,
       .flags = VA_SURFACE_ATTRIB_SETTABLE,
@@ -100,6 +103,21 @@ va_create_surfaces (GstVaDisplay * display, guint rt_format, guint fourcc,
     /* *INDENT-ON* */
   }
 
+  if (modifier != DRM_FORMAT_MOD_INVALID) {
+    VADRMFormatModifierList modifier_list;
+
+    modifier_list.num_modifiers = 1;
+    modifier_list.modifiers = &modifier;
+    /* *INDENT-OFF* */
+    attrs[num_attrs++] = (VASurfaceAttrib) {
+      .type = VASurfaceAttribDRMFormatModifiers,
+      .flags = VA_SURFACE_ATTRIB_SETTABLE,
+      .value.type = VAGenericValueTypePointer,
+      .value.value.p = &modifier_list,
+    };
+    /* *INDENT-ON* */
+  }
+
   status = vaCreateSurfaces (dpy, rt_format, width, height, surfaces,
       num_surfaces, attrs, num_attrs);
   if (status != VA_STATUS_SUCCESS) {
@@ -108,6 +126,17 @@ va_create_surfaces (GstVaDisplay * display, guint rt_format, guint fourcc,
   }
 
   return TRUE;
+}
+
+gboolean
+va_create_surfaces (GstVaDisplay * display, guint rt_format, guint fourcc,
+    guint width, guint height, gint usage_hint,
+    VASurfaceAttribExternalBuffers * ext_buf, VASurfaceID * surfaces,
+    guint num_surfaces)
+{
+  return va_create_surfaces_with_modifier (display, rt_format, fourcc, width,
+      height, usage_hint, DRM_FORMAT_MOD_INVALID, ext_buf, surfaces,
+      num_surfaces);
 }
 
 gboolean
@@ -120,7 +149,7 @@ va_export_surface_to_dmabuf (GstVaDisplay * display, VASurfaceID surface,
   status = vaExportSurfaceHandle (dpy, surface,
       VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2, flags, desc);
   if (status != VA_STATUS_SUCCESS) {
-    GST_ERROR ("vaExportSurfaceHandle: %s", vaErrorStr (status));
+    GST_INFO ("vaExportSurfaceHandle: %s", vaErrorStr (status));
     return FALSE;
   }
 

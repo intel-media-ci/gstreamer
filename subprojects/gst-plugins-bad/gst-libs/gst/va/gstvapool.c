@@ -35,6 +35,9 @@
 #endif
 
 #include "gstvapool.h"
+#ifndef G_OS_WIN32
+#include <libdrm/drm_fourcc.h>
+#endif
 
 GST_DEBUG_CATEGORY_STATIC (gst_va_pool_debug);
 #define GST_CAT_DEFAULT gst_va_pool_debug
@@ -174,7 +177,7 @@ gst_va_pool_set_config (GstBufferPool * pool, GstStructure * config)
 
   if (GST_IS_VA_DMABUF_ALLOCATOR (allocator)) {
     if (!gst_va_dmabuf_allocator_set_format (allocator, &alloc_info,
-            usage_hint))
+            usage_hint, DRM_FORMAT_MOD_INVALID))
       goto failed_allocator;
   } else if (GST_IS_VA_ALLOCATOR (allocator)) {
     if (!gst_va_allocator_set_format (allocator, &alloc_info, usage_hint,

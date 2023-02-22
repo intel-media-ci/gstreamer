@@ -274,6 +274,7 @@ struct _GstVaDmabufAllocator
   GstMemoryCopyFunction parent_copy;
 
   GstVideoInfo info;
+  guint64 modifier;
   guint usage_hint;
 
   GstVaSurfaceCopy *copy;
@@ -467,6 +468,7 @@ gst_va_dmabuf_allocator_init (GstVaDmabufAllocator * self)
   allocator->mem_map = gst_va_dmabuf_mem_map;
   self->parent_copy = allocator->mem_copy;
   allocator->mem_copy = gst_va_dmabuf_mem_copy;
+  self->modifier = DRM_FORMAT_MOD_INVALID;
 
   gst_va_memory_pool_init (&self->pool);
 }
@@ -684,8 +686,8 @@ gst_va_dmabuf_allocator_setup_buffer_full (GstAllocator * allocator,
 
   g_return_val_if_fail (GST_IS_VA_DMABUF_ALLOCATOR (allocator), FALSE);
 
-  if (!_va_dmabuf_create_and_export_surface (self->display, self->usage_hint,
-          DRM_FORMAT_MOD_INVALID, &self->info, &surface, &desc))
+  if (!_va_dmabuf_create_and_export_surface (self->display,
+          self->usage_hint, self->modifier, &self->info, &surface, &desc))
     return FALSE;
 
   buf = gst_va_buffer_surface_new (surface, format, desc.width, desc.height);
@@ -727,6 +729,11 @@ gst_va_dmabuf_allocator_setup_buffer_full (GstAllocator * allocator,
     g_atomic_int_add (&buf->ref_count, 1);
     gst_mini_object_set_qdata (GST_MINI_OBJECT (mem),
         gst_va_buffer_surface_quark (), buf, buffer_destroy);
+
+    if (desc.objects[i].drm_format_modifier != self->modifier)
+      GST_WARNING_OBJECT (self, "driver bug: modifer of the object is"
+          " 0x%016lx, different from we set 0x%016lx",
+          desc.objects[i].drm_format_modifier, self->modifier);
 
     *drm_mod = desc.objects[i].drm_format_modifier;
     gst_mini_object_set_qdata (GST_MINI_OBJECT (mem), gst_va_drm_mod_quark (),
@@ -950,10 +957,11 @@ gst_va_dmabuf_allocator_try (GstAllocator * allocator)
  * @allocator: a #GstAllocator
  * @info: a #GstVideoInfo
  * @usage_hint: VA usage hint
+ * @modifier: the underlying modifier
  *
- * Sets the configuration defined by @info and @usage_hint for
- * @allocator, and it tries the configuration, if @allocator has not
- * allocated memories yet.
+ * Sets the configuration defined by @info, @usage_hint and @modifier
+ * for @allocator, and it tries the configuration, if @allocator has
+ * not allocated memories yet.
  *
  * If @allocator has memory allocated already, and frame size and
  * format in @info are the same as currently configured in @allocator,
@@ -966,7 +974,7 @@ gst_va_dmabuf_allocator_try (GstAllocator * allocator)
  */
 gboolean
 gst_va_dmabuf_allocator_set_format (GstAllocator * allocator,
-    GstVideoInfo * info, guint usage_hint)
+    GstVideoInfo * info, guint usage_hint, guint64 modifier)
 {
   GstVaDmabufAllocator *self;
   gboolean ret;
@@ -989,6 +997,7 @@ gst_va_dmabuf_allocator_set_format (GstAllocator * allocator,
 
   self->usage_hint = usage_hint;
   self->info = *info;
+  self->modifier = modifier;
 
   g_clear_pointer (&self->copy, gst_va_surface_copy_free);
 

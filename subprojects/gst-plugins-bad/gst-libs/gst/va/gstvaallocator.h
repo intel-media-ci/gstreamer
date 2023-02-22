@@ -50,7 +50,8 @@ void                  gst_va_dmabuf_allocator_flush       (GstAllocator * alloca
 GST_VA_API
 gboolean              gst_va_dmabuf_allocator_set_format  (GstAllocator * allocator,
                                                            GstVideoInfo * info,
-                                                           guint usage_hint);
+                                                           guint usage_hint,
+                                                           guint64 modifier);
 GST_VA_API
 gboolean              gst_va_dmabuf_allocator_get_format  (GstAllocator * allocator,
                                                            GstVideoInfo * info,

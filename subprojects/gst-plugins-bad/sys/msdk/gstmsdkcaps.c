@@ -33,6 +33,7 @@
 
 #define DEFAULT_DELIMITER ", "
 #define PROFILE_DELIMITER DEFAULT_DELIMITER
+#define FORMAT_DELIMITER  DEFAULT_DELIMITER
 
 #define DEFAULT_VIDEO_FORMAT GST_VIDEO_FORMAT_NV12
 
@@ -950,4 +951,38 @@ failed:
   GST_WARNING ("Failed to create caps for %"GST_FOURCC_FORMAT" ENC",
       GST_FOURCC_ARGS (codec_id));
   return FALSE;
+}
+
+gboolean
+gst_msdkcaps_set_formats (GstCaps * caps, GstCapsFeatures * features,
+    const char * fmts_str)
+{
+  GstStructure *s = NULL;
+  gchar **fmts_str_arr = NULL;
+  GValue fmts = G_VALUE_INIT;
+  guint size = gst_caps_get_size (caps);
+
+  for (guint i = 0; i < size; i++) {
+    GstCapsFeatures *f = gst_caps_get_features (caps, i);
+    if (gst_caps_features_is_equal (f, features)) {
+      s = gst_caps_get_structure (caps, i);
+      break;
+    }
+  }
+
+  if (!s) {
+    GST_WARNING ("Failed to get structure");
+    return FALSE;
+  }
+
+  g_value_init (&fmts, GST_TYPE_LIST);
+  fmts_str_arr = g_strsplit (fmts_str, FORMAT_DELIMITER, 0);
+  for (guint i = 0; fmts_str_arr[i]; i++)
+   _list_append_string (&fmts, fmts_str_arr[i]);
+  g_strfreev (fmts_str_arr);
+
+  gst_structure_set_value (s, "format", &fmts);
+  g_value_unset (&fmts);
+
+  return TRUE;
 }

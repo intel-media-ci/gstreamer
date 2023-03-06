@@ -50,6 +50,11 @@ gboolean
 gst_msdkcaps_set_formats (GstCaps * caps, GstCapsFeatures * features,
     const char * fmts_str);
 
+void
+gst_msdkcaps_pad_template_init (GstElementClass * klass,
+    GstCaps * sink_caps, GstCaps * src_caps,
+    const gchar * doc_sink_caps_str, const gchar * doc_src_caps_str);
+
 G_END_DECLS
 
 #endif /* __GST_MSDKCAPS_H__ */

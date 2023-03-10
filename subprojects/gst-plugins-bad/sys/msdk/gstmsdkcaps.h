@@ -46,6 +46,11 @@ gst_msdkcaps_enc_create_caps (MsdkSession * session,
     gpointer enc_description, guint codec_id,
     GstCaps ** sink_caps, GstCaps ** src_caps);
 
+gboolean
+gst_msdkcaps_dec_create_caps (MsdkSession * session,
+    gpointer dec_description, guint codec_id,
+    GstCaps ** sink_caps, GstCaps ** src_caps);
+
 void
 gst_msdkcaps_pad_template_init (GstElementClass * klass,
     GstCaps * sink_caps, GstCaps * src_caps,
@@ -54,6 +59,9 @@ gst_msdkcaps_pad_template_init (GstElementClass * klass,
 gboolean
 gst_msdkcaps_set_strings (GstCaps * caps,
     const gchar * features, const char * field, const gchar * strings);
+
+gboolean
+gst_msdkcaps_remove_features (GstCaps * caps, const gchar * features);
 
 G_END_DECLS
 

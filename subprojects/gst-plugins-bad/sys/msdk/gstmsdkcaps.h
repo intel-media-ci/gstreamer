@@ -61,7 +61,7 @@ gst_msdkcaps_set_strings (GstCaps * caps,
     const gchar * features, const char * field, const gchar * strings);
 
 gboolean
-gst_msdkcaps_remove_features (GstCaps * caps, const gchar * features);
+gst_msdkcaps_remove_structure (GstCaps * caps, const gchar * features);
 
 G_END_DECLS
 

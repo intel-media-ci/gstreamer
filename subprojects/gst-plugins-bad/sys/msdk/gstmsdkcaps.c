@@ -1476,7 +1476,7 @@ gst_msdkcaps_set_strings (GstCaps * caps,
 }
 
 gboolean
-gst_msdkcaps_remove_features (GstCaps * caps, const gchar * features)
+gst_msdkcaps_remove_structure (GstCaps * caps, const gchar * features)
 {
   guint size;
   GstCapsFeatures *f;

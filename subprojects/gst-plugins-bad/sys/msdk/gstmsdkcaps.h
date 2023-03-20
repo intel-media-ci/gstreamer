@@ -51,6 +51,10 @@ gst_msdkcaps_dec_create_caps (MsdkSession * session,
     gpointer dec_description, guint codec_id,
     GstCaps ** sink_caps, GstCaps ** src_caps);
 
+gboolean
+gst_msdkcaps_vpp_create_caps (MsdkSession * session,
+    gpointer vpp_description, GstCaps ** sink_caps, GstCaps ** src_caps);
+
 void
 gst_msdkcaps_pad_template_init (GstElementClass * klass,
     GstCaps * sink_caps, GstCaps * src_caps,

@@ -69,4 +69,5 @@ gst_msdkcaps_remove_structure (GstCaps * caps, const gchar * features);
 
 G_END_DECLS
 
+
 #endif /* __GST_MSDKCAPS_H__ */

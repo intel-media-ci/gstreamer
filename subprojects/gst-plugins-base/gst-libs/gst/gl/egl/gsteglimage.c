@@ -795,6 +795,7 @@ _drm_direct_fourcc_from_info (const GstVideoInfo * info)
  * @context: a #GstGLContext (must be an EGL context)
  * @in_info: a #GstVideoInfo
  * @target: a #GstGLTextureTarget
+ * @modifier: a 64 bits modifier value
  *
  * Checks whether the video format specified by the given #GstVideoInfo is a
  * supported texture format for the given target.
@@ -803,107 +804,43 @@ _drm_direct_fourcc_from_info (const GstVideoInfo * info)
  */
 gboolean
 gst_egl_image_check_dmabuf_direct (GstGLContext * context,
-    const GstVideoInfo * in_info, GstGLTextureTarget target)
+    const GstVideoInfo * in_info, GstGLTextureTarget target, guint64 modifier)
 {
-  EGLDisplay egl_display = EGL_DEFAULT_DISPLAY;
-  GstGLDisplayEGL *display_egl;
-  EGLint *formats;
-  EGLint num_formats;
-  EGLuint64KHR *modifiers;
-  EGLBoolean *external_only;
-  int num_modifiers;
+  guint32 fourcc;
+  const GArray *modifiers, *external_only;
+  gboolean external_only_flag;
   gboolean ret;
-  int fourcc;
-  int i;
+  guint i;
 
-  EGLBoolean (*gst_eglQueryDmaBufFormatsEXT) (EGLDisplay dpy,
-      EGLint max_formats, EGLint * formats, EGLint * num_formats);
-  EGLBoolean (*gst_eglQueryDmaBufModifiersEXT) (EGLDisplay dpy,
-      int format, int max_modifiers, EGLuint64KHR * modifiers,
-      EGLBoolean * external_only, int *num_modifiers);
+  GST_LOG ("check_dmabuf_direct for video format:%s, target:%s"
+      "modifier:0x%016" G_GINT64_MODIFIER "x",
+      gst_video_format_to_string (GST_VIDEO_INFO_FORMAT (in_info)),
+      gst_gl_texture_target_to_string (target), modifier);
 
-  fourcc = _drm_direct_fourcc_from_info (in_info);
-  if (fourcc == -1)
+  fourcc =
+      gst_video_dma_drm_fourcc_from_format (GST_VIDEO_INFO_FORMAT (in_info));
+  if (fourcc == DRM_FORMAT_INVALID)
     return FALSE;
 
-  gst_eglQueryDmaBufFormatsEXT =
-      gst_gl_context_get_proc_address (context, "eglQueryDmaBufFormatsEXT");
-  gst_eglQueryDmaBufModifiersEXT =
-      gst_gl_context_get_proc_address (context, "eglQueryDmaBufModifiersEXT");
-
-  if (!gst_eglQueryDmaBufFormatsEXT || !gst_eglQueryDmaBufModifiersEXT)
+  modifiers = gst_gl_context_egl_get_modifiers (context,
+      fourcc, &external_only);
+  if (!modifiers)
     return FALSE;
 
-  display_egl = gst_gl_display_egl_from_gl_display (context->display);
-  if (!display_egl) {
-    GST_WARNING_OBJECT (context,
-        "Failed to retrieve GstGLDisplayEGL from %" GST_PTR_FORMAT,
-        context->display);
-    return FALSE;
-  }
-  egl_display =
-      (EGLDisplay) gst_gl_display_get_handle (GST_GL_DISPLAY (display_egl));
-  gst_object_unref (display_egl);
-
-  ret = gst_eglQueryDmaBufFormatsEXT (egl_display, 0, NULL, &num_formats);
-  if (!ret || num_formats == 0)
-    return FALSE;
-
-  formats = g_new (EGLint, num_formats);
-
-  ret = gst_eglQueryDmaBufFormatsEXT (egl_display, num_formats, formats,
-      &num_formats);
-  if (!ret || num_formats == 0) {
-    g_free (formats);
-    return FALSE;
-  }
-
-  for (i = 0; i < num_formats; i++) {
-    if (formats[i] == fourcc)
-      break;
-  }
-  g_free (formats);
-  if (i == num_formats) {
-    GST_DEBUG ("driver does not support importing fourcc %" GST_FOURCC_FORMAT,
-        GST_FOURCC_ARGS (fourcc));
-    return FALSE;
-  }
-
-  ret = gst_eglQueryDmaBufModifiersEXT (egl_display, fourcc, 0, NULL, NULL,
-      &num_modifiers);
-  if (!ret || num_modifiers == 0) {
-    GST_DEBUG ("driver does not report modifiers for fourcc %"
-        GST_FOURCC_FORMAT, GST_FOURCC_ARGS (fourcc));
-    return FALSE;
-  }
-
-  modifiers = g_new (EGLuint64KHR, num_modifiers);
-  external_only = g_new (EGLBoolean, num_modifiers);
-
-  ret = gst_eglQueryDmaBufModifiersEXT (egl_display, fourcc, num_modifiers,
-      modifiers, external_only, &num_modifiers);
-  if (!ret || num_modifiers == 0) {
-    g_free (modifiers);
-    g_free (external_only);
-    return FALSE;
-  }
-
-  for (i = 0; i < num_modifiers; ++i) {
-    if (modifiers[i] == DRM_FORMAT_MOD_LINEAR) {
-      if (external_only[i]) {
+  for (i = 0; i < modifiers->len; ++i) {
+    if (g_array_index (modifiers, guint64, i) == modifier) {
+      external_only_flag = g_array_index (external_only, EGLBoolean, i);
+      if (external_only_flag) {
         GST_DEBUG ("driver only supports external import of fourcc %"
             GST_FOURCC_FORMAT, GST_FOURCC_ARGS (fourcc));
       }
-      ret = !external_only[i] || (target == GST_GL_TEXTURE_TARGET_EXTERNAL_OES);
-      g_free (modifiers);
-      g_free (external_only);
+
+      ret = !external_only_flag ||
+          (target == GST_GL_TEXTURE_TARGET_EXTERNAL_OES);
       return ret;
     }
   }
-  GST_DEBUG ("driver only supports non-linear import of fourcc %"
-      GST_FOURCC_FORMAT, GST_FOURCC_ARGS (fourcc));
-  g_free (modifiers);
-  g_free (external_only);
+
   return FALSE;
 }
 
@@ -950,7 +887,7 @@ gst_egl_image_from_dmabuf_direct_target (GstGLContext * context,
   guintptr attribs[41];         /* 6 + 10 * 3 + 4 + 1 */
   gint atti = 0;
 
-  if (!gst_egl_image_check_dmabuf_direct (context, in_info, target))
+  if (!gst_egl_image_check_dmabuf_direct (context, in_info, target, 0))
     return NULL;
 
   fourcc = _drm_direct_fourcc_from_info (in_info);

@@ -827,7 +827,7 @@ _dma_buf_upload_accept (gpointer impl, GstBuffer * buffer, GstCaps * in_caps,
     /* Check if this format is supported by the driver */
     dmabuf->n_mem = 1;
     if (!gst_egl_image_check_dmabuf_direct (dmabuf->upload->context, in_info,
-            dmabuf->target)) {
+            dmabuf->target, 0)) {
       GST_DEBUG_OBJECT (dmabuf->upload, "direct check failed");
       return FALSE;
     }

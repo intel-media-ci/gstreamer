@@ -89,6 +89,13 @@ GstEGLImage *           gst_egl_image_from_dmabuf               (GstGLContext * 
                                                                  gint plane,
                                                                  gsize offset);
 GST_GL_API
+GstEGLImage *           gst_egl_image_from_dmabuf_with_modifier (GstGLContext * context,
+                                                                 gint dmabuf,
+                                                                 const GstVideoInfo * in_info,
+                                                                 gint plane,
+                                                                 gsize offset,
+                                                                 guint64 modifier);
+GST_GL_API
 GstEGLImage *           gst_egl_image_from_dmabuf_direct        (GstGLContext * context,
                                                                  gint *fd,
                                                                  const gsize *offset,
@@ -99,7 +106,13 @@ GstEGLImage *           gst_egl_image_from_dmabuf_direct_target (GstGLContext * 
                                                                  const gsize *offset,
                                                                  const GstVideoInfo * in_info,
                                                                  GstGLTextureTarget target);
-
+GST_GL_API
+GstEGLImage *           gst_egl_image_from_dmabuf_direct_target_with_modifier (GstGLContext * context,
+                                                                               gint *fd,
+                                                                               const gsize *offset,
+                                                                               const GstVideoInfo * in_info,
+                                                                               GstGLTextureTarget target,
+                                                                               guint64 modifier);
 GST_GL_API
 gboolean                gst_egl_image_export_dmabuf             (GstEGLImage *image, int *fd, gint *stride, gsize *offset);
 #endif

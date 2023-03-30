@@ -1217,6 +1217,19 @@ gst_gl_context_egl_destroy_context (GstGLContext * context)
   if (egl->requested_config)
     gst_structure_free (egl->requested_config);
   egl->requested_config = NULL;
+
+  if (egl->dma_formats) {
+    guint i;
+
+    for (i = 0; i < egl->dma_formats->len; i++) {
+      g_clear_pointer (&egl->dma_modifiers[i].modifiers, g_array_unref);
+      g_clear_pointer (&egl->dma_modifiers[i].external_only_flags,
+          g_array_unref);
+    }
+
+    g_free (egl->dma_modifiers);
+    g_clear_pointer (&egl->dma_formats, g_array_unref);
+  }
 }
 
 static gboolean
@@ -1505,4 +1518,197 @@ gst_gl_context_egl_fill_info (GstGLContext * context, GError ** error)
 failure:
   gst_object_unref (display_egl);
   return FALSE;
+}
+
+/**
+ * gst_gl_context_egl_get_formats:
+ * @context: a #GstGLContext (must be an EGL context)
+ *
+ * Returns an array of list for all supported formats' fourcc.
+ *
+ * Returns: (transfer none) (nullable): An array of the supported
+ *   format fourcc list.
+ *
+ * Since: 1.24
+ */
+const GArray *
+gst_gl_context_egl_get_formats (GstGLContext * context)
+{
+  GArray *formats = NULL;
+#if GST_GL_HAVE_DMABUF
+  GstGLContextEGL *egl;
+  EGLDisplay egl_dpy = EGL_DEFAULT_DISPLAY;
+  GstGLDisplayEGL *gl_dpy_egl;
+  EGLint *fmts;
+  EGLint num_formats;
+  gboolean ret;
+
+  EGLBoolean (*gst_eglQueryDmaBufFormatsEXT) (EGLDisplay dpy,
+      EGLint max_formats, EGLint * formats, EGLint * num_formats);
+
+  egl = GST_GL_CONTEXT_EGL (context);
+  if (egl->dma_formats)
+    return egl->dma_formats;
+
+  g_assert (!egl->dma_modifiers);
+
+  if (!gst_gl_context_check_feature (context,
+          "EGL_EXT_image_dma_buf_import_modifiers"))
+    return NULL;
+
+  gst_eglQueryDmaBufFormatsEXT =
+      gst_gl_context_get_proc_address (context, "eglQueryDmaBufFormatsEXT");
+  if (!gst_eglQueryDmaBufFormatsEXT)
+    return NULL;
+
+  gl_dpy_egl = gst_gl_display_egl_from_gl_display (context->display);
+  if (!gl_dpy_egl) {
+    GST_WARNING_OBJECT (context,
+        "Failed to retrieve GstGLDisplayEGL from %" GST_PTR_FORMAT,
+        context->display);
+    return NULL;
+  }
+  egl_dpy =
+      (EGLDisplay) gst_gl_display_get_handle (GST_GL_DISPLAY (gl_dpy_egl));
+  gst_object_unref (gl_dpy_egl);
+
+  ret = gst_eglQueryDmaBufFormatsEXT (egl_dpy, 0, NULL, &num_formats);
+  if (!ret || num_formats == 0)
+    return NULL;
+
+  formats = g_array_new (FALSE, FALSE, sizeof (EGLint));
+  g_array_set_size (formats, num_formats);
+
+  fmts = (EGLint *) formats->data;
+  ret = gst_eglQueryDmaBufFormatsEXT (egl_dpy, num_formats, fmts, &num_formats);
+  if (!ret || num_formats == 0) {
+    g_array_unref (formats);
+    return NULL;
+  }
+
+  g_assert (num_formats <= formats->len);
+  g_array_set_size (formats, num_formats);
+
+  egl->dma_formats = formats;
+  egl->dma_modifiers = g_malloc0 (sizeof (*egl->dma_modifiers) * num_formats);
+
+#endif
+  return formats;
+}
+
+/**
+ * gst_gl_context_egl_get_modifiers:
+ * @context: a #GstGLContext (must be an EGL context)
+ * @fourcc: the drm fourcc.
+ * @external_only: the result external only flags in array.
+ *
+ * Returns an array of list for all supported modifiers for the
+ * specified @fourcc, or NULL if no according modifiers.
+ *
+ * Returns: (transfer none) (nullable): An array of the supported
+ *   modifiers list.
+ *
+ * Since: 1.24
+ */
+const GArray *
+gst_gl_context_egl_get_modifiers (GstGLContext * context, guint32 fourcc,
+    const GArray ** external_only)
+{
+  GArray *modifiers = NULL;
+#if GST_GL_HAVE_DMABUF
+  GArray *external_only_flags = NULL;
+  GstGLContextEGL *egl;
+  EGLDisplay egl_dpy = EGL_DEFAULT_DISPLAY;
+  GstGLDisplayEGL *gl_dpy_egl;
+  EGLuint64KHR *mods;
+  EGLBoolean *ext_only_flags;
+  int num_mods = 0;
+  gboolean ret;
+  guint index;
+
+  EGLBoolean (*gst_eglQueryDmaBufModifiersEXT) (EGLDisplay dpy,
+      EGLint format, EGLint max_modifiers, EGLuint64KHR * modifiers,
+      EGLBoolean * external_only, EGLint * num_modifiers);
+
+  egl = GST_GL_CONTEXT_EGL (context);
+
+  /* Ensure the formats list. */
+  if (!egl->dma_formats)
+    gst_gl_context_egl_get_formats (context);
+
+  if (!egl->dma_formats)
+    return NULL;
+
+  for (index = 0; index < egl->dma_formats->len; index++) {
+    if (g_array_index (egl->dma_formats, EGLint, index) == fourcc)
+      break;
+  }
+  /* Do not support this format at all. */
+  if (index == egl->dma_formats->len)
+    return NULL;
+
+  if (egl->dma_modifiers[index].modifiers) {
+    g_assert (egl->dma_modifiers[index].external_only_flags);
+    if (external_only)
+      *external_only = egl->dma_modifiers[index].external_only_flags;
+
+    return egl->dma_modifiers[index].modifiers;
+  }
+
+  if (!gst_gl_context_check_feature (context,
+          "EGL_EXT_image_dma_buf_import_modifiers"))
+    return NULL;
+
+  gst_eglQueryDmaBufModifiersEXT =
+      gst_gl_context_get_proc_address (context, "eglQueryDmaBufModifiersEXT");
+  if (!gst_eglQueryDmaBufModifiersEXT)
+    return NULL;
+
+  gl_dpy_egl = gst_gl_display_egl_from_gl_display (context->display);
+  if (!gl_dpy_egl) {
+    GST_WARNING_OBJECT (context,
+        "Failed to retrieve GstGLDisplayEGL from %" GST_PTR_FORMAT,
+        context->display);
+    return NULL;
+  }
+
+  egl_dpy =
+      (EGLDisplay) gst_gl_display_get_handle (GST_GL_DISPLAY (gl_dpy_egl));
+  gst_object_unref (gl_dpy_egl);
+
+  ret = gst_eglQueryDmaBufModifiersEXT (egl_dpy, fourcc, 0,
+      NULL, NULL, &num_mods);
+  if (!ret || num_mods == 0)
+    return NULL;
+
+  modifiers = g_array_new (FALSE, FALSE, sizeof (guint64));
+  g_array_set_size (modifiers, num_mods);
+
+  external_only_flags = g_array_new (FALSE, FALSE, sizeof (EGLBoolean));
+  g_array_set_size (external_only_flags, num_mods);
+
+  mods = (EGLuint64KHR *) modifiers->data;
+  ext_only_flags = (EGLBoolean *) external_only_flags->data;
+
+  ret = gst_eglQueryDmaBufModifiersEXT (egl_dpy, fourcc, num_mods,
+      mods, ext_only_flags, &num_mods);
+  if (!ret || num_mods == 0) {
+    g_array_unref (modifiers);
+    g_array_unref (external_only_flags);
+    return NULL;
+  }
+
+  g_assert (num_mods <= modifiers->len);
+  g_assert (num_mods <= external_only_flags->len);
+  g_array_set_size (modifiers, num_mods);
+  g_array_set_size (external_only_flags, num_mods);
+
+  egl->dma_modifiers[index].modifiers = modifiers;
+  egl->dma_modifiers[index].external_only_flags = external_only_flags;
+
+  if (external_only)
+    *external_only = external_only_flags;
+#endif
+
+  return modifiers;
 }

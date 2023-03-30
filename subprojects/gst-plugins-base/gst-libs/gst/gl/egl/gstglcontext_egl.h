@@ -70,6 +70,13 @@ struct _GstGLContextEGL
   gulong window_handle_signal;
 
   GstStructure *requested_config;
+
+  GArray *dma_formats;
+  struct
+  {
+    GArray *modifiers;
+    GArray *external_only_flags;
+  } *dma_modifiers;
 };
 
 /**
@@ -94,6 +101,14 @@ gpointer            gst_gl_context_egl_get_proc_address     (GstGLAPI gl_api, co
 
 G_GNUC_INTERNAL
 gboolean            gst_gl_context_egl_fill_info            (GstGLContext * context, GError ** error);
+
+G_GNUC_INTERNAL
+const GArray *      gst_gl_context_egl_get_formats          (GstGLContext * context);
+
+G_GNUC_INTERNAL
+const GArray *      gst_gl_context_egl_get_modifiers        (GstGLContext * context,
+                                                             guint32 fourcc,
+                                                             const GArray ** external_only_flags);
 
 G_END_DECLS
 

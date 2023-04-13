@@ -1350,8 +1350,7 @@ pad_accept_memory (GstMsdkVPP * thiz, const gchar * mem_type,
   if (!out_caps)
     goto done;
 
-  if (gst_caps_is_any (out_caps) || gst_caps_is_empty (out_caps)
-      || out_caps == caps)
+  if (gst_caps_is_any (out_caps) || gst_caps_is_empty (out_caps))
     goto done;
 
   if (gst_msdkcaps_has_feature (out_caps, mem_type))

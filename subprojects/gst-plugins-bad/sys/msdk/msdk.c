@@ -272,6 +272,15 @@ msdk_init_msdk_session (mfxIMPL impl, mfxVersion * pver,
       MFXUnload (loader);
       return sts;
     }
+  } else if (msdk_session->impl_idx != 0) {
+    sts = MFXCreateSession (loader, msdk_session->impl_idx, &session);
+    if (sts == MFX_ERR_NONE) {
+      msdk_session->session = session;
+      return MFX_ERR_NONE;
+    }
+
+    GST_WARNING ("Failed to create a MFX session (%s) with impl_idx %d",
+        msdk_status_to_string (sts), msdk_session->impl_idx);
   }
 
   while (1) {
@@ -352,6 +361,7 @@ msdk_init_msdk_session (mfxIMPL impl, mfxVersion * pver,
     return status;
   }
 
+  msdk_session->impl_idx = 0;
   msdk_session->session = session;
   msdk_session->loader = NULL;
 
@@ -401,8 +411,7 @@ msdk_open_session (mfxIMPL impl)
     "HARDWARE3", "HARDWARE4", "RUNTIME"
   };
 
-  msdk_session.session = NULL;
-  msdk_session.loader = NULL;
+  memset (&msdk_session, 0, sizeof (MsdkSession));
   status = msdk_init_msdk_session (impl, &version, &msdk_session);
 
   if (status != MFX_ERR_NONE)
@@ -431,8 +440,7 @@ msdk_open_session (mfxIMPL impl)
 
 failed:
   msdk_close_session (&msdk_session);
-  msdk_session.session = NULL;
-  msdk_session.loader = NULL;
+  memset (&msdk_session, 0, sizeof (MsdkSession));
   return msdk_session;
 }
 

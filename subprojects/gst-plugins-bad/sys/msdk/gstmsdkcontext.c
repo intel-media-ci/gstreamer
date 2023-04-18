@@ -475,6 +475,7 @@ gst_msdk_context_new_with_parent (GstMsdkContext * parent)
     }
   }
 
+  child_msdk_session.impl_idx = parent_priv->session.impl_idx;
   child_msdk_session.loader = parent_priv->session.loader;
   child_msdk_session.session = NULL;
   status = msdk_init_msdk_session (impl, &version, &child_msdk_session);

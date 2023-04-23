@@ -210,6 +210,18 @@ void
 gst_msdkenc_install_common_properties (GstMsdkEncClass *encoder_class);
 
 gboolean
+gst_msdkenc_check_update_property_uint (GstMsdkEnc * thiz, guint * old_val,
+                                        guint new_val);
+
+gboolean
+gst_msdkenc_check_update_property_int (GstMsdkEnc * thiz, gint * old_val,
+                                        gint new_val);
+
+gboolean
+gst_msdkenc_check_update_property_bool (GstMsdkEnc * thiz, gboolean * old_val,
+                                        gboolean new_val);
+
+gboolean
 gst_msdkenc_set_common_property (GObject * object, guint prop_id,
                                  const GValue * value, GParamSpec * pspec);
 gboolean

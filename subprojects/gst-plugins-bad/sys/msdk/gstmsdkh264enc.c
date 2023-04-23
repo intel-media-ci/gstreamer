@@ -592,6 +592,15 @@ gst_msdkh264enc_finalize (GObject * object)
   G_OBJECT_CLASS (parent_class)->finalize (object);
 }
 
+#define check_update_property(type, obj, old_val, new_val)          \
+  gst_msdkenc_check_update_property_##type (obj, old_val, new_val)
+#define check_update_property_uint(obj, old_val, new_val)           \
+  check_update_property (uint, obj, old_val, new_val)
+#define check_update_property_int(obj, old_val, new_val)            \
+  check_update_property (int, obj, old_val, new_val)
+#define check_update_property_bool(obj, old_val, new_val)           \
+  check_update_property (bool, obj, old_val, new_val)
+
 static void
 gst_msdkh264enc_set_property (GObject * object, guint prop_id,
     const GValue * value, GParamSpec * pspec)

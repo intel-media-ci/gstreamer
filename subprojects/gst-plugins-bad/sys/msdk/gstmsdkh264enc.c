@@ -87,6 +87,7 @@ enum
   PROP_INTRA_REFRESH_QP_DELTA,
   PROP_INTRA_REFRESH_CYCLE_DIST,
   PROP_DBLK_IDC,
+  PROP_PIC_TIMING_SEI,
 };
 
 enum
@@ -111,6 +112,7 @@ enum
 #define PROP_INTRA_REFRESH_QP_DELTA_DEFAULT   0
 #define PROP_INTRA_REFRESH_CYCLE_DIST_DEFAULT 0
 #define PROP_DBLK_IDC_DEFAULT                 0
+#define PROP_PIC_TIMING_SEI_DEFAULT           FALSE
 
 /* *INDENT-OFF* */
 static const gchar *doc_sink_caps_str =
@@ -419,6 +421,9 @@ gst_msdkh264enc_configure (GstMsdkEnc * encoder)
     thiz->option.NalHrdConformance = MFX_CODINGOPTION_OFF;
   }
 
+  thiz->option.PicTimingSEI =
+      (thiz->pic_timing_sei ? MFX_CODINGOPTION_OFF : MFX_CODINGOPTION_ON);
+
   gst_msdkenc_add_extra_param (encoder, (mfxExtBuffer *) & thiz->option);
 
   encoder->option2.Trellis = thiz->trellis ? thiz->trellis : MFX_TRELLIS_OFF;
@@ -649,6 +654,9 @@ gst_msdkh264enc_set_property (GObject * object, guint prop_id,
     case PROP_DBLK_IDC:
       thiz->dblk_idc = g_value_get_uint (value);
       break;
+    case PROP_PIC_TIMING_SEI:
+      thiz->pic_timing_sei = g_value_get_boolean (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -717,6 +725,9 @@ gst_msdkh264enc_get_property (GObject * object, guint prop_id, GValue * value,
       break;
     case PROP_DBLK_IDC:
       g_value_set_uint (value, thiz->dblk_idc);
+      break;
+    case PROP_PIC_TIMING_SEI:
+      g_value_set_boolean (value, thiz->pic_timing_sei);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -844,6 +855,11 @@ _msdkh264enc_install_properties (GObjectClass * gobject_class,
           "Option of disable deblocking idc",
           0, 2, PROP_DBLK_IDC_DEFAULT,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+  g_object_class_install_property (gobject_class, PROP_PIC_TIMING_SEI,
+      g_param_spec_boolean ("pic-timing-sei", "Picture Timing SEI",
+          "Insert picture timing SEI", PROP_PIC_TIMING_SEI_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 }
 
 static void
@@ -910,6 +926,7 @@ gst_msdkh264enc_init (GTypeInstance * instance, gpointer g_class)
   thiz->intra_refresh_qp_delta = PROP_INTRA_REFRESH_QP_DELTA_DEFAULT;
   thiz->intra_refresh_cycle_dist = PROP_INTRA_REFRESH_CYCLE_DIST_DEFAULT;
   thiz->dblk_idc = PROP_DBLK_IDC_DEFAULT;
+  thiz->pic_timing_sei = PROP_PIC_TIMING_SEI_DEFAULT;
 }
 
 gboolean

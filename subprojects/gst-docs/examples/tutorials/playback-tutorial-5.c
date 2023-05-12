@@ -3,6 +3,10 @@
 #include <gst/gst.h>
 #include <gst/video/colorbalance.h>
 
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
+
 typedef struct _CustomData
 {
   GstElement *pipeline;
@@ -109,7 +113,7 @@ handle_keyboard (GIOChannel * source, GIOCondition cond, CustomData * data)
 }
 
 int
-main (int argc, char *argv[])
+tutorial_main (int argc, char *argv[])
 {
   CustomData data;
   GstStateChangeReturn ret;
@@ -132,7 +136,7 @@ main (int argc, char *argv[])
   /* Build the pipeline */
   data.pipeline =
       gst_parse_launch
-      ("playbin uri=https://www.freedesktop.org/software/gstreamer-sdk/data/media/sintel_trailer-480p.webm",
+      ("playbin uri=https://gstreamer.freedesktop.org/data/media/sintel_trailer-480p.webm",
       NULL);
 
   /* Add a keyboard watch so we get notified of keystrokes */
@@ -162,4 +166,14 @@ main (int argc, char *argv[])
   gst_element_set_state (data.pipeline, GST_STATE_NULL);
   gst_object_unref (data.pipeline);
   return 0;
+}
+
+int
+main (int argc, char *argv[])
+{
+#if defined(__APPLE__) && TARGET_OS_MAC && !TARGET_OS_IPHONE
+  return gst_macos_main (tutorial_main, argc, argv, NULL);
+#else
+  return tutorial_main (argc, argv);
+#endif
 }

@@ -5,20 +5,22 @@ nvcodec_sources = [
   'gstcudafilter.c',
   'gstcudamemorycopy.c',
   'gstcuvidloader.c',
-  'gstnvav1dec.c',
+  'gstnvav1dec.cpp',
   'gstnvbaseenc.c',
   'gstnvdec.c',
-  'gstnvdecoder.c',
+  'gstnvdecobject.cpp',
+  'gstnvdecoder.cpp',
   'gstnvenc.c',
+  'gstnvencobject.cpp',
   'gstnvencoder.cpp',
+  'gstnvh264dec.cpp',
   'gstnvh264enc.c',
   'gstnvh264encoder.cpp',
+  'gstnvh265dec.cpp',
   'gstnvh265enc.c',
   'gstnvh265encoder.cpp',
-  'gstnvh264dec.c',
-  'gstnvh265dec.c',
-  'gstnvvp8dec.c',
-  'gstnvvp9dec.c',
+  'gstnvvp8dec.cpp',
+  'gstnvvp9dec.cpp',
   'plugin.c',
 ]
 
@@ -41,11 +43,7 @@ plugin_incdirs = [configinc, cuda_stubinc]
 extra_args = ['-DGST_USE_UNSTABLE_API']
 
 if gstgl_dep.found()
-  extra_args += ['-DHAVE_NVCODEC_GST_GL=1']
-endif
-
-if gstd3d11_dep.found()
-  extra_args += ['-DGST_CUDA_HAS_D3D=1', '-DCOBJMACROS']
+  extra_args += ['-DHAVE_CUDA_GST_GL']
 endif
 
 if host_system == 'linux'
@@ -85,6 +83,7 @@ gstnvcodec = library('gstnvcodec',
   cpp_args : gst_plugins_bad_args + extra_args,
   include_directories : plugin_incdirs,
   dependencies : [gstbase_dep, gstvideo_dep, gstpbutils_dep, gstgl_dep, gstglproto_dep, gmodule_dep, gstcodecs_dep, gstd3d11_dep, gstcuda_dep],
+  override_options : ['cpp_std=c++14'],
   install : true,
   install_dir : plugins_install_dir,
 )

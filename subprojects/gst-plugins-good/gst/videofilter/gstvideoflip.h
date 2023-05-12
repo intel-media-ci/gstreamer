@@ -76,9 +76,14 @@ struct _GstVideoFlip {
 
   /* < private > */
   GstVideoFormat v_format;
+  gchar *stream_id;
 
   GstVideoOrientationMethod method;
   GstVideoOrientationMethod tag_method;
+  /* TRUE if we received orientation from tag event with GST_TAG_SCOPE_STREAM */
+  gboolean got_orientation_stream_tag;
+  /* orientation received from a tag with GST_TAG_SCOPE_STREAM */
+  GstVideoOrientationMethod global_tag_method;
   GstVideoOrientationMethod proposed_method;
   gboolean change_configuring_method;
   GstVideoOrientationMethod configuring_method;

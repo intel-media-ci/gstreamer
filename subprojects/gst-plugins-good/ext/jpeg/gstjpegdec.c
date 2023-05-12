@@ -47,6 +47,9 @@
 #include <glib/gi18n-lib.h>
 #include <jerror.h>
 
+/* Disable libjpeg-turbo support for now, due to unresolved cornercases */
+#undef JCS_EXTENSIONS
+
 #define MIN_WIDTH  1
 #define MAX_WIDTH  65535
 #define MIN_HEIGHT 1
@@ -231,20 +234,20 @@ gst_jpeg_dec_term_source (j_decompress_ptr cinfo)
 }
 
 METHODDEF (void)
-    gst_jpeg_dec_my_output_message (j_common_ptr cinfo)
+gst_jpeg_dec_my_output_message (j_common_ptr cinfo)
 {
   return;                       /* do nothing */
 }
 
 METHODDEF (void)
-    gst_jpeg_dec_my_emit_message (j_common_ptr cinfo, int msg_level)
+gst_jpeg_dec_my_emit_message (j_common_ptr cinfo, int msg_level)
 {
   /* GST_LOG_OBJECT (CINFO_GET_JPEGDEC (&cinfo), "msg_level=%d", msg_level); */
   return;
 }
 
 METHODDEF (void)
-    gst_jpeg_dec_my_error_exit (j_common_ptr cinfo)
+gst_jpeg_dec_my_error_exit (j_common_ptr cinfo)
 {
   struct GstJpegDecErrorMgr *err_mgr = (struct GstJpegDecErrorMgr *) cinfo->err;
 
@@ -601,10 +604,16 @@ static gboolean
 gst_jpeg_dec_set_format (GstVideoDecoder * dec, GstVideoCodecState * state)
 {
   GstJpegDec *jpeg = GST_JPEG_DEC (dec);
+  GstStructure *structure;
+  gboolean parsed = FALSE;
 
   if (jpeg->input_state)
     gst_video_codec_state_unref (jpeg->input_state);
   jpeg->input_state = gst_video_codec_state_ref (state);
+
+  structure = gst_caps_get_structure (state->caps, 0);
+  gst_structure_get_boolean (structure, "parsed", &parsed);
+  gst_video_decoder_set_packetized (dec, parsed);
 
   return TRUE;
 }

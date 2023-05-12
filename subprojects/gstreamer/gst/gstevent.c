@@ -213,6 +213,33 @@ gst_event_type_get_flags (GstEventType type)
   return ret;
 }
 
+/**
+ * gst_event_type_to_sticky_ordering
+ * @type: a #GstEventType
+ *
+ * Converts the #GstEventType to an unsigned integer that
+ * represents the ordering of sticky events when re-sending them.
+ * A lower value represents a higher-priority event.
+ *
+ * Returns: an unsigned integer
+ * Since: 1.22
+ */
+/* FIXME 2.0: Remove the sticky event order overrides once
+ * the event type numbers are fixed */
+guint
+gst_event_type_to_sticky_ordering (GstEventType type)
+{
+  guint sticky_order = type;
+
+  /* Fix up the sticky event ordering for events where the
+   * type was chosen poorly */
+  if (type == GST_EVENT_INSTANT_RATE_CHANGE) {
+    sticky_order = GST_EVENT_SEGMENT + 1;
+  }
+
+  return sticky_order;
+}
+
 static void
 _gst_event_free (GstEvent * event)
 {
@@ -234,7 +261,7 @@ _gst_event_free (GstEvent * event)
   memset (event, 0xff, sizeof (GstEventImpl));
 #endif
 
-  g_slice_free1 (sizeof (GstEventImpl), event);
+  g_free (event);
 }
 
 static void gst_event_init (GstEventImpl * event, GstEventType type);
@@ -245,7 +272,7 @@ _gst_event_copy (GstEvent * event)
   GstEventImpl *copy;
   GstStructure *s;
 
-  copy = g_slice_new0 (GstEventImpl);
+  copy = g_new0 (GstEventImpl, 1);
 
   gst_event_init (copy, GST_EVENT_TYPE (event));
 
@@ -305,7 +332,7 @@ gst_event_new_custom (GstEventType type, GstStructure * structure)
 {
   GstEventImpl *event;
 
-  event = g_slice_new0 (GstEventImpl);
+  event = g_new0 (GstEventImpl, 1);
 
   GST_CAT_DEBUG (GST_CAT_EVENT, "creating new event %p %s %d", event,
       gst_event_type_get_name (type), type);
@@ -326,7 +353,7 @@ gst_event_new_custom (GstEventType type, GstStructure * structure)
   /* ERRORS */
 had_parent:
   {
-    g_slice_free1 (sizeof (GstEventImpl), event);
+    g_free (event);
     g_warning ("structure is already owned by another object");
     return NULL;
   }
@@ -1920,7 +1947,7 @@ gst_event_parse_group_id (GstEvent * event, guint * group_id)
 
 /**
  * gst_event_new_stream_collection:
- * @collection: Active collection for this data flow
+ * @collection: (transfer none): Active collection for this data flow
  *
  * Create a new STREAM_COLLECTION event. The stream collection event can only
  * travel downstream synchronized with the buffer flow.
@@ -1952,7 +1979,7 @@ gst_event_new_stream_collection (GstStreamCollection * collection)
 /**
  * gst_event_parse_stream_collection:
  * @event: a stream-collection event
- * @collection: (out) (optional): pointer to store the collection
+ * @collection: (out) (optional) (transfer full): pointer to store the collection.
  *
  * Retrieve new #GstStreamCollection from STREAM_COLLECTION event @event.
  *

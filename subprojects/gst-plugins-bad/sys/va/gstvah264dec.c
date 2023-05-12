@@ -75,10 +75,6 @@ struct _GstVaH264Dec
 {
   GstVaBaseDec parent;
 
-  GstFlowReturn last_ret;
-
-  gint coded_width;
-  gint coded_height;
   gint dpb_size;
 
   /* Used to fill VAPictureParameterBufferH264.ReferenceFrames */
@@ -121,33 +117,19 @@ gst_va_h264_dec_output_picture (GstH264Decoder * decoder,
 {
   GstVaBaseDec *base = GST_VA_BASE_DEC (decoder);
   GstVaH264Dec *self = GST_VA_H264_DEC (decoder);
+  GstVideoDecoder *vdec = GST_VIDEO_DECODER (decoder);
+  gboolean ret;
 
   GST_LOG_OBJECT (self,
       "Outputting picture %p (poc %d)", picture, picture->pic_order_cnt);
 
-  if (self->last_ret != GST_FLOW_OK) {
-    gst_h264_picture_unref (picture);
-    gst_video_decoder_drop_frame (GST_VIDEO_DECODER (self), frame);
-    return self->last_ret;
-  }
-
-  if (base->copy_frames)
-    gst_va_base_dec_copy_output_buffer (base, frame);
-
-  if (picture->buffer_flags != 0) {
-    gboolean interlaced =
-        (picture->buffer_flags & GST_VIDEO_BUFFER_FLAG_INTERLACED) != 0;
-    gboolean tff = (picture->buffer_flags & GST_VIDEO_BUFFER_FLAG_TFF) != 0;
-
-    GST_TRACE_OBJECT (self,
-        "apply buffer flags 0x%x (interlaced %d, top-field-first %d)",
-        picture->buffer_flags, interlaced, tff);
-    GST_BUFFER_FLAG_SET (frame->output_buffer, picture->buffer_flags);
-  }
-
+  ret = gst_va_base_dec_process_output (base, frame, picture->discont_state,
+      picture->buffer_flags);
   gst_h264_picture_unref (picture);
 
-  return gst_video_decoder_finish_frame (GST_VIDEO_DECODER (self), frame);
+  if (ret)
+    return gst_video_decoder_finish_frame (vdec, frame);
+  return GST_FLOW_ERROR;
 }
 
 static void
@@ -381,7 +363,7 @@ gst_va_h264_dec_start_picture (GstH264Decoder * decoder,
   GstVaDecodePicture *va_pic;
   VAIQMatrixBufferH264 iq_matrix = { 0, };
   VAPictureParameterBufferH264 pic_param;
-  guint i, n;
+  guint i;
   GArray *ref_list = self->ref_list;
 
   va_pic = gst_h264_picture_get_user_data (picture);
@@ -472,9 +454,15 @@ gst_va_h264_dec_start_picture (GstH264Decoder * decoder,
 
   /* We need the first 2 entries (Y intra and Y inter for YCbCr 4:2:2 and
    * less, and the full 6 entries for 4:4:4, see Table 7-2 of the spec for
-   * more details */
-  n = (pps->sequence->chroma_format_idc == 3) ? 6 : 2;
-  for (i = 0; i < n; i++) {
+   * more details.
+   * But VA API only define the first 2 entries, so we may lose scaling
+   * list info for 4:4:4 stream. */
+  if (pps->sequence->chroma_format_idc == 3)
+    GST_WARNING_OBJECT (self, "We do not have scaling list entries "
+        "for U/V planes in 4:4:4 stream. It may have artifact if "
+        "those scaling lists are not default value.");
+
+  for (i = 0; i < 2; i++) {
     gst_h264_quant_matrix_8x8_get_raster_from_zigzag (iq_matrix.ScalingList8x8
         [i], pps->scaling_lists_8x8[i]);
   }
@@ -491,19 +479,12 @@ gst_va_h264_dec_new_picture (GstH264Decoder * decoder,
     GstVideoCodecFrame * frame, GstH264Picture * picture)
 {
   GstVaH264Dec *self = GST_VA_H264_DEC (decoder);
-  GstVaDecodePicture *pic;
-  GstVideoDecoder *vdec = GST_VIDEO_DECODER (decoder);
   GstVaBaseDec *base = GST_VA_BASE_DEC (decoder);
+  GstVaDecodePicture *pic;
+  GstFlowReturn ret;
 
-  if (base->need_negotiation) {
-    if (!gst_video_decoder_negotiate (vdec)) {
-      GST_ERROR_OBJECT (self, "Failed to negotiate with downstream");
-      return GST_FLOW_NOT_NEGOTIATED;
-    }
-  }
-
-  self->last_ret = gst_video_decoder_allocate_output_frame (vdec, frame);
-  if (self->last_ret != GST_FLOW_OK)
+  ret = gst_va_base_dec_prepare_output_frame (base, frame);
+  if (ret != GST_FLOW_OK)
     goto error;
 
   pic = gst_va_decode_picture_new (base->decoder, frame->output_buffer);
@@ -520,8 +501,8 @@ error:
   {
     GST_WARNING_OBJECT (self,
         "Failed to allocated output buffer, return %s",
-        gst_flow_get_name (self->last_ret));
-    return self->last_ret;
+        gst_flow_get_name (ret));
+    return ret;
   }
 }
 
@@ -667,6 +648,7 @@ gst_va_h264_dec_new_sequence (GstH264Decoder * decoder, const GstH264SPS * sps,
 {
   GstVaBaseDec *base = GST_VA_BASE_DEC (decoder);
   GstVaH264Dec *self = GST_VA_H264_DEC (decoder);
+  GstVideoInfo *info = &base->output_info;
   VAProfile profile;
   gint display_width;
   gint display_height;
@@ -704,34 +686,35 @@ gst_va_h264_dec_new_sequence (GstH264Decoder * decoder, const GstH264SPS * sps,
           rt_format, sps->width, sps->height)) {
     base->profile = profile;
     base->rt_format = rt_format;
-    self->coded_width = sps->width;
-    self->coded_height = sps->height;
+    base->width = sps->width;
+    base->height = sps->height;
 
     negotiation_needed = TRUE;
     GST_INFO_OBJECT (self, "Format changed to %s [%x] (%dx%d)",
-        gst_va_profile_name (profile), rt_format, self->coded_width,
-        self->coded_height);
+        gst_va_profile_name (profile), rt_format, base->width, base->height);
   }
 
-  if (base->width != display_width || base->height != display_height) {
-    base->width = display_width;
-    base->height = display_height;
+  if (GST_VIDEO_INFO_WIDTH (info) != display_width ||
+      GST_VIDEO_INFO_HEIGHT (info) != display_height) {
+    GST_VIDEO_INFO_WIDTH (info) = display_width;
+    GST_VIDEO_INFO_HEIGHT (info) = display_height;
 
     negotiation_needed = TRUE;
-    GST_INFO_OBJECT (self, "Resolution changed to %dx%d", base->width,
-        base->height);
+    GST_INFO_OBJECT (self, "Resolution changed to %dx%d",
+        GST_VIDEO_INFO_WIDTH (info), GST_VIDEO_INFO_HEIGHT (info));
   }
 
   interlaced = !sps->frame_mbs_only_flag;
   if (self->interlaced != interlaced) {
     self->interlaced = interlaced;
-
+    GST_VIDEO_INFO_INTERLACE_MODE (info) = interlaced ?
+        GST_VIDEO_INTERLACE_MODE_MIXED : GST_VIDEO_INTERLACE_MODE_PROGRESSIVE;
     negotiation_needed = TRUE;
     GST_INFO_OBJECT (self, "Interlaced mode changed to %d", interlaced);
   }
 
-  base->need_valign = base->width < self->coded_width
-      || base->height < self->coded_height;
+  base->need_valign = GST_VIDEO_INFO_WIDTH (info) < base->width ||
+      GST_VIDEO_INFO_HEIGHT (info) < base->height;
   if (base->need_valign) {
     /* *INDENT-OFF* */
     if (base->valign.padding_left != padding_left ||
@@ -752,8 +735,9 @@ gst_va_h264_dec_new_sequence (GstH264Decoder * decoder, const GstH264SPS * sps,
   }
 
   base->min_buffers = self->dpb_size + 4;       /* dpb size + scratch surfaces */
-
   base->need_negotiation = negotiation_needed;
+  g_clear_pointer (&base->input_state, gst_video_codec_state_unref);
+  base->input_state = gst_video_codec_state_ref (decoder->input_state);
 
   return GST_FLOW_OK;
 }
@@ -847,56 +831,6 @@ gst_va_h264_dec_getcaps (GstVideoDecoder * decoder, GstCaps * filter)
   return caps;
 }
 
-static gboolean
-gst_va_h264_dec_negotiate (GstVideoDecoder * decoder)
-{
-  GstVaBaseDec *base = GST_VA_BASE_DEC (decoder);
-  GstVaH264Dec *self = GST_VA_H264_DEC (decoder);
-  GstVideoFormat format = GST_VIDEO_FORMAT_UNKNOWN;
-  GstCapsFeatures *capsfeatures = NULL;
-  GstH264Decoder *h264dec = GST_H264_DECODER (decoder);
-
-  /* Ignore downstream renegotiation request. */
-  if (!base->need_negotiation)
-    return TRUE;
-
-  base->need_negotiation = FALSE;
-
-  if (gst_va_decoder_is_open (base->decoder)
-      && !gst_va_decoder_close (base->decoder))
-    return FALSE;
-
-  if (!gst_va_decoder_open (base->decoder, base->profile, base->rt_format))
-    return FALSE;
-
-  if (!gst_va_decoder_set_frame_size (base->decoder, self->coded_width,
-          self->coded_height))
-    return FALSE;
-
-  if (base->output_state)
-    gst_video_codec_state_unref (base->output_state);
-
-  gst_va_base_dec_get_preferred_format_and_caps_features (base, &format,
-      &capsfeatures);
-  if (format == GST_VIDEO_FORMAT_UNKNOWN)
-    return FALSE;
-
-  base->output_state =
-      gst_video_decoder_set_output_state (decoder, format,
-      base->width, base->height, h264dec->input_state);
-  if (self->interlaced)
-    base->output_state->info.interlace_mode = GST_VIDEO_INTERLACE_MODE_MIXED;
-
-  base->output_state->caps = gst_video_info_to_caps (&base->output_state->info);
-  if (capsfeatures)
-    gst_caps_set_features_simple (base->output_state->caps, capsfeatures);
-
-  GST_INFO_OBJECT (self, "Negotiated caps %" GST_PTR_FORMAT,
-      base->output_state->caps);
-
-  return GST_VIDEO_DECODER_CLASS (parent_class)->negotiate (decoder);
-}
-
 static void
 gst_va_h264_dec_dispose (GObject * object)
 {
@@ -950,7 +884,6 @@ gst_va_h264_dec_class_init (gpointer g_class, gpointer class_data)
   gobject_class->dispose = gst_va_h264_dec_dispose;
 
   decoder_class->getcaps = GST_DEBUG_FUNCPTR (gst_va_h264_dec_getcaps);
-  decoder_class->negotiate = GST_DEBUG_FUNCPTR (gst_va_h264_dec_negotiate);
 
   h264decoder_class->new_sequence =
       GST_DEBUG_FUNCPTR (gst_va_h264_dec_new_sequence);
@@ -1034,24 +967,9 @@ gst_va_h264_dec_register (GstPlugin * plugin, GstVaDevice * device,
 
   type_info.class_data = cdata;
 
-  type_name = g_strdup ("GstVaH264Dec");
-  feature_name = g_strdup ("vah264dec");
-
-  /* The first decoder to be registered should use a constant name,
-   * like vah264dec, for any additional decoders, we create unique
-   * names, using inserting the render device name. */
-  if (g_type_from_name (type_name)) {
-    gchar *basename = g_path_get_basename (device->render_device_path);
-    g_free (type_name);
-    g_free (feature_name);
-    type_name = g_strdup_printf ("GstVa%sH264Dec", basename);
-    feature_name = g_strdup_printf ("va%sh264dec", basename);
-    cdata->description = basename;
-
-    /* lower rank for non-first device */
-    if (rank > 0)
-      rank--;
-  }
+  gst_va_create_feature_name (device, "GstVaH264Dec", "GstVa%sH264Dec",
+      &type_name, "vah264dec", "va%sh264dec", &feature_name,
+      &cdata->description, &rank);
 
   g_once (&debug_once, _register_debug_category, NULL);
 

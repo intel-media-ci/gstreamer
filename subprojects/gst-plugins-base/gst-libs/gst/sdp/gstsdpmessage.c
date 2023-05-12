@@ -620,7 +620,7 @@ hex_to_int (gchar c)
 /**
  * gst_sdp_message_parse_uri:
  * @uri: the start of the uri
- * @msg: (out caller-allocates): the result #GstSDPMessage
+ * @msg: (transfer none): the result #GstSDPMessage
  *
  * Parse the null-terminated @uri and store the result in @msg.
  *
@@ -3121,7 +3121,7 @@ gst_sdp_parse_line (SDPContext * c, gchar type, gchar * buffer)
  * gst_sdp_message_parse_buffer:
  * @data: (array length=size): the start of the buffer
  * @size: the size of the buffer
- * @msg: (out caller-allocates): the result #GstSDPMessage
+ * @msg: (transfer none): the result #GstSDPMessage
  *
  * Parse the contents of @size bytes pointed to by @data and store the result in
  * @msg.
@@ -3439,7 +3439,7 @@ gst_sdp_parse_rtpmap (const gchar * rtpmap, gint * payload, gchar ** name,
     *params = NULL;
     goto out;
   } else {
-    *name = strdup (*name);
+    *name = g_strdup (*name);
   }
 
   t = p;
@@ -3912,6 +3912,8 @@ gst_sdp_media_set_media_from_caps (const GstCaps * caps, GstSDPMedia * media)
       continue;
     if (g_str_has_prefix (fname, "rtcp-fb-"))
       continue;
+    if (g_str_has_prefix (fname, "ssrc-"))
+      continue;
 
     if (!strcmp (fname, "a-framesize")) {
       /* a-framesize attribute */
@@ -4221,6 +4223,8 @@ sdp_add_attributes_to_caps (GArray * attributes, GstCaps * caps)
       if (!strcmp (key, "ssrc"))
         continue;
       if (!strcmp (key, "rid"))
+        continue;
+      if (!strcmp (key, "source-filter"))
         continue;
 
       /* string must be valid UTF8 */

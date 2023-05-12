@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: gst-plugins-good 0.10.28.2\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2021-10-25 01:02+0100\n"
+"POT-Creation-Date: 2023-02-22 11:52+0000\n"
 "PO-Revision-Date: 2012-05-05 19:05+0100\n"
 "Last-Translator: Savvas Radevic <vicedar@gmail.com>\n"
 "Language-Team: Greek <team@lists.gnome.gr>\n"
@@ -96,6 +96,12 @@ msgstr "Το αρχείο αυτό είναι κατεστραμμένο και 
 
 msgid "Invalid atom size."
 msgstr "Άκυρο μέγεθος ατόμου."
+
+msgid "Cannot query file size"
+msgstr ""
+
+msgid "Cannot demux file"
+msgstr ""
 
 msgid "This file is incomplete and cannot be played."
 msgstr "Το αρχείο αυτό είναι ανολοκλήρωτο και δεν μπορεί να αναπαραχθεί."
@@ -431,10 +437,6 @@ msgstr ""
 #, fuzzy, c-format
 msgid "Failed to set output %u on device %s."
 msgstr "Αποτυχία ορισμού εξόδου %d στην συσκευή %s."
-
-msgid "Changing resolution at runtime is not yet supported."
-msgstr ""
-"Η αλλαγή της ανάλυσης κατά τη διάρκεια λειτουργίας δεν υποστηρίζεται ακόμα."
 
 msgid "Cannot operate without a clock"
 msgstr "Δεν είναι δυνατή η λειτουργία χωρίς ρολόι "
@@ -856,6 +858,11 @@ msgstr "Δεν είναι δυνατή η λειτουργία χωρίς ρολ
 #~ msgid "Failed after %d tries. device %s. system error: %s"
 #~ msgstr ""
 #~ "Αποτυχία έπειτα από %d προσπάθειες. συσκευή %s. σφάλμα συστήματος: %s"
+
+#~ msgid "Changing resolution at runtime is not yet supported."
+#~ msgstr ""
+#~ "Η αλλαγή της ανάλυσης κατά τη διάρκεια λειτουργίας δεν υποστηρίζεται "
+#~ "ακόμα."
 
 #~ msgid "Describes the selected input element."
 #~ msgstr "Περιγράφει το επιλεγμένο στοιχείο εισαγωγής."

@@ -23,8 +23,7 @@
 #include <gst/gst.h>
 #include <gst/base/gstbasetransform.h>
 #include <gst/video/video.h>
-#include <gst/cuda/gstcudacontext.h>
-#include <gst/cuda/gstcudabufferpool.h>
+#include <gst/cuda/gstcuda.h>
 
 G_BEGIN_DECLS
 
@@ -43,7 +42,7 @@ struct _GstCudaBaseTransform
   GstBaseTransform parent;
 
   GstCudaContext *context;
-  CUstream cuda_stream;
+  GstCudaStream *stream;
 
   GstVideoInfo in_info;
   GstVideoInfo out_info;

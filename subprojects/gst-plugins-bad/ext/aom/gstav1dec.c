@@ -44,7 +44,8 @@ static GstStaticPadTemplate gst_av1_dec_sink_pad_template =
 GST_STATIC_PAD_TEMPLATE ("sink",
     GST_PAD_SINK,
     GST_PAD_ALWAYS,
-    GST_STATIC_CAPS ("video/x-av1")
+    GST_STATIC_CAPS ("video/x-av1, "
+        "stream-format = (string) obu-stream, " "alignment = (string) tu")
     );
 
 static GstStaticPadTemplate gst_av1_dec_src_pad_template =
@@ -94,7 +95,7 @@ static gboolean gst_av1_dec_get_valid_format (GstAV1Dec * dec,
 
 #define gst_av1_dec_parent_class parent_class
 G_DEFINE_TYPE (GstAV1Dec, gst_av1_dec, GST_TYPE_VIDEO_DECODER);
-GST_ELEMENT_REGISTER_DEFINE (av1dec, "av1dec", GST_RANK_PRIMARY,
+GST_ELEMENT_REGISTER_DEFINE (av1dec, "av1dec", GST_RANK_SECONDARY,
     GST_TYPE_AV1_DEC);
 
 static void

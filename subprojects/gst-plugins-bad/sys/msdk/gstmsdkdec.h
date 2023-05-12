@@ -38,6 +38,7 @@
 #include "gstmsdkcontext.h"
 #include "msdk-enums.h"
 #include "gstmsdkdecproputil.h"
+#include "gstmsdkcaps.h"
 
 G_BEGIN_DECLS
 
@@ -60,6 +61,7 @@ G_BEGIN_DECLS
 typedef struct _GstMsdkDec GstMsdkDec;
 typedef struct _GstMsdkDecClass GstMsdkDecClass;
 typedef struct _MsdkDecTask MsdkDecTask;
+typedef struct _MsdkDecCData MsdkDecCData;
 
 struct _GstMsdkDec
 {
@@ -69,14 +71,16 @@ struct _GstMsdkDec
   GstVideoCodecState *input_state;
   /* aligned msdk pool info */
   GstBufferPool *pool;
+  GstBufferPool *alloc_pool;
+  GstBufferPool *other_pool;
   /* downstream pool info based on allocation query */
   GstVideoInfo non_msdk_pool_info;
   mfxFrameAllocResponse alloc_resp;
-  gboolean use_video_memory;
   gboolean use_dmabuf;
+  gboolean do_copy;
   gboolean initialized;
   gboolean sfc;
-  gboolean ds_has_no_msdk_allocator;
+  gboolean ds_has_known_allocator;
 
   /* for packetization */
   GstAdapter *adapter;
@@ -129,6 +133,12 @@ struct _GstMsdkDecClass
   gboolean (*preinit_decoder) (GstMsdkDec * decoder);
   /* adjust mfx parameters per codec */
   gboolean (*postinit_decoder) (GstMsdkDec * decoder);
+};
+
+struct _MsdkDecCData
+{
+  GstCaps *sink_caps;
+  GstCaps *src_caps;
 };
 
 GType gst_msdkdec_get_type (void);

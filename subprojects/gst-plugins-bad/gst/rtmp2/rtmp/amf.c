@@ -156,7 +156,7 @@ node_new (GstAmfType type)
 
   init_static ();
 
-  node = g_slice_alloc0 (sizeof *node);
+  node = g_malloc0 (sizeof *node);
   node->type = type;
 
   switch (type) {
@@ -194,7 +194,7 @@ GstAmfNode *
 gst_amf_node_new_boolean (gboolean value)
 {
   GstAmfNode *node = node_new (GST_AMF_TYPE_BOOLEAN);
-  node->value.v_int = ! !value;
+  node->value.v_int = !!value;
   return node;
 }
 
@@ -295,7 +295,7 @@ gst_amf_node_free (gpointer ptr)
       break;
   }
 
-  g_slice_free (GstAmfNode, node);
+  g_free (node);
 }
 
 GstAmfType
@@ -398,7 +398,7 @@ void
 gst_amf_node_set_boolean (GstAmfNode * node, gboolean value)
 {
   g_return_if_fail (node->type == GST_AMF_TYPE_BOOLEAN);
-  node->value.v_int = ! !value;
+  node->value.v_int = !!value;
 }
 
 void
@@ -675,7 +675,7 @@ parse_boolean (AmfParser * parser)
   }
 
   value = parse_u8 (parser);
-  return ! !value;
+  return !!value;
 }
 
 static inline GBytes *

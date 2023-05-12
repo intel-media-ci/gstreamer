@@ -304,6 +304,7 @@ gst_rtsp_client_sink_ntp_time_source_get_type (void)
 #define DEFAULT_USER_AGENT       "GStreamer/" PACKAGE_VERSION
 #define DEFAULT_PROFILES         GST_RTSP_PROFILE_AVP
 #define DEFAULT_RTX_TIME_MS      500
+#define DEFAULT_PUBLISH_CLOCK_MODE GST_RTSP_PUBLISH_CLOCK_MODE_CLOCK
 
 enum
 {
@@ -333,7 +334,8 @@ enum
   PROP_TLS_INTERACTION,
   PROP_NTP_TIME_SOURCE,
   PROP_USER_AGENT,
-  PROP_PROFILES
+  PROP_PROFILES,
+  PROP_PUBLISH_CLOCK_MODE,
 };
 
 static void gst_rtsp_client_sink_finalize (GObject * object);
@@ -661,7 +663,7 @@ gst_rtsp_client_sink_class_init (GstRTSPClientSinkClass * klass)
           GST_TYPE_STRUCTURE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   /**
-   * GstRTSPClientSink::tls-validation-flags:
+   * GstRTSPClientSink:tls-validation-flags:
    *
    * TLS certificate validation flags used to validate server
    * certificate.
@@ -684,7 +686,7 @@ gst_rtsp_client_sink_class_init (GstRTSPClientSinkClass * klass)
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   /**
-   * GstRTSPClientSink::tls-database:
+   * GstRTSPClientSink:tls-database:
    *
    * TLS database with anchor certificate authorities used to validate
    * the server certificate.
@@ -696,7 +698,7 @@ gst_rtsp_client_sink_class_init (GstRTSPClientSinkClass * klass)
           G_TYPE_TLS_DATABASE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   /**
-   * GstRTSPClientSink::tls-interaction:
+   * GstRTSPClientSink:tls-interaction:
    *
    * A #GTlsInteraction object to be used when the connection or certificate
    * database need to interact with the user. This will be used to prompt the
@@ -709,7 +711,7 @@ gst_rtsp_client_sink_class_init (GstRTSPClientSinkClass * klass)
           G_TYPE_TLS_INTERACTION, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   /**
-   * GstRTSPClientSink::ntp-time-source:
+   * GstRTSPClientSink:ntp-time-source:
    *
    * allows to select the time source that should be used
    * for the NTP time in outgoing packets
@@ -722,7 +724,7 @@ gst_rtsp_client_sink_class_init (GstRTSPClientSinkClass * klass)
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   /**
-   * GstRTSPClientSink::user-agent:
+   * GstRTSPClientSink:user-agent:
    *
    * The string to set in the User-Agent header.
    *
@@ -731,6 +733,20 @@ gst_rtsp_client_sink_class_init (GstRTSPClientSinkClass * klass)
       g_param_spec_string ("user-agent", "User Agent",
           "The User-Agent string to send to the server",
           DEFAULT_USER_AGENT, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+  /**
+   * GstRTSPClientSink:publish-clock-mode:
+   *
+   * Sets if and how the media clock should be published according to RFC7273.
+   *
+   * Since: 1.22
+   *
+   */
+  g_object_class_install_property (gobject_class, PROP_PUBLISH_CLOCK_MODE,
+      g_param_spec_enum ("publish-clock-mode", "Publish Clock Mode",
+          "Clock publishing mode according to RFC7273",
+          GST_TYPE_RTSP_PUBLISH_CLOCK_MODE, DEFAULT_PUBLISH_CLOCK_MODE,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   /**
    * GstRTSPClientSink::handle-request:
@@ -880,6 +896,7 @@ gst_rtsp_client_sink_init (GstRTSPClientSink * sink)
   sink->tls_interaction = DEFAULT_TLS_INTERACTION;
   sink->ntp_time_source = DEFAULT_NTP_TIME_SOURCE;
   sink->user_agent = g_strdup (DEFAULT_USER_AGENT);
+  sink->publish_clock_mode = DEFAULT_PUBLISH_CLOCK_MODE;
 
   sink->profiles = DEFAULT_PROFILES;
 
@@ -1202,6 +1219,7 @@ gst_rtsp_client_sink_create_stream (GstRTSPClientSink * sink,
 
   gst_rtsp_stream_set_ulpfec_pt (stream, ulpfec_pt);
   gst_rtsp_stream_set_ulpfec_percentage (stream, context->ulpfec_percentage);
+  gst_rtsp_stream_set_publish_clock_mode (stream, sink->publish_clock_mode);
 
 #if 0
   if (priv->pool)
@@ -1702,6 +1720,9 @@ gst_rtsp_client_sink_set_property (GObject * object, guint prop_id,
       g_free (rtsp_client_sink->user_agent);
       rtsp_client_sink->user_agent = g_value_dup_string (value);
       break;
+    case PROP_PUBLISH_CLOCK_MODE:
+      rtsp_client_sink->publish_clock_mode = g_value_get_enum (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -1815,6 +1836,9 @@ gst_rtsp_client_sink_get_property (GObject * object, guint prop_id,
       break;
     case PROP_USER_AGENT:
       g_value_set_string (value, rtsp_client_sink->user_agent);
+      break;
+    case PROP_PUBLISH_CLOCK_MODE:
+      g_value_set_enum (value, rtsp_client_sink->publish_clock_mode);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);

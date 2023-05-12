@@ -1518,15 +1518,19 @@ mpegts_base_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
       return res;
 
     mpegts_base_flush (base, FALSE);
-    /* In the case of discontinuities in push-mode with TIME segment
-     * we want to drop all previous observations (hard:TRUE) from
-     * the packetizer */
-    if (base->mode == BASE_MODE_PUSHING
-        && base->segment.format == GST_FORMAT_TIME) {
-      mpegts_packetizer_flush (base->packetizer, TRUE);
+    if (base->mode == BASE_MODE_PUSHING) {
+      if (base->segment.format == GST_FORMAT_TIME) {
+        /* In the case of discontinuities in push-mode with TIME segment
+         * we want to drop all previous observations (hard:TRUE) from
+         * the packetizer */
+        mpegts_packetizer_flush (base->packetizer, TRUE);
+      }
+      /* In all cases, we clear observations when we get a discontinuity in
+       * push-mode to re-check if the sections (PAT/PMT) changed or not */
       mpegts_packetizer_clear (base->packetizer);
-    } else
+    } else {
       mpegts_packetizer_flush (base->packetizer, FALSE);
+    }
   }
 
   mpegts_packetizer_push (base->packetizer, buf);
@@ -1833,8 +1837,8 @@ mpegts_base_handle_seek_event (MpegTSBase * base, GstPad * pad,
       " stop: %" GST_TIME_FORMAT, rate, GST_TIME_ARGS (start),
       GST_TIME_ARGS (stop));
 
-  flush = ! !(flags & GST_SEEK_FLAG_FLUSH);
-  instant_rate_change = ! !(flags & GST_SEEK_FLAG_INSTANT_RATE_CHANGE);
+  flush = !!(flags & GST_SEEK_FLAG_FLUSH);
+  instant_rate_change = !!(flags & GST_SEEK_FLAG_INSTANT_RATE_CHANGE);
 
   /* Directly send the instant-rate-change event here before taking the
    * stream-lock so that it can be applied as soon as possible */

@@ -116,6 +116,63 @@ gst_end_usage_mode_get_type (void)
   return end_usage_mode_type;
 }
 
+#define GST_TYPE_KF_MODE (gst_kf_mode_get_type())
+static GType
+gst_kf_mode_get_type (void)
+{
+  static GType kf_mode_type = 0;
+  static const GEnumValue kf_mode[] = {
+    {GST_AV1_ENC_KF_AUTO,
+          "Encoder determines optimal keyframe placement automatically",
+        "auto"},
+    {GST_AV1_ENC_KF_DISABLED, "Encoder does not place keyframes", "disabled"},
+    {0, NULL, NULL},
+  };
+
+  if (!kf_mode_type) {
+    kf_mode_type = g_enum_register_static ("GstAV1EncKFMode", kf_mode);
+  }
+  return kf_mode_type;
+}
+
+#define GST_TYPE_ENC_PASS (gst_enc_pass_get_type())
+static GType
+gst_enc_pass_get_type (void)
+{
+  static GType enc_pass_type = 0;
+  static const GEnumValue enc_pass[] = {
+    {GST_AV1_ENC_ONE_PASS, "Single pass mode", "one-pass"},
+    {GST_AV1_ENC_FIRST_PASS, "First pass of multi-pass mode", "first-pass"},
+    {GST_AV1_ENC_SECOND_PASS, "Second pass of multi-pass mode", "second-pass"},
+    {GST_AV1_ENC_THIRD_PASS, "Third pass of multi-pass mode", "third-pass"},
+    {0, NULL, NULL},
+  };
+
+  if (!enc_pass_type) {
+    enc_pass_type = g_enum_register_static ("GstAV1EncEncPass", enc_pass);
+  }
+  return enc_pass_type;
+}
+
+#define GST_TYPE_USAGE_PROFILE (gst_usage_profile_get_type())
+static GType
+gst_usage_profile_get_type (void)
+{
+  static GType usage_profile_type = 0;
+  static const GEnumValue usage_profile[] = {
+    {GST_AV1_ENC_USAGE_GOOD_QUALITY, "Good Quality profile", "good-quality"},
+    {GST_AV1_ENC_USAGE_REALTIME, "Realtime profile", "realtime"},
+    {GST_AV1_ENC_USAGE_ALL_INTRA, "All Intra profile", "all-intra"},
+    {0, NULL, NULL},
+  };
+
+  if (!usage_profile_type) {
+    usage_profile_type =
+        g_enum_register_static ("GstAV1EncUsageProfile", usage_profile);
+  }
+  return usage_profile_type;
+}
+
 enum
 {
   LAST_SIGNAL
@@ -146,7 +203,12 @@ enum
   PROP_THREADS,
   PROP_ROW_MT,
   PROP_TILE_COLUMNS,
-  PROP_TILE_ROWS
+  PROP_TILE_ROWS,
+  PROP_KF_MODE,
+  PROP_ENC_PASS,
+  PROP_USAGE_PROFILE,
+  PROP_LAG_IN_FRAMES,
+  PROP_KEYFRAME_MAX_DIST
 };
 
 /* From av1/av1_cx_iface.c */
@@ -171,12 +233,17 @@ enum
 #define DEFAULT_BUF_INITIAL_SZ                               4000
 #define DEFAULT_BUF_OPTIMAL_SZ                               5000
 #define DEFAULT_TIMEBASE_N                                      1
-#define DEFAULT_TIMEBASE_D                                     30
+#define DEFAULT_TIMEBASE_D                                  90000
 #define DEFAULT_BIT_DEPTH                              AOM_BITS_8
 #define DEFAULT_THREADS                                         0
 #define DEFAULT_ROW_MT                                       TRUE
 #define DEFAULT_TILE_COLUMNS                                    0
 #define DEFAULT_TILE_ROWS                                       0
+#define DEFAULT_KF_MODE                       GST_AV1_ENC_KF_AUTO
+#define DEFAULT_ENC_PASS                     GST_AV1_ENC_ONE_PASS
+#define DEFAULT_USAGE_PROFILE      GST_AV1_ENC_USAGE_GOOD_QUALITY
+#define DEFAULT_LAG_IN_FRAMES                                   0
+#define DEFAULT_KEYFRAME_MAX_DIST                              30
 
 static void gst_av1_enc_finalize (GObject * object);
 static void gst_av1_enc_set_property (GObject * object, guint prop_id,
@@ -218,7 +285,8 @@ static GstStaticPadTemplate gst_av1_enc_src_pad_template =
 GST_STATIC_PAD_TEMPLATE ("src",
     GST_PAD_SRC,
     GST_PAD_ALWAYS,
-    GST_STATIC_CAPS ("video/x-av1, alignment = (string) tu")
+    GST_STATIC_CAPS ("video/x-av1, "
+        "stream-format = (string) obu-stream, " "alignment = (string) tu")
     );
 
 static void
@@ -259,7 +327,7 @@ gst_av1_enc_class_init (GstAV1EncClass * klass)
   g_object_class_install_property (gobject_class, PROP_CPU_USED,
       g_param_spec_int ("cpu-used", "CPU Used",
           "CPU Used. A Value greater than 0 will increase encoder speed at the expense of quality.",
-          0, 5, DEFAULT_CPU_USED, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+          0, 10, DEFAULT_CPU_USED, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   /* Rate control configurations */
   g_object_class_install_property (gobject_class, PROP_DROP_FRAME,
@@ -400,9 +468,70 @@ gst_av1_enc_class_init (GstAV1EncClass * klass)
           "can enable parallel encoding",
           0, 6, DEFAULT_TILE_ROWS, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
+  /**
+   * av1enc:keyframe-mode:
+   *
+   * Since: 1.22
+   */
+  g_object_class_install_property (gobject_class, PROP_KF_MODE,
+      g_param_spec_enum ("keyframe-mode", "Keyframe placement mode",
+          "Determines whether keyframes are placed automatically by the encoder",
+          GST_TYPE_KF_MODE, DEFAULT_KF_MODE,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+  /**
+   * av1enc:enc-pass:
+   *
+   * Since: 1.22
+   */
+  g_object_class_install_property (gobject_class, PROP_ENC_PASS,
+      g_param_spec_enum ("enc-pass", "Multi-pass Encoding Pass",
+          "Current phase for multi-pass encoding or @GST_AV1_ENC_ONE_PASS for single pass",
+          GST_TYPE_ENC_PASS, DEFAULT_ENC_PASS,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+  /**
+   * av1enc:usage-profile:
+   *
+   * Since: 1.22
+   */
+  g_object_class_install_property (gobject_class, PROP_USAGE_PROFILE,
+      g_param_spec_enum ("usage-profile", "Usage value",
+          "Usage profile is used to guide the default config for the encoder",
+          GST_TYPE_USAGE_PROFILE, DEFAULT_USAGE_PROFILE,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+  /**
+   * av1enc:lag-in-frames:
+   *
+   * Since: 1.22
+   */
+  g_object_class_install_property (gobject_class, PROP_LAG_IN_FRAMES,
+      g_param_spec_uint ("lag-in-frames", "Allow lagged encoding",
+          "Maximum number of future frames the encoder is allowed to consume "
+          "before producing the current output frame. "
+          "Set value to 0 for disabling lagged encoding.",
+          0, G_MAXUINT, DEFAULT_LAG_IN_FRAMES,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+  /**
+   * av1enc:keyframe-max-dist:
+   *
+   * Since: 1.22
+   */
+  g_object_class_install_property (gobject_class, PROP_KEYFRAME_MAX_DIST,
+      g_param_spec_int ("keyframe-max-dist", "Keyframe max distance",
+          "Maximum distance between keyframes (number of frames)",
+          0, G_MAXINT, DEFAULT_KEYFRAME_MAX_DIST,
+          (GParamFlags) (G_PARAM_READWRITE |
+              G_PARAM_STATIC_STRINGS | GST_PARAM_DOC_SHOW_DEFAULT)));
+
   gst_type_mark_as_plugin_api (GST_TYPE_END_USAGE_MODE, 0);
   gst_type_mark_as_plugin_api (GST_TYPE_RESIZE_MODE, 0);
   gst_type_mark_as_plugin_api (GST_TYPE_SUPERRES_MODE, 0);
+  gst_type_mark_as_plugin_api (GST_TYPE_KF_MODE, 0);
+  gst_type_mark_as_plugin_api (GST_TYPE_ENC_PASS, 0);
+  gst_type_mark_as_plugin_api (GST_TYPE_USAGE_PROFILE, 0);
 }
 
 static void
@@ -420,7 +549,6 @@ gst_av1_enc_init (GstAV1Enc * av1enc)
 
   av1enc->encoder_inited = FALSE;
 
-  av1enc->keyframe_dist = 30;
   av1enc->cpu_used = DEFAULT_CPU_USED;
   av1enc->format = AOM_IMG_FMT_I420;
   av1enc->threads = DEFAULT_THREADS;
@@ -435,11 +563,16 @@ gst_av1_enc_init (GstAV1Enc * av1enc)
   av1enc->aom_cfg.fixed_qp_offsets[3] = -1;
   av1enc->aom_cfg.fixed_qp_offsets[4] = -1;
 #endif
+  av1enc->aom_cfg.kf_max_dist = DEFAULT_KEYFRAME_MAX_DIST;
   av1enc->aom_cfg.rc_dropframe_thresh = DEFAULT_DROP_FRAME;
   av1enc->aom_cfg.rc_resize_mode = DEFAULT_RESIZE_MODE;
   av1enc->aom_cfg.rc_resize_denominator = DEFAULT_RESIZE_DENOMINATOR;
   av1enc->aom_cfg.rc_resize_kf_denominator = DEFAULT_RESIZE_KF_DENOMINATOR;
+#ifdef HAVE_LIBAOM_3
+  av1enc->aom_cfg.rc_superres_mode = (aom_superres_mode) DEFAULT_SUPERRES_MODE;
+#else
   av1enc->aom_cfg.rc_superres_mode = DEFAULT_SUPERRES_MODE;
+#endif
   av1enc->aom_cfg.rc_superres_denominator = DEFAULT_SUPERRES_DENOMINATOR;
   av1enc->aom_cfg.rc_superres_kf_denominator = DEFAULT_SUPERRES_KF_DENOMINATOR;
   av1enc->aom_cfg.rc_superres_qthresh = DEFAULT_SUPERRES_QTHRESH;
@@ -457,6 +590,10 @@ gst_av1_enc_init (GstAV1Enc * av1enc)
   av1enc->aom_cfg.g_timebase.den = DEFAULT_TIMEBASE_D;
   av1enc->aom_cfg.g_bit_depth = DEFAULT_BIT_DEPTH;
   av1enc->aom_cfg.g_input_bit_depth = (unsigned int) DEFAULT_BIT_DEPTH;
+  av1enc->aom_cfg.kf_mode = (enum aom_kf_mode) DEFAULT_KF_MODE;
+  av1enc->aom_cfg.g_pass = (enum aom_enc_pass) DEFAULT_ENC_PASS;
+  av1enc->aom_cfg.g_usage = (unsigned int) DEFAULT_USAGE_PROFILE;
+  av1enc->aom_cfg.g_lag_in_frames = DEFAULT_LAG_IN_FRAMES;
 
   g_mutex_init (&av1enc->encoder_lock);
 }
@@ -700,8 +837,13 @@ gst_av1_enc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
   av1enc->aom_cfg.g_h = GST_VIDEO_INFO_HEIGHT (info);
   /* Recommended method is to set the timebase to that of the parent
    * container or multimedia framework (ex: 1/1000 for ms, as in FLV) */
-  av1enc->aom_cfg.g_timebase.num = GST_VIDEO_INFO_FPS_D (info);
-  av1enc->aom_cfg.g_timebase.den = GST_VIDEO_INFO_FPS_N (info);
+  if (GST_VIDEO_INFO_FPS_D (info) != 0 && GST_VIDEO_INFO_FPS_N (info) != 0) {
+    av1enc->aom_cfg.g_timebase.num = GST_VIDEO_INFO_FPS_D (info);
+    av1enc->aom_cfg.g_timebase.den = GST_VIDEO_INFO_FPS_N (info);
+  } else {
+    av1enc->aom_cfg.g_timebase.num = DEFAULT_TIMEBASE_N;
+    av1enc->aom_cfg.g_timebase.den = DEFAULT_TIMEBASE_D;
+  }
   av1enc->aom_cfg.g_error_resilient = AOM_ERROR_RESILIENT_DEFAULT;
 
   if (av1enc->threads == DEFAULT_THREADS)
@@ -810,6 +952,9 @@ gst_av1_enc_handle_frame (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
   int flags = 0;
   GstFlowReturn ret = GST_FLOW_OK;
   GstVideoFrame vframe;
+  aom_codec_pts_t scaled_pts;
+  GstClockTime pts_rt;
+  unsigned long duration;
 
   if (!aom_img_alloc (&raw, av1enc->format, av1enc->aom_cfg.g_w,
           av1enc->aom_cfg.g_h, 1)) {
@@ -822,19 +967,54 @@ gst_av1_enc_handle_frame (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
   gst_av1_enc_fill_image (av1enc, &vframe, &raw);
   gst_video_frame_unmap (&vframe);
 
-  if (av1enc->keyframe_dist >= 30) {
-    av1enc->keyframe_dist = 0;
-    flags |= AOM_EFLAG_FORCE_KF;
-  }
-  av1enc->keyframe_dist++;
+  // aom_codec_encode requires pts to be strictly increasing
+  pts_rt =
+      gst_segment_to_running_time (&encoder->input_segment,
+      GST_FORMAT_TIME, frame->pts);
 
-  g_mutex_lock (&av1enc->encoder_lock);
-  if (aom_codec_encode (&av1enc->encoder, &raw, frame->pts, 1, flags)
+  if (GST_CLOCK_TIME_IS_VALID (av1enc->next_pts)
+      && pts_rt <= av1enc->next_pts) {
+    GST_WARNING_OBJECT (av1enc,
+        "decreasing pts %" GST_TIME_FORMAT " previous buffer was %"
+        GST_TIME_FORMAT " enforce increasing pts", GST_TIME_ARGS (pts_rt),
+        GST_TIME_ARGS (av1enc->next_pts));
+    pts_rt = av1enc->next_pts + 1;
+  }
+
+  av1enc->next_pts = pts_rt;
+
+  // Convert the pts from nanoseconds to timebase units
+  scaled_pts =
+      gst_util_uint64_scale_int (pts_rt,
+      av1enc->aom_cfg.g_timebase.den,
+      av1enc->aom_cfg.g_timebase.num * (GstClockTime) GST_SECOND);
+
+  if (frame->duration != GST_CLOCK_TIME_NONE) {
+    duration =
+        gst_util_uint64_scale (frame->duration, av1enc->aom_cfg.g_timebase.den,
+        av1enc->aom_cfg.g_timebase.num * (GstClockTime) GST_SECOND);
+
+    if (duration > 0) {
+      av1enc->next_pts += frame->duration;
+    } else {
+      /* We force the path ignoring the duration if we end up with a zero
+       * value for duration after scaling (e.g. duration value too small) */
+      GST_WARNING_OBJECT (av1enc,
+          "Ignoring too small frame duration %" GST_TIME_FORMAT,
+          GST_TIME_ARGS (frame->duration));
+      duration = 1;
+      av1enc->next_pts += 1;
+    }
+  } else {
+    duration = 1;
+    av1enc->next_pts += 1;
+  }
+
+  if (aom_codec_encode (&av1enc->encoder, &raw, scaled_pts, duration, flags)
       != AOM_CODEC_OK) {
     gst_av1_codec_error (&av1enc->encoder, "Failed to encode frame");
     ret = GST_FLOW_ERROR;
   }
-  g_mutex_unlock (&av1enc->encoder_lock);
 
   aom_img_free (&raw);
   gst_video_codec_frame_unref (frame);
@@ -855,11 +1035,21 @@ gst_av1_enc_finish (GstVideoEncoder * encoder)
 {
   GstFlowReturn ret = GST_FLOW_OK;
   GstAV1Enc *av1enc = GST_AV1_ENC_CAST (encoder);
+  aom_codec_pts_t scaled_pts;
+  GstClockTime pts = 0;
 
   while (ret == GST_FLOW_OK) {
     GST_DEBUG_OBJECT (encoder, "Calling finish");
     g_mutex_lock (&av1enc->encoder_lock);
-    if (aom_codec_encode (&av1enc->encoder, NULL, 0, 1, 0)
+
+    if (GST_CLOCK_TIME_IS_VALID (av1enc->next_pts))
+      pts = av1enc->next_pts;
+    scaled_pts =
+        gst_util_uint64_scale (pts,
+        av1enc->aom_cfg.g_timebase.den,
+        av1enc->aom_cfg.g_timebase.num * (GstClockTime) GST_SECOND);
+
+    if (aom_codec_encode (&av1enc->encoder, NULL, scaled_pts, 1, 0)
         != AOM_CODEC_OK) {
       gst_av1_codec_error (&av1enc->encoder, "Failed to encode frame");
       ret = GST_FLOW_ERROR;
@@ -884,6 +1074,9 @@ gst_av1_enc_destroy_encoder (GstAV1Enc * av1enc)
     aom_codec_destroy (&av1enc->encoder);
     av1enc->encoder_inited = FALSE;
   }
+
+  av1enc->next_pts = GST_CLOCK_TIME_NONE;
+
   g_mutex_unlock (&av1enc->encoder_lock);
 }
 
@@ -1007,6 +1200,26 @@ gst_av1_enc_set_property (GObject * object, guint prop_id,
       GST_AV1_ENC_APPLY_CODEC_CONTROL (av1enc, AV1E_SET_TILE_ROWS,
           av1enc->tile_rows);
       break;
+    case PROP_KF_MODE:
+      av1enc->aom_cfg.kf_mode = g_value_get_enum (value);
+      global = TRUE;
+      break;
+    case PROP_ENC_PASS:
+      av1enc->aom_cfg.g_pass = g_value_get_enum (value);
+      global = TRUE;
+      break;
+    case PROP_USAGE_PROFILE:
+      av1enc->aom_cfg.g_usage = g_value_get_enum (value);
+      global = TRUE;
+      break;
+    case PROP_LAG_IN_FRAMES:
+      av1enc->aom_cfg.g_lag_in_frames = g_value_get_uint (value);
+      global = TRUE;
+      break;
+    case PROP_KEYFRAME_MAX_DIST:
+      av1enc->aom_cfg.kf_max_dist = g_value_get_int (value);
+      global = TRUE;
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -1101,6 +1314,21 @@ gst_av1_enc_get_property (GObject * object, guint prop_id, GValue * value,
       break;
     case PROP_TILE_ROWS:
       g_value_set_uint (value, av1enc->tile_rows);
+      break;
+    case PROP_KF_MODE:
+      g_value_set_enum (value, av1enc->aom_cfg.kf_mode);
+      break;
+    case PROP_ENC_PASS:
+      g_value_set_enum (value, av1enc->aom_cfg.g_pass);
+      break;
+    case PROP_USAGE_PROFILE:
+      g_value_set_enum (value, av1enc->aom_cfg.g_usage);
+      break;
+    case PROP_LAG_IN_FRAMES:
+      g_value_set_uint (value, av1enc->aom_cfg.g_lag_in_frames);
+      break;
+    case PROP_KEYFRAME_MAX_DIST:
+      g_value_set_int (value, av1enc->aom_cfg.kf_max_dist);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);

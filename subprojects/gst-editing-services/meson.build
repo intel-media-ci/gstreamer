@@ -1,5 +1,5 @@
 project('gst-editing-services', 'c',
-  version : '1.21.2.1',
+  version : '1.23.0.1',
   meson_version : '>= 0.62',
   default_options : [ 'warning_level=1',
                       'buildtype=debugoptimized' ])
@@ -74,17 +74,9 @@ if cc.has_link_argument('-Wl,-z,nodelete')
 endif
 
 # Symbol visibility
-if cc.get_id() == 'msvc'
-  export_define = '__declspec(dllexport) extern'
-elif cc.has_argument('-fvisibility=hidden')
+if cc.has_argument('-fvisibility=hidden')
   add_project_arguments('-fvisibility=hidden', language: 'c')
-  export_define = 'extern __attribute__ ((visibility ("default")))'
-else
-  export_define = 'extern'
 endif
-
-# Passing this through the command line would be too messy
-cdata.set('GST_API_EXPORT', export_define)
 
 # Disable strict aliasing
 if cc.has_argument('-fno-strict-aliasing')
@@ -118,7 +110,7 @@ if host_machine.system() != 'windows'
 endif
 gstcontroller_dep = dependency('gstreamer-controller-1.0', version : gst_req,
   fallback : ['gstreamer', 'gst_controller_dep'])
-gstvalidate_dep = dependency('gst-validate-1.0', version : gst_req, required : get_option('validate'),
+gstvalidate_dep = dependency('gstreamer-validate-1.0', version : gst_req, required : get_option('validate'),
   fallback : ['gst-devtools', 'validate_dep'])
 
 gio_dep = dependency('gio-2.0', version: glib_req)
@@ -152,6 +144,8 @@ gir_init_section = [ '--add-init-section=' + \
     'gst_init(NULL,NULL);' + \
     'ges_init();', '--quiet']
 
+pymod = import('python')
+python = pymod.find_installation(required: get_option('python'))
 has_python = false
 static_build = get_option('default_library') == 'static'
 if static_build
@@ -161,8 +155,6 @@ if static_build
     message('Disabling python support as it is not supported on static builds')
   endif
 elif build_gir
-  pymod = import('python')
-  python = pymod.find_installation(required: get_option('python'))
   if python.found()
     # Workaround for https://github.com/mesonbuild/meson/issues/5629
     pythonver = python.language_version()
@@ -267,7 +259,6 @@ foreach extra_arg : warning_flags
   endif
 endforeach
 
-python3 = import('python').find_installation()
 pkgconfig = import('pkgconfig')
 pkgconfig_subdirs = ['gstreamer-1.0']
 
@@ -285,14 +276,16 @@ endif
 subdir('docs')
 
 pygi_override_dir = get_option('pygi-overrides-dir')
-if pygi_override_dir == ''
-  pygi_override_dir = python3.get_install_dir(
+if pygi_override_dir == '' and python.found()
+  pygi_override_dir = python.get_install_dir(
     subdir : join_paths('gi', 'overrides')
   )
 endif
 
-message('pygobject overrides directory = @0@'.format(pygi_override_dir))
-subdir('bindings/python')
+if python.found()
+  message('pygobject overrides directory = @0@'.format(pygi_override_dir))
+  subdir('bindings/python')
+endif
 
 # Set release date
 if gst_version_nano == 0
@@ -308,6 +301,8 @@ if gio_dep.version().version_compare('< 2.67.4')
 endif
 
 configure_file(output: 'config.h', configuration: cdata)
+
+meson.add_dist_script('scripts/gen-changelog.py', meson.project_name(), '1.20.0', meson.project_version())
 
 plugin_names = []
 gst_plugins = []

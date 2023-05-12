@@ -1,5 +1,5 @@
 project('gst-python', 'c',
-  version : '1.21.2.1',
+  version : '1.23.0.1',
   meson_version : '>= 0.62',
   default_options : [ 'warning_level=1',
                       'c_std=gnu99',
@@ -57,7 +57,8 @@ pygi_override_dir = get_option('pygi-overrides-dir')
 
 if pygi_override_dir == ''
   pygi_override_dir = python.get_install_dir(
-    subdir : join_paths('gi', 'overrides')
+    subdir : join_paths('gi', 'overrides'),
+    pure: false
   )
 endif
 
@@ -86,6 +87,8 @@ cdata.set('PY_LIB_SUFFIX', '"@0@"'.format(pylib_suffix))
 cdata.set('PYTHON_VERSION', '"@0@"'.format(python_dep.version()))
 configure_file(output : 'config.h', configuration : cdata)
 configinc = include_directories('.')
+
+meson.add_dist_script('scripts/gen-changelog.py', meson.project_name(), '1.20.0', meson.project_version())
 
 pkgconfig = import('pkgconfig')
 plugins_install_dir = join_paths(libdir, 'gstreamer-1.0')

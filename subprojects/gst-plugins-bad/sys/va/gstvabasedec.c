@@ -24,6 +24,7 @@
 #include <gst/va/gstvavideoformat.h>
 
 #include "gstvacaps.h"
+#include "gstvapluginutils.h"
 
 #define GST_CAT_DEFAULT (base->debug_category)
 #define GST_VA_BASE_DEC_GET_PARENT_CLASS(obj) (GST_VA_BASE_DEC_GET_CLASS(obj)->parent_decoder_class)
@@ -33,14 +34,17 @@ gst_va_base_dec_get_property (GObject * object, guint prop_id,
     GValue * value, GParamSpec * pspec)
 {
   GstVaBaseDec *self = GST_VA_BASE_DEC (object);
+  GstVaBaseDecClass *klass = GST_VA_BASE_DEC_GET_CLASS (self);
 
   switch (prop_id) {
     case GST_VA_DEC_PROP_DEVICE_PATH:{
-      if (!(self->display && GST_IS_VA_DISPLAY_DRM (self->display))) {
+      if (!self->display)
+        g_value_set_string (value, klass->render_device_path);
+      else if (GST_IS_VA_DISPLAY_PLATFORM (self->display))
+        g_object_get_property (G_OBJECT (self->display), "path", value);
+      else
         g_value_set_string (value, NULL);
-        return;
-      }
-      g_object_get_property (G_OBJECT (self->display), "path", value);
+
       break;
     }
     default:
@@ -101,9 +105,8 @@ gst_va_base_dec_stop (GstVideoDecoder * decoder)
   if (!gst_va_decoder_close (base->decoder))
     return FALSE;
 
-  if (base->output_state)
-    gst_video_codec_state_unref (base->output_state);
-  base->output_state = NULL;
+  g_clear_pointer (&base->output_state, gst_video_codec_state_unref);
+  g_clear_pointer (&base->input_state, gst_video_codec_state_unref);
 
   if (base->other_pool)
     gst_buffer_pool_set_active (base->other_pool, FALSE);
@@ -662,10 +665,41 @@ gst_va_base_dec_set_context (GstElement * element, GstContext * context)
       (element))->set_context (element, context);
 }
 
+static gboolean
+gst_va_base_dec_negotiate (GstVideoDecoder * decoder)
+{
+  GstVaBaseDec *base = GST_VA_BASE_DEC (decoder);
+
+  /* Ignore downstream renegotiation request. */
+  if (!base->need_negotiation)
+    return TRUE;
+
+  base->need_negotiation = FALSE;
+
+  if (!gst_va_decoder_config_is_equal (base->decoder, base->profile,
+          base->rt_format, base->width, base->height)) {
+    if (gst_va_decoder_is_open (base->decoder) &&
+        !gst_va_decoder_close (base->decoder))
+      return FALSE;
+    if (!gst_va_decoder_open (base->decoder, base->profile, base->rt_format))
+      return FALSE;
+    if (!gst_va_decoder_set_frame_size (base->decoder, base->width,
+            base->height))
+      return FALSE;
+  }
+
+  if (!gst_va_base_dec_set_output_state (base))
+    return FALSE;
+
+  return GST_VIDEO_DECODER_CLASS (GST_VA_BASE_DEC_GET_PARENT_CLASS (decoder))
+      ->negotiate (decoder);
+}
+
 void
 gst_va_base_dec_init (GstVaBaseDec * base, GstDebugCategory * cat)
 {
   base->debug_category = cat;
+  gst_video_info_init (&base->output_info);
 }
 
 void
@@ -713,10 +747,12 @@ gst_va_base_dec_class_init (GstVaBaseDecClass * klass, GstVaCodecs codec,
   decoder_class->sink_query = GST_DEBUG_FUNCPTR (gst_va_base_dec_sink_query);
   decoder_class->decide_allocation =
       GST_DEBUG_FUNCPTR (gst_va_base_dec_decide_allocation);
+  decoder_class->negotiate = GST_DEBUG_FUNCPTR (gst_va_base_dec_negotiate);
 
   g_object_class_install_property (object_class, GST_VA_DEC_PROP_DEVICE_PATH,
       g_param_spec_string ("device-path", "Device Path",
-          "DRM device path", NULL, G_PARAM_READABLE | G_PARAM_STATIC_STRINGS));
+          GST_VA_DEVICE_PATH_PROP_DESC, NULL, GST_PARAM_DOC_SHOW_DEFAULT |
+          G_PARAM_READABLE | G_PARAM_STATIC_STRINGS));
 }
 
 /* XXX: if chroma has not an available format, the first format is
@@ -978,7 +1014,7 @@ gst_va_base_dec_copy_output_buffer (GstVaBaseDec * base,
 
   src_vinfo = &base->output_state->info;
   gst_video_info_set_format (&dest_vinfo, GST_VIDEO_INFO_FORMAT (src_vinfo),
-      base->width, base->height);
+      GST_VIDEO_INFO_WIDTH (src_vinfo), GST_VIDEO_INFO_HEIGHT (src_vinfo));
 
   ret = gst_buffer_pool_acquire_buffer (base->other_pool, &buffer, NULL);
   if (ret != GST_FLOW_OK)
@@ -1003,8 +1039,8 @@ gst_va_base_dec_copy_output_buffer (GstVaBaseDec * base,
   } else {
     /* gst_video_frame_copy can crop this, but does not know, so let
      * make it think it's all right */
-    GST_VIDEO_INFO_WIDTH (&src_frame.info) = base->width;
-    GST_VIDEO_INFO_HEIGHT (&src_frame.info) = base->height;
+    GST_VIDEO_INFO_WIDTH (&src_frame.info) = GST_VIDEO_INFO_WIDTH (src_vinfo);
+    GST_VIDEO_INFO_HEIGHT (&src_frame.info) = GST_VIDEO_INFO_HEIGHT (src_vinfo);
 
     if (!gst_video_frame_copy (&dest_frame, &src_frame)) {
       gst_video_frame_unmap (&src_frame);
@@ -1026,4 +1062,96 @@ fail:
 
   GST_ERROR_OBJECT (base, "Failed copy output buffer.");
   return FALSE;
+}
+
+gboolean
+gst_va_base_dec_process_output (GstVaBaseDec * base, GstVideoCodecFrame * frame,
+    GstVideoCodecState * input_state, GstVideoBufferFlags buffer_flags)
+{
+  GstVideoDecoder *vdec = GST_VIDEO_DECODER (base);
+
+  if (input_state) {
+
+    g_assert (GST_VIDEO_INFO_WIDTH (&input_state->info) ==
+        GST_VIDEO_INFO_WIDTH (&base->input_state->info)
+        && GST_VIDEO_INFO_HEIGHT (&input_state->info) ==
+        GST_VIDEO_INFO_HEIGHT (&input_state->info));
+
+    g_clear_pointer (&base->input_state, gst_video_codec_state_unref);
+    base->input_state = gst_video_codec_state_ref (input_state);
+
+    base->need_negotiation = TRUE;
+    if (!gst_video_decoder_negotiate (vdec)) {
+      GST_ERROR_OBJECT (base, "Could not re-negotiate with updated state");
+      return GST_FLOW_ERROR;
+    }
+  }
+
+  if (base->copy_frames)
+    gst_va_base_dec_copy_output_buffer (base, frame);
+
+  if (buffer_flags != 0) {
+#ifndef GST_DISABLE_GST_DEBUG
+    gboolean interlaced =
+        (buffer_flags & GST_VIDEO_BUFFER_FLAG_INTERLACED) != 0;
+    gboolean tff = (buffer_flags & GST_VIDEO_BUFFER_FLAG_TFF) != 0;
+
+    GST_TRACE_OBJECT (base,
+        "apply buffer flags 0x%x (interlaced %d, top-field-first %d)",
+        buffer_flags, interlaced, tff);
+#endif
+    GST_BUFFER_FLAG_SET (frame->output_buffer, buffer_flags);
+  }
+
+  return TRUE;
+}
+
+GstFlowReturn
+gst_va_base_dec_prepare_output_frame (GstVaBaseDec * base,
+    GstVideoCodecFrame * frame)
+{
+  GstVideoDecoder *vdec = GST_VIDEO_DECODER (base);
+
+  if (base->need_negotiation) {
+    if (!gst_video_decoder_negotiate (vdec)) {
+      GST_ERROR_OBJECT (base, "Failed to negotiate with downstream");
+      return GST_FLOW_NOT_NEGOTIATED;
+    }
+  }
+
+  if (frame)
+    return gst_video_decoder_allocate_output_frame (vdec, frame);
+  return GST_FLOW_OK;
+}
+
+gboolean
+gst_va_base_dec_set_output_state (GstVaBaseDec * base)
+{
+  GstVideoDecoder *decoder = GST_VIDEO_DECODER (base);
+  GstVideoFormat format = GST_VIDEO_FORMAT_UNKNOWN;
+  GstCapsFeatures *capsfeatures = NULL;
+  GstVideoInfo *info = &base->output_info;
+
+  if (base->output_state)
+    gst_video_codec_state_unref (base->output_state);
+
+  gst_va_base_dec_get_preferred_format_and_caps_features (base, &format,
+      &capsfeatures);
+  if (format == GST_VIDEO_FORMAT_UNKNOWN)
+    return FALSE;
+
+  base->output_state =
+      gst_video_decoder_set_interlaced_output_state (decoder, format,
+      GST_VIDEO_INFO_INTERLACE_MODE (info), GST_VIDEO_INFO_WIDTH (info),
+      GST_VIDEO_INFO_HEIGHT (info), base->input_state);
+
+  /* set caps feature */
+  base->output_state->caps = gst_video_info_to_caps (&base->output_state->info);
+  if (capsfeatures)
+    gst_caps_set_features_simple (base->output_state->caps, capsfeatures);
+
+  GST_INFO_OBJECT (base, "Negotiated caps %" GST_PTR_FORMAT,
+      base->output_state->caps);
+
+  return TRUE;
 }

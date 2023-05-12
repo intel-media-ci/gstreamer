@@ -51,6 +51,7 @@ typedef void (*ChannelTask) (GstWebRTCDataChannel * channel,
 
 struct task
 {
+  GstWebRTCBin *webrtcbin;
   GstWebRTCDataChannel *channel;
   ChannelTask func;
   gpointer user_data;
@@ -69,6 +70,7 @@ _execute_task (GstWebRTCBin * webrtc, struct task *task)
 static void
 _free_task (struct task *task)
 {
+  g_object_unref (task->webrtcbin);
   gst_object_unref (task->channel);
 
   if (task->notify)
@@ -80,14 +82,22 @@ static void
 _channel_enqueue_task (WebRTCDataChannel * channel, ChannelTask func,
     gpointer user_data, GDestroyNotify notify)
 {
-  struct task *task = g_new0 (struct task, 1);
+  GstWebRTCBin *webrtcbin = NULL;
+  struct task *task = NULL;
 
+  webrtcbin = g_weak_ref_get (&channel->webrtcbin_weak);
+  if (!webrtcbin)
+    return;
+
+  task = g_new0 (struct task, 1);
+
+  task->webrtcbin = webrtcbin;
   task->channel = gst_object_ref (channel);
   task->func = func;
   task->user_data = user_data;
   task->notify = notify;
 
-  gst_webrtc_bin_enqueue_task (channel->webrtcbin,
+  gst_webrtc_bin_enqueue_task (task->webrtcbin,
       (GstWebRTCBinFunc) _execute_task, task, (GDestroyNotify) _free_task,
       NULL);
 }
@@ -427,11 +437,15 @@ _close_procedure (WebRTCDataChannel * channel, gpointer user_data)
     GST_WEBRTC_DATA_CHANNEL_UNLOCK (channel);
     g_object_notify (G_OBJECT (channel), "ready-state");
 
-    GST_WEBRTC_DATA_CHANNEL_LOCK (channel);
-    if (channel->parent.buffered_amount <= 0) {
-      _channel_enqueue_task (channel, (ChannelTask) _close_sctp_stream,
-          NULL, NULL);
+    /* Make sure that all data enqueued gets properly sent before data channel is closed. */
+    GstFlowReturn ret =
+        gst_app_src_end_of_stream (GST_APP_SRC (WEBRTC_DATA_CHANNEL
+            (channel)->appsrc));
+    if (ret != GST_FLOW_OK) {
+      GST_WARNING_OBJECT (channel, "Send end of stream returned %i, %s", ret,
+          gst_flow_get_name (ret));
     }
+    return;
   }
 
   GST_WEBRTC_DATA_CHANNEL_UNLOCK (channel);
@@ -871,6 +885,7 @@ webrtc_data_channel_send_data (GstWebRTCDataChannel * base_channel,
     GST_WEBRTC_DATA_CHANNEL_UNLOCK (channel);
     g_set_error (error, GST_WEBRTC_ERROR,
         GST_WEBRTC_ERROR_INVALID_STATE, "channel is not open");
+    gst_buffer_unref (buffer);
     return FALSE;
   }
   GST_WEBRTC_DATA_CHANNEL_UNLOCK (channel);
@@ -945,6 +960,7 @@ webrtc_data_channel_send_string (GstWebRTCDataChannel * base_channel,
     GST_WEBRTC_DATA_CHANNEL_UNLOCK (channel);
     g_set_error (error, GST_WEBRTC_ERROR,
         GST_WEBRTC_ERROR_INVALID_STATE, "channel is not open");
+    gst_buffer_unref (buffer);
     return FALSE;
   }
   GST_WEBRTC_DATA_CHANNEL_UNLOCK (channel);
@@ -1033,6 +1049,16 @@ on_appsrc_data (GstPad * pad, GstPadProbeInfo * info, gpointer user_data)
   } else if (GST_PAD_PROBE_INFO_TYPE (info) & GST_PAD_PROBE_TYPE_BUFFER_LIST) {
     GstBufferList *list = GST_PAD_PROBE_INFO_BUFFER_LIST (info);
     size = gst_buffer_list_calculate_size (list);
+  } else if (GST_PAD_PROBE_INFO_TYPE (info) &
+      GST_PAD_PROBE_TYPE_EVENT_DOWNSTREAM) {
+    GstEvent *event = GST_PAD_PROBE_INFO_EVENT (info);
+    if (GST_EVENT_TYPE (event) == GST_EVENT_EOS
+        && channel->parent.ready_state ==
+        GST_WEBRTC_DATA_CHANNEL_STATE_CLOSING) {
+      _channel_enqueue_task (channel, (ChannelTask) _close_sctp_stream, NULL,
+          NULL);
+      return GST_PAD_PROBE_DROP;
+    }
   }
 
   if (size > 0) {
@@ -1051,11 +1077,6 @@ on_appsrc_data (GstPad * pad, GstPadProbeInfo * info, gpointer user_data)
           NULL);
     }
 
-    if (channel->parent.ready_state == GST_WEBRTC_DATA_CHANNEL_STATE_CLOSING
-        && channel->parent.buffered_amount <= 0) {
-      _channel_enqueue_task (channel, (ChannelTask) _close_sctp_stream, NULL,
-          NULL);
-    }
     GST_WEBRTC_DATA_CHANNEL_UNLOCK (channel);
     g_object_notify (G_OBJECT (&channel->parent), "buffered-amount");
   }
@@ -1128,6 +1149,8 @@ gst_webrtc_data_channel_finalize (GObject * object)
   g_clear_object (&channel->appsrc);
   g_clear_object (&channel->appsink);
 
+  g_weak_ref_clear (&channel->webrtcbin_weak);
+
   G_OBJECT_CLASS (parent_class)->finalize (object);
 }
 
@@ -1153,6 +1176,8 @@ webrtc_data_channel_init (WebRTCDataChannel * channel)
   G_LOCK (outstanding_channels_lock);
   outstanding_channels = g_list_prepend (outstanding_channels, channel);
   G_UNLOCK (outstanding_channels_lock);
+
+  g_weak_ref_init (&channel->webrtcbin_weak, NULL);
 }
 
 static void
@@ -1201,4 +1226,11 @@ webrtc_data_channel_link_to_sctp (WebRTCDataChannel * channel,
       _on_sctp_notify_state_unlocked (G_OBJECT (sctp_transport), channel);
     }
   }
+}
+
+void
+webrtc_data_channel_set_webrtcbin (WebRTCDataChannel * channel,
+    GstWebRTCBin * webrtcbin)
+{
+  g_weak_ref_set (&channel->webrtcbin_weak, webrtcbin);
 }

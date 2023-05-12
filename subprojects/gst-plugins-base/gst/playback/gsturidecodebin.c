@@ -1215,7 +1215,7 @@ new_decoded_pad_added_cb (GstElement * element, GstPad * pad,
   g_object_set_data (G_OBJECT (pad), "uridecodebin.ghostpad", newpad);
 
   /* add event probe to monitor tags */
-  stream = g_slice_alloc0 (sizeof (GstURIDecodeBinStream));
+  stream = g_new0 (GstURIDecodeBinStream, 1);
   stream->probe_id =
       gst_pad_add_probe (pad, GST_PAD_PROBE_TYPE_EVENT_DOWNSTREAM,
       decoded_pad_event_probe, decoder, NULL);
@@ -2140,7 +2140,7 @@ could_not_link:
 static void
 free_stream (gpointer value)
 {
-  g_slice_free (GstURIDecodeBinStream, value);
+  g_free (value);
 }
 
 /* remove source and all related elements */
@@ -2309,6 +2309,10 @@ setup_source (GstURIDecodeBin * decoder)
   /* stream admin setup */
   decoder->streams = g_hash_table_new_full (NULL, NULL, NULL, free_stream);
 
+  if (gst_element_set_state (source,
+          GST_STATE_READY) != GST_STATE_CHANGE_SUCCESS)
+    goto state_fail;
+
   /* see if the source element emits raw audio/video all by itself,
    * if so, we can create streams for the pads and be done with it.
    * Also check that is has source pads, if not, we assume it will
@@ -2370,6 +2374,12 @@ setup_source (GstURIDecodeBin * decoder)
 no_source:
   {
     /* error message was already posted */
+    return FALSE;
+  }
+state_fail:
+  {
+    GST_ELEMENT_ERROR (decoder, CORE, FAILED,
+        (_("Source element can't be prepared")), (NULL));
     return FALSE;
   }
 invalid_source:

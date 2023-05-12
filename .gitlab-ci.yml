@@ -1,9 +1,9 @@
 include:
   - project: 'freedesktop/ci-templates'
-    ref: 14731f78c23c7b523a85a26a068ade9ac1ecd2f3
+    ref: 9f0eb526291fe74651fe1430cbd2397f4c0a819b
     file: '/templates/fedora.yml'
   - project: 'freedesktop/ci-templates'
-    ref: 14731f78c23c7b523a85a26a068ade9ac1ecd2f3
+    ref: 9f0eb526291fe74651fe1430cbd2397f4c0a819b
     file: '/templates/debian.yml'
   ###
   # IMPORTANT
@@ -28,14 +28,18 @@ variables:
 
   FDO_UPSTREAM_REPO: 'gstreamer/gstreamer'
 
+  MESON_COMMIT:
+    description: "Overwrite the meson version installed on the CI images with the specified meson commit"
+    value: ""
+
   FEDORA_AMD64_SUFFIX: 'amd64/fedora'
   INDENT_AMD64_SUFFIX: 'amd64/gst-indent'
+  COMMITLINT_AMD64_SUFFIX: 'amd64/commitlint'
   WINDOWS_AMD64_SUFFIX: 'amd64/windows'
 
   WINDOWS_IMAGE: "$CI_REGISTRY_IMAGE/$WINDOWS_AMD64_SUFFIX:$WINDOWS_TAG-$GST_UPSTREAM_BRANCH"
   WINDOWS_UPSTREAM_IMAGE: "$CI_REGISTRY/$FDO_UPSTREAM_REPO/$WINDOWS_AMD64_SUFFIX:$WINDOWS_TAG-$GST_UPSTREAM_BRANCH"
 
-  MESON_BUILDTYPE_ARGS: --default-library=both
   DEFAULT_MESON_ARGS: >
     -Dlibnice:tests=disabled
     -Dlibnice:examples=disabled
@@ -50,24 +54,15 @@ variables:
     -Drtsp_server=enabled
     -Dvaapi=enabled
     -Dsharp=disabled
+    -Drs=disabled
     -Dgpl=enabled
 
-  MESON_GST_WERROR: >
-    -Dgstreamer:werror=true
-    -Dgst-plugins-base:werror=true
-    -Dgst-plugins-good:werror=true
-    -Dgst-plugins-ugly:werror=true
-    -Dgst-plugins-bad:werror=true
-    -Dgst-rtsp-server:werror=true
-    -Dgst-libav:werror=true
-    -Dgst-examples:werror=true
-    -Dgst-editing-services:werror=true
-    -Dgst-docs:werror=true
-    -Dgst-omx:werror=true
-    -Dgst-devtools:werror=true
-    -Dgst-python:werror=true
-    -Dgstreamer-vaapi:werror=true
-    -Dgstreamer-sharp:werror=true
+  SIMPLE_BUILD: >
+    ${DEFAULT_MESON_ARGS}
+    -Dsharp=enabled
+    -Domx=enabled
+    -Dgst-omx:target=generic
+    -Ddoc=disabled
 
 workflow:
   # https://docs.gitlab.com/ee/ci/yaml/index.html#switch-between-branch-pipelines-and-merge-request-pipelines
@@ -136,7 +131,7 @@ fedora amd64 docker:
 
 .gst-indent image:
   variables:
-    FDO_DISTRIBUTION_VERSION: 'stretch'
+    FDO_DISTRIBUTION_VERSION: 'bookworm'
     FDO_REPO_SUFFIX: "$INDENT_AMD64_SUFFIX"
     FDO_DISTRIBUTION_TAG: "$INDENT_TAG-$GST_UPSTREAM_BRANCH"
     FDO_DISTRIBUTION_PACKAGES: 'curl indent git findutils'
@@ -150,10 +145,24 @@ gst-indent amd64 docker:
   # Do not depend on the trigger, as we want to run indent always
   needs: []
 
+.commitlint image:
+  variables:
+    FDO_DISTRIBUTION_VERSION: '37'
+    FDO_REPO_SUFFIX: "$COMMITLINT_AMD64_SUFFIX"
+    FDO_DISTRIBUTION_TAG: "$LINT_TAG-$GST_UPSTREAM_BRANCH"
+    FDO_DISTRIBUTION_PACKAGES: 'python3-pip git'
+    FDO_DISTRIBUTION_EXEC: 'ci/docker/lint/prepare.sh'
+
+commitlint docker:
+  extends:
+    - '.commitlint image'
+    - '.fdo.container-build@fedora'
+  stage: 'preparation'
+  # Do not depend on the trigger, as we want to run indent always
+  needs: []
+
 windows amd64 docker:
   stage: "preparation"
-  needs:
-    - "trigger"
   timeout: '3h'
   variables:
     # Unlike the buildah/linux jobs, this file
@@ -201,16 +210,53 @@ gst indent:
     - if: '$CI_PROJECT_NAMESPACE != "gstreamer" || $CI_COMMIT_BRANCH != $GST_UPSTREAM_BRANCH'
       when: 'always'
 
+commitlint:
+  extends:
+    - '.commitlint image'
+    - '.fdo.suffixed-image@fedora'
+  stage: 'preparation'
+  variables:
+    GIT_STRATEGY: fetch
+    GIT_DEPTH: 100
+  needs:
+    - job: 'commitlint docker'
+      artifacts: false
+  script:
+    - echo $CI_MERGE_REQUEST_DIFF_BASE_SHA
+    - gitlint --commits $CI_MERGE_REQUEST_DIFF_BASE_SHA..HEAD
+  rules:
+    # Only run on MR as we need CI_MERGE_REQUEST_DIFF_BASE_SHA to know
+    # what commits to check
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+
 #
 # build setup templates
 #
+# Expects:
+# BUILD_TYPE: Dynamic or shared library
+#   must be 'shared' or 'static' or 'both'
+#   corresponds to --default-library meson arg
+# BUILD_GST_DEBUG: Build with gst debug symbols or not
+#   must be a string of a boolean, "true" or "false". Not yaml bool.
+#   corresponds to -Dgstreamer:gst_debug meson arg
+# GST_WERROR: make warning fatal or not
+#   must be a string of a boolean, "true" or "false". Not yaml bool.
+#
 .build_template: &build
+  - export RUSTUP_HOME="/usr/local/rustup"
+  - export CARGO_HOME="/usr/local/cargo"
+  - export PATH="/usr/local/cargo/bin:$PATH"
   - date -R
   - ci/scripts/handle-subprojects-cache.py subprojects/
   - date -R
-  - echo $MESON_ARGS
+  - export ARGS="--default-library=${BUILD_TYPE:-both} -Dgstreamer:gst_debug=${BUILD_GST_DEBUG:-true} ${MESON_ARGS}"
+  - |-
+    if [ $GST_WERROR == "true" ]; then
+      export ARGS="$ARGS --native-file ./ci/meson/gst-werror.ini"
+    fi
+  - echo $ARGS
   - date -R
-  - meson build/ $MESON_ARGS
+  - meson build/ $ARGS
   - date -R
   - ninja -C build/
   - date -R
@@ -228,6 +274,7 @@ gst indent:
 
 .base_modules_changes: &modules_changes
   - .gitlab-ci.yml
+  - .gitlab-image-tags.yml
   - gst-env.py
   - ci/gitlab/*.py
   - meson.build
@@ -247,16 +294,6 @@ gst indent:
   - subprojects/gstreamer-vaapi/**/*
   - subprojects/gst-rtsp-server/**/*
 
-.simple_fedora_build: &simple_build >-
-  ${DEFAULT_MESON_ARGS}
-  -Dsharp=enabled
-  -Domx=enabled
-  -Dgst-omx:target=generic
-  -Ddoc=disabled
-  -Drs=disabled
-  ${MESON_BUILDTYPE_ARGS}
-  ${MESON_GST_WERROR}
-
 .build:
   stage: 'build'
   extends:
@@ -267,7 +304,9 @@ gst indent:
   # Also need to take into account I/O of pulling docker images and uploading artifacts
   timeout: '45min'
   variables:
-    MESON_ARGS: "${DEFAULT_MESON_ARGS} ${MESON_BUILDTYPE_ARGS} ${MESON_GST_WERROR}"
+    BUILD_GST_DEBUG: "true"
+    GST_WERROR: "true"
+    MESON_ARGS: "${DEFAULT_MESON_ARGS}"
   script:
     - *build
     - ./gst-env.py gst-inspect-1.0 --version
@@ -296,16 +335,9 @@ gst indent:
     - "trigger"
     - "fedora amd64 docker"
   variables:
-    MESON_ARGS: *simple_build
+    GST_WERROR: "true"
+    MESON_ARGS: "${SIMPLE_BUILD}"
 
-build fedora x86_64:
-  extends:
-    - '.fedora image'
-    - '.fdo.suffixed-image@fedora'
-    - '.build fedora x86_64'
-  needs:
-    - "trigger"
-    - "fedora amd64 docker"
   script:
     - *build
     - ./gst-env.py gst-inspect-1.0 --version
@@ -313,22 +345,63 @@ build fedora x86_64:
     - meson install --destdir $CI_PROJECT_DIR/destdir -C build
     - rm -rf $CI_PROJECT_DIR/destdir
 
-build nodebug fedora x86_64:
-  extends:
-    - '.fedora image'
-    - '.fdo.suffixed-image@fedora'
-    - '.build'
-  needs:
-    - "trigger"
-    - "fedora amd64 docker"
+build fedora gcc:
+  extends: '.build fedora x86_64'
   variables:
-    MESON_ARGS: "${DEFAULT_MESON_ARGS} -Dsharp=enabled -Dgstreamer:gst_debug=false -Domx=enabled -Dgst-omx:target=generic ${MESON_BUILDTYPE_ARGS} ${MESON_GST_WERROR}"
+    CC: 'ccache gcc'
+    CXX: 'ccache g++'
+  parallel:
+    matrix:
+      - BUILD_TYPE: ['shared', 'both']
+        BUILD_GST_DEBUG: ["true", "false", ]
 
-build clang fedora x86_64:
+      - BUILD_TYPE: ['static']
+        BUILD_GST_DEBUG: ["true", "false"]
+        # Passing Dpython=enabled prohibits us from -Dgst-editing-services:python=disabled which we
+        # currently need to statically build ges.
+        #
+        # subprojects/gst-editing-services/meson.build:153:4: ERROR: Problem encountered: Want to build python based modules but it is not supported while static building
+        # https://github.com/mesonbuild/meson/issues/5214
+        # https://gitlab.freedesktop.org/gstreamer/gstreamer/-/merge_requests/4281?commit_id=d1a687b61d8fbc5ae35b4bb62aa7fd1d091818f2#note_1875699
+        #
+        # VAAPI can't be build statically yet
+        # subprojects/gstreamer-vaapi/meson.build:8:2: ERROR: Problem encountered: GStreamer-VAAPI plugin not supported with `static` builds yet.
+        MESON_ARGS: "${DEFAULT_MESON_ARGS} -Dvaapi=disabled -Dpython=auto -Dgst-editing-services:python=disabled -Dintrospection=disabled -Ddoc=disabled"
+
+build fedora clang:
   extends: '.build fedora x86_64'
   variables:
     CC: 'ccache clang'
     CXX: 'ccache clang++'
+  parallel:
+    matrix:
+      - BUILD_TYPE: ['shared', 'both']
+        BUILD_GST_DEBUG: ["true"]
+
+      - BUILD_TYPE: ['shared', 'both']
+        BUILD_GST_DEBUG: ["false"]
+        # FIXME:
+        # clang complains about the gir files when gst_debug is false:
+        # We can merge the two parallel: matrix after
+        #
+        # [1352/5496] Generating subprojects/gstreamer/gst/Gst-1.0.gir with a custom command
+        # ../subprojects/gstreamer/gst/gstchildproxy.h:57: Error: Gst: identifier not found on the first line:
+        #   * GstChildProxyInterface.get_child_by_name:
+        #     ^
+        MESON_ARGS: "${SIMPLE_BUILD} -Dintrospection=disabled"
+
+      - BUILD_TYPE: ['static']
+        BUILD_GST_DEBUG: ["true", "false"]
+        # Passing Dpython=enabled prohibits us from -Dgst-editing-services:python=disabled which we
+        # currently need to statically build ges.
+        #
+        # subprojects/gst-editing-services/meson.build:153:4: ERROR: Problem encountered: Want to build python based modules but it is not supported while static building
+        # https://github.com/mesonbuild/meson/issues/5214
+        # https://gitlab.freedesktop.org/gstreamer/gstreamer/-/merge_requests/4281?commit_id=d1a687b61d8fbc5ae35b4bb62aa7fd1d091818f2#note_1875699
+        #
+        # VAAPI can't be build statically yet
+        # subprojects/gstreamer-vaapi/meson.build:8:2: ERROR: Problem encountered: GStreamer-VAAPI plugin not supported with `static` builds yet.
+        MESON_ARGS: "${DEFAULT_MESON_ARGS} -Dvaapi=disabled -Dpython=auto -Dgst-editing-services:python=disabled -Dintrospection=disabled -Ddoc=disabled"
 
 .build windows:
   image: $WINDOWS_IMAGE
@@ -451,7 +524,8 @@ build msys2 :
   needs:
     - "trigger"
   variables:
-    MESON_ARGS: *simple_build
+    GST_WERROR: "true"
+    MESON_ARGS: "${SIMPLE_BUILD}"
 
     # Disable colored output to avoid weird rendering issues
     GST_DEBUG_NO_COLOR: "true"
@@ -514,36 +588,54 @@ integration testsuites fedora:
   extends: '.test fedora x86_64'
   parallel: 8
   variables:
+    MESON_ARGS: >
+      ${SIMPLE_BUILD}
+      -Domx=disabled
+      -Dsharp=disabled
+      -Dvaapi=disabled
+      -Dexamples=disabled
+      -Dgst-examples=disabled
+      -Dtests=disabled
+      -Dnls=disabled
+      -Dqt5=disabled
+      -Dgstreamer:benchmarks=disabled
+      -Dgst-plugins-good:gtk3=disabled
+      -Dgst-plugins-bad:microdns=disabled
+      -Dgst-plugins-bad:avtp=disabled
+      -Dgst-plugins-bad:opencv=disabled
+      -Dgst-plugins-bad:webrtc=disabled
     EXTRA_VALIDATE_ARGS: "--timeout-factor=2 --retry-on-failures --parts=${CI_NODE_TOTAL} --part-index=${CI_NODE_INDEX} --sync"
     TEST_SUITE: "validate ges"
+
+playbin3 integration:
+  extends: 'integration testsuites fedora'
+  variables:
+    USE_PLAYBIN3: 1
+  # Let's allow failures for now until we're 100% sure everything works
+  allow_failure: true
 
 # gstreamer-full:
 gstreamer-full static build:
   extends: '.build fedora x86_64'
   stage: 'build'
   variables:
+    BUILD_TYPE: "static"
     MESON_ARGS: >
-      --default-library=static
       -Ddoc=disabled
-      $MESON_GST_WERROR
 
   script:
   - *build
   - meson test -C build -v test-gst-full
-  artifacts:
-    expire_in: "7 days"
-    when: "always"
-    paths:
-      - 'meson-logs/'
 
 gstreamer-full-minimal static build:
   extends: 'gstreamer-full static build'
   stage: 'build'
   variables:
+    BUILD_GST_DEBUG: 'false'
+    GST_WERROR: "true"
+    BUILD_TYPE: "static"
     MESON_ARGS: >
-      --default-library=static
       -Ddoc=disabled
-      -Dgstreamer:gst_debug=false
       -Dauto_features=disabled
       -Dgstreamer:check=enabled
       -Dtests=enabled
@@ -554,7 +646,6 @@ gstreamer-full-minimal static build:
       -Dgst-full-typefind-functions=typefindfunctions:wav,flv
       -Dgst-full-device-providers=alsa:alsadeviceprovider
       -Dgst-full-dynamic-types=pbtypes:video_multiview_flagset
-      $MESON_GST_WERROR
 
   script:
   - *build
@@ -562,11 +653,6 @@ gstreamer-full-minimal static build:
   - meson test -C build test-gst-full-features --test-args "-e filesrc,identity,fakesink -E filesink,capsfilter -t audio/x-wav -T video/vivo -d alsadeviceprovider -D v4l2deviceprovider -l GstVideoMultiviewFlagsSet"
   - strip build/libgstreamer-full-1.0.so
   - ls -l build/libgstreamer-full-1.0.so
-  artifacts:
-    expire_in: "7 days"
-    when: "always"
-    paths:
-      - 'meson-logs/'
 
 # Valgrind
 .valgrind fedora x86_64:
@@ -662,16 +748,23 @@ valgrind ges:
       - subprojects/gst-plugins-bad/**/*
       - subprojects/gst-editing-services/**/*
       - subprojects/gst-python/**/*
+  # valgrind ges jobs are racy across the board and simply fail too often.
+  # Someone needs to go through job logs and figure out which jobs to mark
+  # as flaky. Until then, just ignore failures.
+  allow_failure: true
 
 # ---- Integration ----- #
 
 .documentation:
   extends: '.build fedora x86_64'
   variables:
-    MESON_ARGS: *simple_build
-    MESON_BUILDTYPE_ARGS: "-Ddoc=enabled -Drs=enabled -Dgst-docs:fatal_warnings=true"
+    MESON_ARGS: >
+      ${SIMPLE_BUILD}
+      -Ddoc=enabled
+      -Drs=enabled
+      -Dgst-docs:fatal_warnings=true
     # Disable werror for the docs build, we don't need it
-    MESON_GST_WERROR: ''
+    GST_WERROR: 'false'
     CI_ARTIFACTS_URL: "${CI_PROJECT_URL}/-/jobs/${CI_JOB_ID}/artifacts/raw/"
   script:
   - export PATH=/usr/local/cargo/bin/:/usr/local/bin/:$PATH
@@ -682,12 +775,19 @@ valgrind ges:
   - meson build/ $MESON_ARGS
   - ccache --show-stats
 
+  - ninja -C build/ update_girs
+  # Ignore modifications to wrap files made by meson
+  - git checkout subprojects/*.wrap
+  - ./ci/scripts/check-diff.py "gir files"
+
   - ./gst-env.py ninja -C build/ plugins_doc_caches
   # Ignore modifications to wrap files made by meson
   - git checkout subprojects/*.wrap
-  - ./ci/scripts/check-documentation-diff.py
+  - ./ci/scripts/check-diff.py
 
-  - ./gst-env.py ninja -C build subprojects/gst-docs/GStreamer-doc
+  - export GI_TYPELIB_PATH=$PWD/girs
+  - hotdoc run --conf-file build/subprojects/gst-docs/GStreamer-doc.json
+
   - mv build/subprojects/gst-docs/GStreamer-doc/html documentation/
 
   artifacts:
@@ -695,7 +795,7 @@ valgrind ges:
     expire_in: "7 days"
     paths:
     - documentation/
-    - plugins-cache-diffs/
+    - diffs/
 
 #
 # This jobs runs in gstreamer namespace when after the merge into main branch.
@@ -759,6 +859,7 @@ cerbero trigger:
     - ci/gitlab/trigger_cerbero_pipeline.py
 
   rules:
+    - if: '$MESON_COMMIT'
     # Never run post merge
     - if: '$CI_PROJECT_NAMESPACE == "gstreamer" && $CI_COMMIT_BRANCH == $GST_UPSTREAM_BRANCH'
       when: never

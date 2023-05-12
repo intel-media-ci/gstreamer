@@ -154,7 +154,7 @@ gboolean _priv_gst_registry_remove_cache_plugins (GstRegistry *registry);
 G_GNUC_INTERNAL  void _priv_gst_registry_cleanup (void);
 
 GST_API
-gboolean _gst_plugin_loader_client_run (void);
+gboolean _gst_plugin_loader_client_run (const gchar * pipe_name);
 
 G_GNUC_INTERNAL  GstPlugin * _priv_gst_plugin_load_file_for_registry (const gchar *filename,
                                                                       GstRegistry * registry,
@@ -520,6 +520,7 @@ struct _GstClockEntryImpl
 };
 
 char * priv_gst_get_relocated_libgstreamer (void);
+gint   priv_gst_count_directories (const char *filepath);
 
 G_END_DECLS
 #endif /* __GST_PRIVATE_H__ */

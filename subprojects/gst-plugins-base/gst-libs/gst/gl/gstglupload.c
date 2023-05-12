@@ -486,11 +486,24 @@ static const UploadMethod _gl_memory_upload = {
 };
 
 #if GST_GL_HAVE_DMABUF
+typedef struct _GstEGLImageCacheEntry
+{
+  GstEGLImage *eglimage[GST_VIDEO_MAX_PLANES];
+} GstEGLImageCacheEntry;
+
+typedef struct _GstEGLImageCache
+{
+  gint ref_count;
+  GHashTable *hash_table;       /* for GstMemory -> GstEGLImageCacheEntry lookup */
+  GMutex lock;                  /* protects hash_table */
+} GstEGLImageCache;
+
 struct DmabufUpload
 {
   GstGLUpload *upload;
 
   GstEGLImage *eglimage[GST_VIDEO_MAX_PLANES];
+  GstEGLImageCache *eglimage_cache;
   GstGLFormat formats[GST_VIDEO_MAX_PLANES];
   GstBuffer *outbuf;
   GstGLVideoAllocationParams *params;
@@ -503,6 +516,111 @@ struct DmabufUpload
   gpointer out_caps;
 };
 
+static void
+gst_egl_image_cache_ref (GstEGLImageCache * cache)
+{
+  g_atomic_int_inc (&cache->ref_count);
+}
+
+static void
+gst_egl_image_cache_unref (GstEGLImageCache * cache)
+{
+  if (g_atomic_int_dec_and_test (&cache->ref_count)) {
+    g_hash_table_unref (cache->hash_table);
+    g_mutex_clear (&cache->lock);
+  }
+}
+
+static void
+gst_egl_image_cache_entry_remove (GstEGLImageCache * cache, GstMiniObject * mem)
+{
+  g_mutex_lock (&cache->lock);
+  g_hash_table_remove (cache->hash_table, mem);
+  g_mutex_unlock (&cache->lock);
+  gst_egl_image_cache_unref (cache);
+}
+
+static GstEGLImageCacheEntry *
+gst_egl_image_cache_entry_new (GstEGLImageCache * cache, GstMemory * mem)
+{
+  GstEGLImageCacheEntry *cache_entry;
+
+  cache_entry = g_new0 (GstEGLImageCacheEntry, 1);
+  gst_egl_image_cache_ref (cache);
+  gst_mini_object_weak_ref (GST_MINI_OBJECT (mem),
+      (GstMiniObjectNotify) gst_egl_image_cache_entry_remove, cache);
+  g_mutex_lock (&cache->lock);
+  g_hash_table_insert (cache->hash_table, mem, cache_entry);
+  g_mutex_unlock (&cache->lock);
+
+  return cache_entry;
+}
+
+static void
+gst_egl_image_cache_entry_free (GstEGLImageCacheEntry * cache_entry)
+{
+  gint i;
+
+  for (i = 0; i < GST_VIDEO_MAX_PLANES; i++) {
+    if (cache_entry->eglimage[i])
+      gst_egl_image_unref (cache_entry->eglimage[i]);
+  }
+  g_free (cache_entry);
+}
+
+/*
+ * Looks up a cache_entry for mem if mem is different from previous_mem.
+ * If mem is the same as previous_mem, the costly lookup is skipped and the
+ * provided (previous) cache_entry is used instead.
+ *
+ * Returns the cached eglimage for the given plane from the cache_entry, or
+ * NULL. previous_mem is set to mem.
+ */
+static GstEGLImage *
+gst_egl_image_cache_lookup (GstEGLImageCache * cache, GstMemory * mem,
+    gint plane, GstMemory ** previous_mem, GstEGLImageCacheEntry ** cache_entry)
+{
+  if (mem != *previous_mem) {
+    g_mutex_lock (&cache->lock);
+    *cache_entry = g_hash_table_lookup (cache->hash_table, mem);
+    g_mutex_unlock (&cache->lock);
+    *previous_mem = mem;
+  }
+
+  if (*cache_entry)
+    return (*cache_entry)->eglimage[plane];
+
+  return NULL;
+}
+
+/*
+ * Creates a new cache_entry for mem if no cache_entry is provided.
+ * Stores the eglimage for the given plane in the cache_entry.
+ */
+static void
+gst_egl_image_cache_store (GstEGLImageCache * cache, GstMemory * mem,
+    gint plane, GstEGLImage * eglimage, GstEGLImageCacheEntry ** cache_entry)
+{
+  if (!(*cache_entry))
+    *cache_entry = gst_egl_image_cache_entry_new (cache, mem);
+  (*cache_entry)->eglimage[plane] = eglimage;
+}
+
+static GstEGLImageCache *
+gst_egl_image_cache_new (void)
+{
+  GstEGLImageCache *cache;
+
+  cache = g_new0 (GstEGLImageCache, 1);
+  cache->ref_count = 1;
+
+  cache->hash_table = g_hash_table_new_full (g_direct_hash, g_direct_equal,
+      NULL, (GDestroyNotify) gst_egl_image_cache_entry_free);
+  g_mutex_init (&cache->lock);
+
+  return cache;
+}
+
 static GstStaticCaps _dma_buf_upload_caps =
     GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE_WITH_FEATURES
     (GST_CAPS_FEATURE_MEMORY_DMABUF,
@@ -514,6 +632,7 @@ _dma_buf_upload_new (GstGLUpload * upload)
 {
   struct DmabufUpload *dmabuf = g_new0 (struct DmabufUpload, 1);
   dmabuf->upload = upload;
+  dmabuf->eglimage_cache = gst_egl_image_cache_new ();
   dmabuf->target = GST_GL_TEXTURE_TARGET_2D;
   return dmabuf;
 }
@@ -576,38 +695,6 @@ _dma_buf_upload_transform_caps (gpointer impl, GstGLContext * context,
   return ret;
 }
 
-static GQuark
-_eglimage_quark (gint plane)
-{
-  static GQuark quark[5] = { 0 };
-  static const gchar *quark_str[] = {
-    "GstGLDMABufEGLImage0",
-    "GstGLDMABufEGLImage1",
-    "GstGLDMABufEGLImage2",
-    "GstGLDMABufEGLImage3",
-    "GstGLDMABufEGLImage",
-  };
-
-  if (!quark[plane])
-    quark[plane] = g_quark_from_static_string (quark_str[plane]);
-
-  return quark[plane];
-}
-
-static GstEGLImage *
-_get_cached_eglimage (GstMemory * mem, gint plane)
-{
-  return gst_mini_object_get_qdata (GST_MINI_OBJECT (mem),
-      _eglimage_quark (plane));
-}
-
-static void
-_set_cached_eglimage (GstMemory * mem, GstEGLImage * eglimage, gint plane)
-{
-  return gst_mini_object_set_qdata (GST_MINI_OBJECT (mem),
-      _eglimage_quark (plane), eglimage, (GDestroyNotify) gst_egl_image_unref);
-}
-
 static gboolean
 _dma_buf_upload_accept (gpointer impl, GstBuffer * buffer, GstCaps * in_caps,
     GstCaps * out_caps)
@@ -619,6 +706,8 @@ _dma_buf_upload_accept (gpointer impl, GstBuffer * buffer, GstCaps * in_caps,
   GstVideoMeta *meta;
   guint n_mem;
   GstMemory *mems[GST_VIDEO_MAX_PLANES];
+  GstMemory *previous_mem = NULL;
+  GstEGLImageCacheEntry *cache_entry = NULL;
   gsize offset[GST_VIDEO_MAX_PLANES];
   gint fd[GST_VIDEO_MAX_PLANES];
   guint i;
@@ -643,8 +732,7 @@ _dma_buf_upload_accept (gpointer impl, GstBuffer * buffer, GstCaps * in_caps,
   if (dmabuf->target == GST_GL_TEXTURE_TARGET_EXTERNAL_OES &&
       !gst_gl_context_check_feature (dmabuf->upload->context,
           "GL_OES_EGL_image_external")) {
-    GST_DEBUG_OBJECT (dmabuf->upload,
-        "no EGL_KHR_image_base_external extension");
+    GST_DEBUG_OBJECT (dmabuf->upload, "no GL_OES_EGL_image_external extension");
     return FALSE;
   }
 
@@ -746,12 +834,14 @@ _dma_buf_upload_accept (gpointer impl, GstBuffer * buffer, GstCaps * in_caps,
   } else
     dmabuf->n_mem = n_planes;
 
-  /* Now create an EGLImage for each dmabufs */
+  /* Now create an EGLImage for each dmabuf */
   for (i = 0; i < dmabuf->n_mem; i++) {
-    gint cache_id = dmabuf->direct ? 4 : i;
-
-    /* check if one is cached */
-    dmabuf->eglimage[i] = _get_cached_eglimage (mems[i], cache_id);
+    /*
+     * Check if an EGLImage is cached. Remember the previous memory and cache
+     * entry to avoid repeated lookups if all mems[i] point to the same memory.
+     */
+    dmabuf->eglimage[i] = gst_egl_image_cache_lookup (dmabuf->eglimage_cache,
+        mems[i], i, &previous_mem, &cache_entry);
     if (dmabuf->eglimage[i]) {
       dmabuf->formats[i] = dmabuf->eglimage[i]->format;
       continue;
@@ -771,7 +861,8 @@ _dma_buf_upload_accept (gpointer impl, GstBuffer * buffer, GstCaps * in_caps,
       return FALSE;
     }
 
-    _set_cached_eglimage (mems[i], dmabuf->eglimage[i], cache_id);
+    gst_egl_image_cache_store (dmabuf->eglimage_cache, mems[i], i,
+        dmabuf->eglimage[i], &cache_entry);
     dmabuf->formats[i] = dmabuf->eglimage[i]->format;
   }
 
@@ -837,6 +928,7 @@ _dma_buf_upload_free (gpointer impl)
 
   if (dmabuf->params)
     gst_gl_allocation_params_free ((GstGLAllocationParams *) dmabuf->params);
+  gst_egl_image_cache_unref (dmabuf->eglimage_cache);
 
   g_free (impl);
 }
@@ -950,7 +1042,7 @@ _direct_dma_buf_upload_transform_caps (gpointer impl, GstGLContext * context,
 
 static const UploadMethod _direct_dma_buf_upload = {
   "DirectDmabuf",
-  0,
+  METHOD_FLAG_CAN_ACCEPT_RAW,
   &_dma_buf_upload_caps,
   &_direct_dma_buf_upload_new,
   &_direct_dma_buf_upload_transform_caps,
@@ -972,7 +1064,7 @@ _direct_dma_buf_external_upload_new (GstGLUpload * upload)
 
 static const UploadMethod _direct_dma_buf_external_upload = {
   "DirectDmabufExternal",
-  0,
+  METHOD_FLAG_CAN_ACCEPT_RAW,
   &_dma_buf_upload_caps,
   &_direct_dma_buf_external_upload_new,
   &_direct_dma_buf_upload_transform_caps,
@@ -1253,12 +1345,12 @@ _raw_upload_frame_new (struct RawUpload *raw, GstBuffer * buffer)
   if (!buffer)
     return NULL;
 
-  frame = g_slice_new (struct RawUploadFrame);
+  frame = g_new (struct RawUploadFrame, 1);
   frame->ref_count = 1;
 
   if (!gst_video_frame_map (&frame->frame, &raw->upload->priv->in_info,
           buffer, GST_MAP_READ)) {
-    g_slice_free (struct RawUploadFrame, frame);
+    g_free (frame);
     return NULL;
   }
 
@@ -1286,7 +1378,7 @@ _raw_upload_frame_unref (struct RawUploadFrame *frame)
 {
   if (g_atomic_int_dec_and_test (&frame->ref_count)) {
     gst_video_frame_unmap (&frame->frame);
-    g_slice_free (struct RawUploadFrame, frame);
+    g_free (frame);
   }
 }
 

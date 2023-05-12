@@ -276,6 +276,7 @@ gst_h264_parse_reset_stream_info (GstH264Parse * h264parse)
   h264parse->packetized = FALSE;
   h264parse->push_codec = FALSE;
   h264parse->first_frame = TRUE;
+  h264parse->ignore_vui_fps = FALSE;
 
   gst_buffer_replace (&h264parse->codec_data, NULL);
   gst_buffer_replace (&h264parse->codec_data_in, NULL);
@@ -802,7 +803,7 @@ gst_h264_parse_process_sei (GstH264Parse * h264parse, GstH264NalUnit * nalu)
               if (sei.payload.frame_packing.spatial_flipping_flag) {
                 /* One of the views is flopped. */
                 if (sei.payload.frame_packing.frame0_flipped_flag !=
-                    ! !(mview_flags &
+                    !!(mview_flags &
                         GST_VIDEO_MULTIVIEW_FLAGS_RIGHT_VIEW_FIRST))
                   /* the left view is flopped */
                   mview_flags |= GST_VIDEO_MULTIVIEW_FLAGS_LEFT_FLOPPED;
@@ -815,7 +816,7 @@ gst_h264_parse_process_sei (GstH264Parse * h264parse, GstH264NalUnit * nalu)
               if (sei.payload.frame_packing.spatial_flipping_flag) {
                 /* One of the views is flipped, */
                 if (sei.payload.frame_packing.frame0_flipped_flag !=
-                    ! !(mview_flags &
+                    !!(mview_flags &
                         GST_VIDEO_MULTIVIEW_FLAGS_RIGHT_VIEW_FIRST))
                   /* the left view is flipped */
                   mview_flags |= GST_VIDEO_MULTIVIEW_FLAGS_LEFT_FLIPPED;
@@ -1275,6 +1276,10 @@ gst_h264_parse_handle_frame_packetized (GstBaseParse * parse,
       tmp_frame.overhead = frame->overhead;
       tmp_frame.buffer = gst_buffer_copy_region (buffer, GST_BUFFER_COPY_ALL,
           nalu.offset, nalu.size);
+      /* Don't lose timestamp when offset is not 0. */
+      GST_BUFFER_PTS (tmp_frame.buffer) = GST_BUFFER_PTS (buffer);
+      GST_BUFFER_DTS (tmp_frame.buffer) = GST_BUFFER_DTS (buffer);
+      GST_BUFFER_DURATION (tmp_frame.buffer) = GST_BUFFER_DURATION (buffer);
 
       /* Set marker on last packet */
       if (nl + nalu.size == left) {
@@ -1412,9 +1417,8 @@ gst_h264_parse_handle_frame (GstBaseParse * parse,
         }
         break;
       case GST_H264_PARSER_NO_NAL:
-        /* Start code may have up to 4 bytes */
-        *skipsize = size - 4;
-        goto skip;
+        /* we don't have enough bytes to make any decisions yet */
+        goto more;
         break;
       default:
         /* should not really occur either */
@@ -1438,6 +1442,13 @@ gst_h264_parse_handle_frame (GstBaseParse * parse,
         GST_DEBUG_OBJECT (h264parse, "complete nal (offset, size): (%u, %u) ",
             nalu.offset, nalu.size);
         break;
+      case GST_H264_PARSER_NO_NAL:
+        /* In NAL alignment, assume the NAL is broken */
+        if (h264parse->in_align == GST_H264_PARSE_ALIGN_NAL ||
+            h264parse->in_align == GST_H264_PARSE_ALIGN_AU) {
+          goto broken;
+        }
+        goto more;
       case GST_H264_PARSER_NO_NAL_END:
         /* In NAL alignment, assume the NAL is complete */
         if (h264parse->in_align == GST_H264_PARSE_ALIGN_NAL ||
@@ -1470,10 +1481,6 @@ gst_h264_parse_handle_frame (GstBaseParse * parse,
         /* should not really occur either */
         GST_ELEMENT_ERROR (h264parse, STREAM, FORMAT,
             ("Error parsing H.264 stream"), ("Invalid H.264 stream"));
-        goto invalid_stream;
-      case GST_H264_PARSER_NO_NAL:
-        GST_ELEMENT_ERROR (h264parse, STREAM, FORMAT,
-            ("Error parsing H.264 stream"), ("No H.264 NAL unit found"));
         goto invalid_stream;
       case GST_H264_PARSER_BROKEN_DATA:
         GST_WARNING_OBJECT (h264parse, "input stream is corrupt; "
@@ -2035,6 +2042,82 @@ get_level_string (GstH264SPS * sps)
   }
 }
 
+typedef enum
+{
+  GST_H264_LEVEL_L1 = 10,
+  GST_H264_LEVEL_L1B = 9,
+  GST_H264_LEVEL_L1_1 = 11,
+  GST_H264_LEVEL_L1_2 = 12,
+  GST_H264_LEVEL_L1_3 = 13,
+  GST_H264_LEVEL_L2_0 = 20,
+  GST_H264_LEVEL_L2_1 = 21,
+  GST_H264_LEVEL_L2_2 = 22,
+  GST_H264_LEVEL_L3 = 30,
+  GST_H264_LEVEL_L3_1 = 31,
+  GST_H264_LEVEL_L3_2 = 32,
+  GST_H264_LEVEL_L4 = 40,
+  GST_H264_LEVEL_L4_1 = 41,
+  GST_H264_LEVEL_L4_2 = 42,
+  GST_H264_LEVEL_L5 = 50,
+  GST_H264_LEVEL_L5_1 = 51,
+  GST_H264_LEVEL_L5_2 = 52,
+  GST_H264_LEVEL_L6 = 60,
+  GST_H264_LEVEL_L6_1 = 61,
+  GST_H264_LEVEL_L6_2 = 62,
+} GstH264Level;
+
+typedef struct
+{
+  GstH264Level level;
+  guint max_sample_per_sec;
+} GstH264LevelLimit;
+
+static const GstH264LevelLimit level_limits_map[] = {
+  {GST_H264_LEVEL_L1, 380160},
+  {GST_H264_LEVEL_L1B, 380160},
+  {GST_H264_LEVEL_L1_1, 768000},
+  {GST_H264_LEVEL_L1_2, 1536000},
+  {GST_H264_LEVEL_L1_3, 3041280},
+  {GST_H264_LEVEL_L2_0, 3041280},
+  {GST_H264_LEVEL_L2_1, 5068800},
+  {GST_H264_LEVEL_L2_2, 5184000},
+  {GST_H264_LEVEL_L3, 10368000},
+  {GST_H264_LEVEL_L3_1, 27648000},
+  {GST_H264_LEVEL_L3_2, 55296000},
+  {GST_H264_LEVEL_L4, 62914560},
+  {GST_H264_LEVEL_L4_1, 62914560},
+  {GST_H264_LEVEL_L4_2, 62914560},
+  {GST_H264_LEVEL_L5, 150994994},
+  {GST_H264_LEVEL_L5_1, 251658240},
+  {GST_H264_LEVEL_L5_2, 530841600},
+  {GST_H264_LEVEL_L6, 1069547520},
+  {GST_H264_LEVEL_L6_1, 2139095040},
+  {GST_H264_LEVEL_L6_2, 4278190080},
+};
+
+/* A.3.4 Effect of level limits on frame rate (informative) */
+static guint
+get_max_samples_per_second (const GstH264SPS * sps)
+{
+  guint i;
+  guint n_levels = G_N_ELEMENTS (level_limits_map);
+  GstH264Level level = (GstH264Level) sps->level_idc;
+
+  if (level == GST_H264_LEVEL_L1_1 &&
+      (sps->profile_idc == 66 || sps->profile_idc == 77) &&
+      sps->constraint_set3_flag) {
+    /* Level 1b */
+    level = GST_H264_LEVEL_L1B;
+  }
+
+  for (i = 0; i < n_levels; i++) {
+    if (level == level_limits_map[i].level)
+      return level_limits_map[i].max_sample_per_sec;
+  }
+
+  return level_limits_map[n_levels - 1].max_sample_per_sec;
+}
+
 static void
 gst_h264_parse_update_src_caps (GstH264Parse * h264parse, GstCaps * caps)
 {
@@ -2118,6 +2201,32 @@ gst_h264_parse_update_src_caps (GstH264Parse * h264parse, GstCaps * caps)
      * it in case we have no info */
     gst_h264_video_calculate_framerate (sps, h264parse->field_pic_flag,
         h264parse->sei_pic_struct, &fps_num, &fps_den);
+
+    /* Checks whether given framerate makes sense or not
+     * See also A.3.4 Effect of level limits on frame rate (informative)
+     */
+    h264parse->ignore_vui_fps = FALSE;
+    if (fps_num > 0 && fps_den > 0 && sps->width > 0 && sps->height > 0 &&
+        sps->vui_parameters_present_flag &&
+        sps->vui_parameters.timing_info_present_flag) {
+      guint luma_samples = sps->width * sps->height;
+      guint max_samples = get_max_samples_per_second (sps);
+      gdouble max_fps, cur_fps;
+
+      cur_fps = (gdouble) fps_num / fps_den;
+      max_fps = (gdouble) max_samples / luma_samples;
+
+      /* XXX: allows up to 2x higher framerate */
+      if (max_fps * 2 < cur_fps) {
+        GST_WARNING_OBJECT (h264parse,
+            "VUI framerate %.1f exceeds allowed maximum %.1f",
+            cur_fps, max_fps);
+        fps_num = 0;
+        fps_den = 1;
+        h264parse->ignore_vui_fps = TRUE;
+      }
+    }
+
     if (G_UNLIKELY (h264parse->fps_num != fps_num
             || h264parse->fps_den != fps_den)) {
       GST_DEBUG_OBJECT (h264parse, "framerate changed %d/%d", fps_num, fps_den);
@@ -2142,15 +2251,19 @@ gst_h264_parse_update_src_caps (GstH264Parse * h264parse, GstCaps * caps)
       GstVideoColorimetry ci = { 0, };
       gchar *old_colorimetry = NULL;
 
-      if (vui->video_full_range_flag)
-        ci.range = GST_VIDEO_COLOR_RANGE_0_255;
-      else
-        ci.range = GST_VIDEO_COLOR_RANGE_16_235;
-
       ci.matrix = gst_video_color_matrix_from_iso (vui->matrix_coefficients);
       ci.transfer =
           gst_video_transfer_function_from_iso (vui->transfer_characteristics);
       ci.primaries = gst_video_color_primaries_from_iso (vui->colour_primaries);
+
+      if (ci.matrix != GST_VIDEO_COLOR_MATRIX_UNKNOWN
+          && ci.transfer != GST_VIDEO_TRANSFER_UNKNOWN
+          && ci.primaries != GST_VIDEO_COLOR_PRIMARIES_UNKNOWN) {
+        if (vui->video_full_range_flag)
+          ci.range = GST_VIDEO_COLOR_RANGE_0_255;
+        else
+          ci.range = GST_VIDEO_COLOR_RANGE_16_235;
+      }
 
       old_colorimetry =
           gst_video_colorimetry_to_string (&h264parse->parsed_colorimetry);
@@ -2452,6 +2565,9 @@ gst_h264_parse_get_duration (GstH264Parse * h264parse, gboolean frame)
 
   if (!sps) {
     GST_DEBUG_OBJECT (h264parse, "referred SPS invalid");
+    goto fps_duration;
+  } else if (h264parse->ignore_vui_fps) {
+    GST_DEBUG_OBJECT (h264parse, "VUI framerate is not reliable");
     goto fps_duration;
   } else if (!sps->vui_parameters_present_flag) {
     GST_DEBUG_OBJECT (h264parse, "unable to compute duration: VUI not present");

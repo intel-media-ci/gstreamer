@@ -27,6 +27,7 @@
 #include <gst/va/gstva.h>
 
 #include "gstvacaps.h"
+#include "gstvapluginutils.h"
 
 #define GST_CAT_DEFAULT gst_va_base_transform_debug
 GST_DEBUG_CATEGORY_STATIC (GST_CAT_DEFAULT);
@@ -73,14 +74,17 @@ gst_va_base_transform_get_property (GObject * object, guint prop_id,
     GValue * value, GParamSpec * pspec)
 {
   GstVaBaseTransform *self = GST_VA_BASE_TRANSFORM (object);
+  GstVaBaseTransformClass *klass = GST_VA_BASE_TRANSFORM_GET_CLASS (self);
 
   switch (prop_id) {
     case PROP_DEVICE_PATH:{
-      if (!(self->display && GST_IS_VA_DISPLAY_DRM (self->display))) {
+      if (!self->display)
+        g_value_set_string (value, klass->render_device_path);
+      else if (GST_IS_VA_DISPLAY_PLATFORM (self->display))
+        g_object_get_property (G_OBJECT (self->display), "path", value);
+      else
         g_value_set_string (value, NULL);
-        return;
-      }
-      g_object_get_property (G_OBJECT (self->display), "path", value);
+
       break;
     }
     default:
@@ -647,8 +651,8 @@ gst_va_base_transform_class_init (GstVaBaseTransformClass * klass)
    * Since: 1.22
    */
   properties[PROP_DEVICE_PATH] = g_param_spec_string ("device-path",
-      "Device Path", "DRM device path", NULL,
-      G_PARAM_READABLE | G_PARAM_STATIC_STRINGS);
+      "Device Path", GST_VA_DEVICE_PATH_PROP_DESC, NULL,
+      GST_PARAM_DOC_SHOW_DEFAULT | G_PARAM_READABLE | G_PARAM_STATIC_STRINGS);
 
   g_object_class_install_properties (gobject_class, N_PROPERTIES, properties);
 
@@ -768,7 +772,10 @@ _get_sinkpad_pool (GstVaBaseTransform * self)
 
   if (self->priv->sinkpad_caps) {
     caps = self->priv->sinkpad_caps;
-    gst_video_info_from_caps (&in_info, caps);
+    if (!gst_video_info_from_caps (&in_info, caps)) {
+      GST_ERROR_OBJECT (self, "Cannot parse caps %" GST_PTR_FORMAT, caps);
+      return NULL;
+    }
   } else {
     caps = self->in_caps;
     in_info = self->in_info;

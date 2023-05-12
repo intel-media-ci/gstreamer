@@ -37,8 +37,10 @@
 
 #include "gstvaallocator.h"
 
+#ifndef G_OS_WIN32
 #include <sys/types.h>
 #include <unistd.h>
+#endif
 
 #include "gstvasurfacecopy.h"
 #include "gstvavideoformat.h"
@@ -125,7 +127,7 @@ gst_va_buffer_surface_unref (gpointer data)
     GST_LOG_OBJECT (buf->display, "Destroying surface %#x", buf->surface);
     va_destroy_surfaces (buf->display, &buf->surface, 1);
     gst_clear_object (&buf->display);
-    g_slice_free (GstVaBufferSurface, buf);
+    g_free (buf);
   }
 }
 
@@ -133,7 +135,7 @@ static GstVaBufferSurface *
 gst_va_buffer_surface_new (VASurfaceID surface, GstVideoFormat format,
     gint width, gint height)
 {
-  GstVaBufferSurface *buf = g_slice_new (GstVaBufferSurface);
+  GstVaBufferSurface *buf = g_new (GstVaBufferSurface, 1);
 
   g_atomic_int_set (&buf->ref_count, 0);
   g_atomic_int_set (&buf->ref_mems_count, 0);
@@ -194,7 +196,7 @@ gst_va_memory_pool_flush_unlocked (GstVaMemoryPool * self,
         GST_LOG ("Destroying surface %#x", buf->surface);
         va_destroy_surfaces (display, &buf->surface, 1);
         self->surface_count -= 1;       /* GstVaDmabufAllocator */
-        g_slice_free (GstVaBufferSurface, buf);
+        g_free (buf);
       }
     } else {
       self->surface_count -= 1; /* GstVaAllocator */
@@ -414,7 +416,8 @@ gst_va_dmabuf_mem_map (GstMemory * gmem, gsize maxsize, GstMapFlags flags)
     return NULL;
   }
 
-  va_sync_surface (self->display, surface);
+  if (!va_sync_surface (self->display, surface))
+    return NULL;
 
   return self->parent_map (gmem, maxsize, flags);
 }
@@ -495,7 +498,11 @@ gst_va_dmabuf_allocator_new (GstVaDisplay * display)
 static inline goffset
 _get_fd_size (gint fd)
 {
+#ifndef G_OS_WIN32
   return lseek (fd, 0, SEEK_END);
+#else
+  return 0;
+#endif
 }
 
 static gboolean
@@ -1170,7 +1177,7 @@ _va_free (GstAllocator * allocator, GstMemory * mem)
 
   g_mutex_clear (&va_mem->lock);
 
-  g_slice_free (GstVaMemory, va_mem);
+  g_free (va_mem);
 }
 
 static void
@@ -1311,6 +1318,10 @@ _va_map_unlocked (GstVaMemory * mem, GstMapFlags flags)
   } else if (va_allocator->feat_use_derived == GST_VA_FEATURE_DISABLED) {
     use_derived = FALSE;
   } else {
+#ifdef G_OS_WIN32
+    /* XXX: Derived image doesn't seem to work for D3D backend */
+    use_derived = FALSE;
+#else
     switch (gst_va_display_get_implementation (display)) {
       case GST_VA_IMPLEMENTATION_INTEL_IHD:
         /* On Gen7+ Intel graphics the memory is mappable but not
@@ -1336,6 +1347,7 @@ _va_map_unlocked (GstVaMemory * mem, GstMapFlags flags)
         use_derived = va_allocator->use_derived;
         break;
     }
+#endif
   }
   if (use_derived)
     info = &va_allocator->derived_info;
@@ -1444,7 +1456,7 @@ _va_share (GstMemory * mem, gssize offset, gssize size)
   if (size == -1)
     size = mem->maxsize - offset;
 
-  sub = g_slice_new (GstVaMemory);
+  sub = g_new (GstVaMemory, 1);
 
   /* the shared memory is alwyas readonly */
   gst_memory_init (GST_MEMORY_CAST (sub), GST_MINI_OBJECT_FLAGS (parent) |
@@ -1593,7 +1605,7 @@ gst_va_allocator_alloc (GstAllocator * allocator)
           &surface, 1))
     return NULL;
 
-  mem = g_slice_new (GstVaMemory);
+  mem = g_new (GstVaMemory, 1);
 
   mem->surface = surface;
   mem->surface_format = self->surface_format;
@@ -1906,7 +1918,7 @@ gst_va_allocator_set_hacks (GstAllocator * allocator, guint32 hacks)
  * gst_va_allocator_peek_display:
  * @allocator: a #GstAllocator
  *
- * Returns: (type #GstVaDisplay) (transfer none): the display which this
+ * Returns: (transfer none): the display which this
  *     @allocator belongs to. The reference of the display is unchanged.
  *
  * Since: 1.22
@@ -1929,10 +1941,10 @@ gst_va_allocator_peek_display (GstAllocator * allocator)
 /*============ Utilities =====================================================*/
 
 /**
- * gst_va_memory_get_surface:
+ * gst_va_memory_get_surface: (skip)
  * @mem: a #GstMemory
  *
- * Returns: (type guint) (transfer none): the VASurfaceID in @mem.
+ * Returns: (type guint): the VASurfaceID in @mem.
  *
  * Since: 1.22
  */
@@ -1963,7 +1975,7 @@ gst_va_memory_get_surface (GstMemory * mem)
  * gst_va_memory_peek_display:
  * @mem: a #GstMemory
  *
- * Returns: (type #GstVaDisplay) (transfer none): the display which
+ * Returns: (transfer none): the display which
  *     this @mem belongs to. The reference of the display is unchanged.
  *
  * Since: 1.22
@@ -1985,10 +1997,10 @@ gst_va_memory_peek_display (GstMemory * mem)
 }
 
 /**
- * gst_va_buffer_get_surface:
+ * gst_va_buffer_get_surface: (skip)
  * @buffer: a #GstBuffer
  *
- * Returns: (type guint) (transfer none): the VASurfaceID in @buffer.
+ * Returns: (type guint): the VASurfaceID in @buffer.
  *
  * Since: 1.22
  */
@@ -2098,10 +2110,10 @@ gst_va_buffer_create_aux_surface (GstBuffer * buffer)
 }
 
 /**
- * gst_va_buffer_get_aux_surface:
+ * gst_va_buffer_get_aux_surface: (skip)
  * @buffer: a #GstBuffer
  *
- * Returns: (type guint) (transfer none): the VASurfaceID attached to
+ * Returns: (type guint): the VASurfaceID attached to
  *     @buffer.
  *
  * Since: 1.22
@@ -2132,7 +2144,7 @@ gst_va_buffer_get_aux_surface (GstBuffer * buffer)
  * gst_va_buffer_peek_display:
  * @buffer: a #GstBuffer
  *
- * Returns: (type #GstVaDisplay) (transfer none): the display which this
+ * Returns: (transfer none): the display which this
  *     @buffer belongs to. The reference of the display is unchanged.
  *
  * Since: 1.22

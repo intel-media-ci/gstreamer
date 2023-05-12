@@ -35,6 +35,7 @@ base_tests = [
   [['elements/cudaconvert.c'], false, [gstgl_dep, gmodule_dep]],
   [['elements/cudafilter.c'], false, [gstgl_dep, gmodule_dep]],
   [['elements/d3d11colorconvert.c'], host_machine.system() != 'windows', ],
+  [['elements/d3d11videosink.c'], host_machine.system() != 'windows', ],
   [['elements/fdkaac.c'], not fdkaac_dep.found(), ],
   [['elements/gdpdepay.c'], get_option('gdp').disabled()],
   [['elements/gdppay.c'], get_option('gdp').disabled()],
@@ -67,6 +68,7 @@ base_tests = [
   [['elements/rtponviftimestamp.c'], get_option('onvif').disabled()],
   [['elements/rtpsrc.c'], get_option('rtp').disabled()],
   [['elements/rtpsink.c'], get_option('rtp').disabled()],
+  [['elements/sdpdemux.c'], get_option('sdp').disabled(), [gstsdp_dep]],
   [['elements/srtp.c'], not srtp_dep.found(), [srtp_dep]],
   [['elements/switchbin.c'], get_option('switchbin').disabled()],
   [['elements/videoframe-audiolevel.c'], get_option('videoframe_audiolevel').disabled()],
@@ -100,6 +102,7 @@ base_tests = [
   [['libs/vkimage.c'], not gstvulkan_dep.found(), [gstvulkan_dep]],
   [['libs/vkinstance.c'], not gstvulkan_dep.found(), [gstvulkan_dep]],
   [['libs/d3d11device.cpp'], not gstd3d11_dep.found(), [gstd3d11_dep]],
+  [['libs/cudamemory.c'], not gstcuda_dep.found(), [gstcuda_dep, gstcuda_stub_dep]],
 ]
 
 # FIXME: unistd dependency, unstable or not tested yet on windows
@@ -124,7 +127,7 @@ if host_machine.system() != 'windows'
     [['elements/curlftpsink.c'], not curl_dep.found(), [curl_dep]],
     [['elements/curlsmtpsink.c'], not curl_dep.found(), [curl_dep]],
     [['elements/dash_mpd.c'], not xml2_dep.found(), [xml2_dep]],
-    [['elements/dtls.c'], not libcrypto_dep.found(), [libcrypto_dep]],
+    [['elements/dtls.c'], not libcrypto_dep.found() or not openssl_dep.found (), [libcrypto_dep]],
     [['elements/faac.c'],
         not faac_dep.found() or not cc.has_header_symbol('faac.h', 'faacEncOpen') or not cdata.has('HAVE_UNISTD_H'),
         [faac_dep]],

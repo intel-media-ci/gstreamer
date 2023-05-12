@@ -30,13 +30,13 @@
 #include "gstvaapivideometa_texture.h"
 #include "gstvaapipluginutil.h"
 
-#if USE_GLX
+#if GST_VAAPI_USE_GLX
 #include <gst/vaapi/gstvaapitexture_glx.h>
 #endif
 
 #define DEFAULT_FORMAT GST_VIDEO_FORMAT_RGBA
 
-#if (USE_GLX || USE_EGL)
+#if (GST_VAAPI_USE_GLX || GST_VAAPI_USE_EGL)
 struct _GstVaapiVideoMetaTexture
 {
   GstVaapiTexture *texture;
@@ -126,7 +126,7 @@ meta_texture_free (GstVaapiVideoMetaTexture * meta)
     return;
 
   gst_mini_object_replace ((GstMiniObject **) & meta->texture, NULL);
-  g_slice_free (GstVaapiVideoMetaTexture, meta);
+  g_free (meta);
 }
 
 static GstVaapiVideoMetaTexture *
@@ -134,7 +134,7 @@ meta_texture_new (void)
 {
   GstVaapiVideoMetaTexture *meta;
 
-  meta = g_slice_new (GstVaapiVideoMetaTexture);
+  meta = g_new (GstVaapiVideoMetaTexture, 1);
   if (!meta)
     return NULL;
 

@@ -38,7 +38,7 @@ G_BEGIN_DECLS
 
 #define GST_SRT_DEFAULT_MODE GST_SRT_CONNECTION_MODE_CALLER
 #define GST_SRT_DEFAULT_PBKEYLEN GST_SRT_KEY_LENGTH_0
-#define GST_SRT_DEFAULT_POLL_TIMEOUT -1
+#define GST_SRT_DEFAULT_POLL_TIMEOUT 1000
 #define GST_SRT_DEFAULT_LATENCY 125
 #define GST_SRT_DEFAULT_MSG_SIZE 1316
 #define GST_SRT_DEFAULT_WAIT_FOR_CONNECTION (TRUE)
@@ -49,6 +49,7 @@ typedef struct _GstSRTObject GstSRTObject;
 struct _GstSRTObject
 {
   GstElement                   *element;
+  GCancellable                 *cancellable;
   GstUri                       *uri;
 
   GstStructure                 *parameters;
@@ -58,8 +59,6 @@ struct _GstSRTObject
   gboolean                      sent_headers;
 
   GTask                        *listener_task;
-  SRTSOCKET                     listener_sock;
-  gint                          listener_poll_id;
 
   GThread                      *thread;
 
@@ -82,7 +81,6 @@ GstSRTObject   *gst_srt_object_new              (GstElement *element);
 void            gst_srt_object_destroy          (GstSRTObject *srtobject);
 
 gboolean        gst_srt_object_open             (GstSRTObject *srtobject,
-                                                 GCancellable *cancellable,
                                                  GError **error);
 
 void            gst_srt_object_close            (GstSRTObject *srtobject);
@@ -101,18 +99,16 @@ gboolean        gst_srt_object_set_uri (GstSRTObject * srtobject, const gchar *u
 
 gssize          gst_srt_object_read     (GstSRTObject * srtobject,
                                          guint8 *data, gsize size,
-                                         GCancellable *cancellable,
                                          GError **err,
 					 SRT_MSGCTRL *mctrl);
 
 gssize          gst_srt_object_write    (GstSRTObject * srtobject,
                                          GstBufferList * headers,
                                          const GstMapInfo * mapinfo,
-                                         GCancellable *cancellable,
                                          GError **err);
 
-void            gst_srt_object_wakeup   (GstSRTObject * srtobject,
-                                         GCancellable *cancellable);
+void            gst_srt_object_unlock       (GstSRTObject * srtobject);
+void            gst_srt_object_unlock_stop  (GstSRTObject * srtobject);
 
 GstStructure   *gst_srt_object_get_stats        (GstSRTObject * srtobject);
 

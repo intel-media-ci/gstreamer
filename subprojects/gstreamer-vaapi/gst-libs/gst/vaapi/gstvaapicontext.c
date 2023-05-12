@@ -333,12 +333,12 @@ config_create (GstVaapiContext * context)
         string_of_va_chroma_format (va_chroma_format));
     goto cleanup;
   }
-  attrib->value = va_chroma_format;
+  attrib->value = value;
   attrib = &attribs[++attrib_index];
   g_assert (attrib_index < G_N_ELEMENTS (attribs));
 
   switch (cip->usage) {
-#if USE_ENCODERS
+#if GST_VAAPI_USE_ENCODERS
     case GST_VAAPI_CONTEXT_USAGE_ENCODE:
     {
       const GstVaapiConfigInfoEncoder *const config = &cip->config.encoder;
@@ -500,7 +500,7 @@ gst_vaapi_context_new (GstVaapiDisplay * display,
       || cip->entrypoint == GST_VAAPI_ENTRYPOINT_INVALID)
     return NULL;
 
-  context = g_slice_new (GstVaapiContext);
+  context = g_new (GstVaapiContext, 1);
   if (!context)
     return NULL;
 
@@ -783,6 +783,6 @@ gst_vaapi_context_unref (GstVaapiContext * context)
     context_destroy (context);
     context_destroy_surfaces (context);
     gst_vaapi_display_replace (&context->display, NULL);
-    g_slice_free (GstVaapiContext, context);
+    g_free (context);
   }
 }

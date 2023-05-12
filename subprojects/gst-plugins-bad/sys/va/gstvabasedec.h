@@ -32,6 +32,7 @@
 #include "gstvadecoder.h"
 #include "gstvadevice.h"
 #include "gstvaprofile.h"
+#include "gstvapluginutils.h"
 
 G_BEGIN_DECLS
 
@@ -68,12 +69,15 @@ struct _GstVaBaseDec
 
   VAProfile profile;
   guint rt_format;
+  /* coded or max resolution */
   gint width;
   gint height;
 
   guint min_buffers;
 
+  GstVideoInfo output_info;
   GstVideoCodecState *output_state;
+  GstVideoCodecState *input_state;
   GstBufferPool *other_pool;
 
   gboolean need_valign;
@@ -132,5 +136,12 @@ void                  gst_va_base_dec_get_preferred_format_and_caps_features (Gs
                                                            GstCapsFeatures ** capsfeatures);
 gboolean              gst_va_base_dec_copy_output_buffer  (GstVaBaseDec * base,
                                                            GstVideoCodecFrame * codec_frame);
+gboolean              gst_va_base_dec_process_output      (GstVaBaseDec * base,
+                                                           GstVideoCodecFrame * frame,
+                                                           GstVideoCodecState * input_state,
+                                                           GstVideoBufferFlags buffer_flags);
+GstFlowReturn         gst_va_base_dec_prepare_output_frame (GstVaBaseDec * base,
+                                                            GstVideoCodecFrame * frame);
+gboolean              gst_va_base_dec_set_output_state    (GstVaBaseDec * base);
 
 G_END_DECLS

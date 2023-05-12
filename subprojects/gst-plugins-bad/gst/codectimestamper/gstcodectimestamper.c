@@ -76,13 +76,16 @@ static GstFlowReturn gst_codec_timestamper_chain (GstPad * pad,
     GstObject * parent, GstBuffer * buffer);
 static gboolean gst_codec_timestamper_sink_event (GstPad * pad,
     GstObject * parent, GstEvent * event);
+static gboolean gst_codec_timestamper_sink_query (GstPad * pad,
+    GstObject * parent, GstQuery * query);
 static gboolean gst_codec_timestamper_src_query (GstPad * pad,
     GstObject * parent, GstQuery * query);
-static GstStateChangeReturn
-gst_codec_timestamper_change_state (GstElement * element,
-    GstStateChange transition);
-static void
-gst_codec_timestamper_clear_frame (GstCodecTimestamperFrame * frame);
+static GstCaps *gst_timestamper_get_caps (GstCodecTimestamper * self,
+    GstCaps * filter);
+static GstStateChangeReturn gst_codec_timestamper_change_state (GstElement *
+    element, GstStateChange transition);
+static void gst_codec_timestamper_clear_frame (GstCodecTimestamperFrame *
+    frame);
 static void gst_codec_timestamper_reset (GstCodecTimestamper * self);
 static void gst_codec_timestamper_drain (GstCodecTimestamper * self);
 
@@ -142,6 +145,9 @@ gst_codec_timestamper_class_init (GstCodecTimestamperClass * klass)
   element_class->change_state =
       GST_DEBUG_FUNCPTR (gst_codec_timestamper_change_state);
 
+  /* Default implementation is correct for both H264 and H265 */
+  klass->get_sink_caps = gst_timestamper_get_caps;
+
   GST_DEBUG_CATEGORY_INIT (gst_codec_timestamper_debug, "codectimestamper", 0,
       "codectimestamper");
 
@@ -169,7 +175,13 @@ gst_codec_timestamper_init (GstCodecTimestamper * self,
       GST_DEBUG_FUNCPTR (gst_codec_timestamper_chain));
   gst_pad_set_event_function (self->sinkpad,
       GST_DEBUG_FUNCPTR (gst_codec_timestamper_sink_event));
+  gst_pad_set_query_function (self->sinkpad,
+      GST_DEBUG_FUNCPTR (gst_codec_timestamper_sink_query));
+
   GST_PAD_SET_PROXY_SCHEDULING (self->sinkpad);
+  GST_PAD_SET_ACCEPT_INTERSECT (self->sinkpad);
+  GST_PAD_SET_ACCEPT_TEMPLATE (self->sinkpad);
+
   gst_element_add_pad (GST_ELEMENT (self), self->sinkpad);
 
   template = gst_element_class_get_pad_template (GST_ELEMENT_CLASS (klass),
@@ -445,7 +457,7 @@ gst_codec_timestamper_output_frame (GstCodecTimestamper * self,
   GST_BUFFER_PTS (frame->buffer) = frame->pts;
   GST_BUFFER_DTS (frame->buffer) = dts;
 
-  GST_TRACE_OBJECT (self, "Output %" GST_PTR_FORMAT, frame->buffer);
+  GST_LOG_OBJECT (self, "Output %" GST_PTR_FORMAT, frame->buffer);
 
   ret = gst_pad_push (self->srcpad, g_steal_pointer (&frame->buffer));
 
@@ -477,15 +489,15 @@ gst_codec_timestamper_drain (GstCodecTimestamper * self)
 {
   GstCodecTimestamperPrivate *priv = self->priv;
 
+  GST_DEBUG_OBJECT (self, "Draining");
+
   while (gst_queue_array_get_length (priv->queue) > 0) {
     GstCodecTimestamperFrame *frame = (GstCodecTimestamperFrame *)
         gst_queue_array_pop_head_struct (priv->queue);
     gst_codec_timestamper_output_frame (self, frame);
   }
 
-  priv->time_adjustment = GST_CLOCK_TIME_NONE;
-  priv->last_dts = GST_CLOCK_TIME_NONE;
-  priv->last_pts = GST_CLOCK_TIME_NONE;
+  GST_DEBUG_OBJECT (self, "Drained");
 }
 
 static gint
@@ -509,7 +521,7 @@ gst_codec_timestamper_chain (GstPad * pad, GstObject * parent,
 
   gst_codec_timestamper_frame_init (&frame);
 
-  GST_TRACE_OBJECT (self, "Handle %" GST_PTR_FORMAT, buffer);
+  GST_LOG_OBJECT (self, "Handle %" GST_PTR_FORMAT, buffer);
 
   pts = GST_BUFFER_PTS (buffer);
   dts = GST_BUFFER_DTS (buffer);
@@ -517,15 +529,24 @@ gst_codec_timestamper_chain (GstPad * pad, GstObject * parent,
   if (!GST_CLOCK_TIME_IS_VALID (priv->time_adjustment)) {
     GstClockTime start_time = GST_CLOCK_TIME_NONE;
 
-    if (GST_CLOCK_TIME_IS_VALID (pts))
+    if (GST_CLOCK_TIME_IS_VALID (pts)) {
+      GST_DEBUG_OBJECT (self, "Got valid PTS: %" GST_TIME_FORMAT,
+          GST_TIME_ARGS (pts));
       start_time = MAX (pts, priv->in_segment.start);
-    else if (GST_CLOCK_TIME_IS_VALID (dts))
+    } else if (GST_CLOCK_TIME_IS_VALID (dts)) {
+      GST_DEBUG_OBJECT (self, "Got valid DTS: %" GST_TIME_FORMAT,
+          GST_TIME_ARGS (dts));
       start_time = MAX (dts, priv->in_segment.start);
-    else
+    } else {
+      GST_WARNING_OBJECT (self, "Both PTS and DTS are invalid");
       start_time = priv->in_segment.start;
+    }
 
-    if (start_time < min_pts)
+    if (start_time < min_pts) {
       priv->time_adjustment = min_pts - start_time;
+      GST_DEBUG_OBJECT (self, "Updating time-adjustment %" GST_TIME_FORMAT,
+          GST_TIME_ARGS (priv->time_adjustment));
+    }
   }
 
   if (GST_CLOCK_TIME_IS_VALID (priv->time_adjustment)) {
@@ -557,6 +578,10 @@ gst_codec_timestamper_chain (GstPad * pad, GstObject * parent,
   frame.events = priv->current_frame_events;
   priv->current_frame_events = NULL;
 
+  GST_LOG_OBJECT (self, "Enqueue frame, buffer pts %" GST_TIME_FORMAT
+      ", adjusted pts %" GST_TIME_FORMAT,
+      GST_TIME_ARGS (GST_BUFFER_PTS (buffer)), GST_TIME_ARGS (pts));
+
   gst_queue_array_push_tail_struct (priv->queue, &frame);
   if (GST_CLOCK_TIME_IS_VALID (frame.pts)) {
     g_array_append_val (priv->timestamp_queue, frame.pts);
@@ -564,6 +589,76 @@ gst_codec_timestamper_chain (GstPad * pad, GstObject * parent,
   }
 
   return gst_codec_timestamper_process_output_frame (self);
+}
+
+static GstCaps *
+gst_timestamper_get_caps (GstCodecTimestamper * self, GstCaps * filter)
+{
+  GstCaps *peercaps, *templ;
+  GstCaps *res, *tmp, *pcopy;
+
+  templ = gst_pad_get_pad_template_caps (self->sinkpad);
+  if (filter) {
+    GstCaps *fcopy = gst_caps_copy (filter);
+
+    peercaps = gst_pad_peer_query_caps (self->srcpad, fcopy);
+    gst_caps_unref (fcopy);
+  } else {
+    peercaps = gst_pad_peer_query_caps (self->srcpad, NULL);
+  }
+
+  pcopy = gst_caps_copy (peercaps);
+
+  res = gst_caps_intersect_full (pcopy, templ, GST_CAPS_INTERSECT_FIRST);
+  gst_caps_unref (pcopy);
+  gst_caps_unref (templ);
+
+  if (filter) {
+    GstCaps *tmp = gst_caps_intersect_full (res, filter,
+        GST_CAPS_INTERSECT_FIRST);
+    gst_caps_unref (res);
+    res = tmp;
+  }
+
+  /* Try if we can put the downstream caps first */
+  pcopy = gst_caps_copy (peercaps);
+  tmp = gst_caps_intersect_full (pcopy, res, GST_CAPS_INTERSECT_FIRST);
+  gst_caps_unref (pcopy);
+  if (!gst_caps_is_empty (tmp))
+    res = gst_caps_merge (tmp, res);
+  else
+    gst_caps_unref (tmp);
+
+  gst_caps_unref (peercaps);
+  return res;
+}
+
+static gboolean
+gst_codec_timestamper_sink_query (GstPad * pad, GstObject * parent,
+    GstQuery * query)
+{
+  GstCodecTimestamper *self = GST_CODEC_TIMESTAMPER (parent);
+
+  switch (GST_QUERY_TYPE (query)) {
+    case GST_QUERY_CAPS:{
+      GstCaps *caps, *filter;
+      GstCodecTimestamperClass *klass = GST_CODEC_TIMESTAMPER_GET_CLASS (self);
+
+      gst_query_parse_caps (query, &filter);
+      g_assert (klass->get_sink_caps);
+      caps = klass->get_sink_caps (self, filter);
+      GST_LOG_OBJECT (self, "sink getcaps returning caps %" GST_PTR_FORMAT,
+          caps);
+      gst_query_set_caps_result (query, caps);
+      gst_caps_unref (caps);
+
+      return TRUE;
+    }
+    default:
+      break;
+  }
+
+  return gst_pad_query_default (pad, parent, query);
 }
 
 static gboolean

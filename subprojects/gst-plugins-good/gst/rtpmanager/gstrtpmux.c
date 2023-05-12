@@ -164,6 +164,8 @@ gst_rtp_mux_class_init (GstRTPMuxClass * klass)
       GST_DEBUG_FUNCPTR (gst_rtp_mux_request_new_pad);
   gstelement_class->release_pad = GST_DEBUG_FUNCPTR (gst_rtp_mux_release_pad);
   gstelement_class->change_state = GST_DEBUG_FUNCPTR (gst_rtp_mux_change_state);
+
+  gst_type_mark_as_plugin_api (GST_TYPE_RTP_MUX, 0);
 }
 
 static void
@@ -277,7 +279,7 @@ gst_rtp_mux_init (GstRTPMux * rtp_mux)
 static void
 gst_rtp_mux_setup_sinkpad (GstRTPMux * rtp_mux, GstPad * sinkpad)
 {
-  GstRTPMuxPadPrivate *padpriv = g_slice_new0 (GstRTPMuxPadPrivate);
+  GstRTPMuxPadPrivate *padpriv = g_new0 (GstRTPMuxPadPrivate, 1);
 
   /* setup some pad functions */
   gst_pad_set_chain_function (sinkpad, GST_DEBUG_FUNCPTR (gst_rtp_mux_chain));
@@ -336,7 +338,7 @@ gst_rtp_mux_release_pad (GstElement * element, GstPad * pad)
   gst_element_remove_pad (element, pad);
 
   if (padpriv) {
-    g_slice_free (GstRTPMuxPadPrivate, padpriv);
+    g_free (padpriv);
   }
 }
 

@@ -771,11 +771,8 @@ gst_matroska_demux_parse_stream (GstMatroskaDemux * demux, GstEbmlRead * ebml,
         if ((ret = gst_ebml_read_uint (ebml, &id, &num)) != GST_FLOW_OK)
           break;
 
-        if (num == 0) {
-          GST_ERROR_OBJECT (demux, "Invalid TrackUID 0");
-          ret = GST_FLOW_ERROR;
-          break;
-        }
+        if (num == 0)
+          GST_WARNING_OBJECT (demux, "Invalid TrackUID 0");
 
         GST_DEBUG_OBJECT (demux, "TrackUID: %" G_GUINT64_FORMAT, num);
         context->uid = num;
@@ -2811,12 +2808,12 @@ gst_matroska_demux_handle_seek_event (GstMatroskaDemux * demux,
 
   GST_DEBUG_OBJECT (demux, "configuring seek");
 
-  flush = ! !(flags & GST_SEEK_FLAG_FLUSH);
-  keyunit = ! !(flags & GST_SEEK_FLAG_KEY_UNIT);
-  after = ! !(flags & GST_SEEK_FLAG_SNAP_AFTER);
-  before = ! !(flags & GST_SEEK_FLAG_SNAP_BEFORE);
-  accurate = ! !(flags & GST_SEEK_FLAG_ACCURATE);
-  instant_rate_change = ! !(flags & GST_SEEK_FLAG_INSTANT_RATE_CHANGE);
+  flush = !!(flags & GST_SEEK_FLAG_FLUSH);
+  keyunit = !!(flags & GST_SEEK_FLAG_KEY_UNIT);
+  after = !!(flags & GST_SEEK_FLAG_SNAP_AFTER);
+  before = !!(flags & GST_SEEK_FLAG_SNAP_BEFORE);
+  accurate = !!(flags & GST_SEEK_FLAG_ACCURATE);
+  instant_rate_change = !!(flags & GST_SEEK_FLAG_INSTANT_RATE_CHANGE);
 
   /* Directly send the instant-rate-change event here before taking the
    * stream-lock so that it can be applied as soon as possible */
@@ -6658,6 +6655,7 @@ gst_matroska_demux_video_caps (GstMatroskaTrackVideoContext *
     *codec_name = g_strdup_printf ("On2 VP9");
   } else if (!strcmp (codec_id, GST_MATROSKA_CODEC_ID_VIDEO_AV1)) {
     caps = gst_caps_new_simple ("video/x-av1",
+        "stream-format", G_TYPE_STRING, "obu-stream",
         "alignment", G_TYPE_STRING, "tu", NULL);
     if (data) {
       GstBuffer *priv;

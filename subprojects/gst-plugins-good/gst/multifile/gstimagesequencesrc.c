@@ -46,6 +46,7 @@
 
 #include <gst/gst.h>
 #include <gst/base/gsttypefindhelper.h>
+#include <glib/gi18n-lib.h>
 
 #include "gstimagesequencesrc.h"
 
@@ -356,7 +357,7 @@ gst_image_sequence_src_init (GstImageSequenceSrc * self)
   self->start_index = DEFAULT_START_INDEX;
   self->index = 0;
   self->stop_index = DEFAULT_STOP_INDEX;
-  self->path = NULL;
+  self->path = g_strdup (DEFAULT_LOCATION);
   self->caps = NULL;
   self->n_frames = 0;
   self->fps_n = 30;
@@ -531,6 +532,8 @@ gst_image_sequence_src_set_caps (GstImageSequenceSrc * self, GstCaps * caps)
   gst_pad_set_caps (GST_BASE_SRC_PAD (self), new_caps);
 
   GST_DEBUG_OBJECT (self, "Setting new caps: %" GST_PTR_FORMAT, new_caps);
+
+  gst_caps_unref (new_caps);
 }
 
 /* Call with LOCK */
@@ -562,7 +565,12 @@ gst_image_sequence_src_get_filename (GstImageSequenceSrc * self)
   gchar *filename;
 
   GST_DEBUG ("Reading filename at index %d.", self->index);
-  filename = g_strdup_printf (self->path, self->index);
+  if (self->path != NULL) {
+    filename = g_strdup_printf (self->path, self->index);
+  } else {
+    GST_WARNING_OBJECT (self, "No filename location set!");
+    filename = NULL;
+  }
 
   return filename;
 }
@@ -602,7 +610,7 @@ gst_image_sequence_src_create (GstPushSrc * src, GstBuffer ** buffer)
   UNLOCK (self);
 
   if (!filename)
-    goto handle_error;
+    goto error_no_filename;
 
   ret = g_file_get_contents (filename, &data, &size, &error);
   if (!ret)
@@ -643,6 +651,12 @@ gst_image_sequence_src_create (GstPushSrc * src, GstBuffer ** buffer)
   self->index += self->reverse ? -1 : 1;
   return GST_FLOW_OK;
 
+error_no_filename:
+  {
+    GST_ELEMENT_ERROR (self, RESOURCE, NOT_FOUND,
+        (_("No file name specified for reading.")), (NULL));
+    return GST_FLOW_ERROR;
+  }
 handle_error:
   {
     if (error != NULL) {

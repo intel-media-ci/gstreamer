@@ -3756,7 +3756,7 @@ start_prepare (GstRTSPMedia * media)
 
   for (walk = priv->dynamic; walk; walk = g_list_next (walk)) {
     GstElement *elem = walk->data;
-    DynPaySignalHandlers *handlers = g_slice_new (DynPaySignalHandlers);
+    DynPaySignalHandlers *handlers = g_new (DynPaySignalHandlers, 1);
 
     GST_INFO ("adding callbacks for dynamic element %p", elem);
 
@@ -4054,7 +4054,7 @@ finish_unprepare (GstRTSPMedia * media)
     g_signal_handler_disconnect (G_OBJECT (elem),
         handlers->no_more_pads_handler);
 
-    g_slice_free (DynPaySignalHandlers, handlers);
+    g_free (handlers);
   }
 
   gst_bin_remove (GST_BIN (priv->pipeline), priv->rtpbin);
@@ -4102,12 +4102,12 @@ default_unprepare (GstRTSPMedia * media)
   gst_rtsp_media_set_status (media, GST_RTSP_MEDIA_STATUS_UNPREPARING);
 
   if (priv->eos_shutdown) {
-    GST_DEBUG ("sending EOS for shutdown");
-    /* ref so that we don't disappear */
-    gst_element_send_event (priv->pipeline, gst_event_new_eos ());
     /* we need to go to playing again for the EOS to propagate, normally in this
      * state, nothing is receiving data from us anymore so this is ok. */
+    GST_DEBUG ("Temporarily go to PLAYING again for sending EOS");
     set_state (media, GST_STATE_PLAYING);
+    GST_DEBUG ("sending EOS for shutdown");
+    gst_element_send_event (priv->pipeline, gst_event_new_eos ());
   } else {
     finish_unprepare (media);
   }

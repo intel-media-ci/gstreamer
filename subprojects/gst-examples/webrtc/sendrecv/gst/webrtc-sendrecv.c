@@ -53,7 +53,7 @@ static SoupWebsocketConnection *ws_conn = NULL;
 static enum AppState app_state = 0;
 static gchar *peer_id = NULL;
 static gchar *our_id = NULL;
-static const gchar *server_url = "wss://webrtc.nirbheek.in:8443";
+static const gchar *server_url = "wss://webrtc.gstreamer.net:8443";
 static gboolean disable_ssl = FALSE;
 static gboolean remote_is_offerer = FALSE;
 static gboolean custom_ice = FALSE;
@@ -422,6 +422,53 @@ webrtcbin_get_stats (GstElement * webrtcbin)
   return G_SOURCE_REMOVE;
 }
 
+static gboolean
+bus_watch_cb (GstBus * bus, GstMessage * message, gpointer user_data)
+{
+  GstPipeline *pipeline = user_data;
+
+  switch (GST_MESSAGE_TYPE (message)) {
+    case GST_MESSAGE_ASYNC_DONE:
+    {
+      GST_DEBUG_BIN_TO_DOT_FILE_WITH_TS (GST_BIN (pipe1),
+          GST_DEBUG_GRAPH_SHOW_ALL, "webrtc-sendrecv.async-done");
+      break;
+    }
+    case GST_MESSAGE_ERROR:
+    {
+      GError *error = NULL;
+      gchar *debug = NULL;
+
+      GST_DEBUG_BIN_TO_DOT_FILE_WITH_TS (GST_BIN (pipe1),
+          GST_DEBUG_GRAPH_SHOW_ALL, "webrtc-sendrecv.error");
+
+      gst_message_parse_error (message, &error, &debug);
+      cleanup_and_quit_loop ("ERROR: Error on bus", APP_STATE_ERROR);
+      g_warning ("Error on bus: %s (debug: %s)", error->message, debug);
+      g_error_free (error);
+      g_free (debug);
+      break;
+    }
+    case GST_MESSAGE_WARNING:
+    {
+      GError *error = NULL;
+      gchar *debug = NULL;
+
+      gst_message_parse_warning (message, &error, &debug);
+      g_warning ("Warning on bus: %s (debug: %s)", error->message, debug);
+      g_error_free (error);
+      g_free (debug);
+      break;
+    }
+    case GST_MESSAGE_LATENCY:
+      gst_bin_recalculate_latency (GST_BIN (pipeline));
+      break;
+    default:
+      break;
+  }
+
+  return G_SOURCE_CONTINUE;
+}
 
 #define STUN_SERVER "stun://stun.l.google.com:19302"
 #define RTP_TWCC_URI "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01"
@@ -431,6 +478,7 @@ webrtcbin_get_stats (GstElement * webrtcbin)
 static gboolean
 start_pipeline (gboolean create_offer, guint opus_pt, guint vp8_pt)
 {
+  GstBus *bus;
   char *audio_desc, *video_desc;
   GstStateChangeReturn ret;
   GstWebRTCICE *custom_agent;
@@ -442,7 +490,8 @@ start_pipeline (gboolean create_offer, guint opus_pt, guint vp8_pt)
   audio_desc =
       g_strdup_printf
       ("audiotestsrc is-live=true wave=red-noise ! audioconvert ! audioresample"
-      "! queue ! opusenc ! rtpopuspay name=audiopay ! queue");
+      "! queue ! opusenc ! rtpopuspay name=audiopay pt=%u "
+      "! application/x-rtp, encoding-name=OPUS ! queue", opus_pt);
   audio_bin = gst_parse_bin_from_description (audio_desc, TRUE, &audio_error);
   g_free (audio_desc);
   if (audio_error) {
@@ -461,7 +510,7 @@ start_pipeline (gboolean create_offer, guint opus_pt, guint vp8_pt)
       "vp8enc deadline=1 keyframe-max-dist=2000 ! "
       /* picture-id-mode=15-bit seems to make TWCC stats behave better, and
        * fixes stuttery video playback in Chrome */
-      "rtpvp8pay name=videopay picture-id-mode=15-bit ! queue");
+      "rtpvp8pay name=videopay picture-id-mode=15-bit pt=%u ! queue", vp8_pt);
   video_bin = gst_parse_bin_from_description (video_desc, TRUE, &video_error);
   g_free (video_desc);
   if (video_error) {
@@ -481,6 +530,7 @@ start_pipeline (gboolean create_offer, guint opus_pt, guint vp8_pt)
   g_assert_nonnull (webrtc1);
   gst_util_set_object_arg (G_OBJECT (webrtc1), "bundle-policy", "max-bundle");
 
+  /* Takes ownership of each: */
   gst_bin_add_many (GST_BIN (pipe1), audio_bin, video_bin, webrtc1, NULL);
 
   if (!gst_element_link (audio_bin, webrtc1)) {
@@ -531,6 +581,10 @@ start_pipeline (gboolean create_offer, guint opus_pt, guint vp8_pt)
   g_signal_connect (webrtc1, "notify::ice-gathering-state",
       G_CALLBACK (on_ice_gathering_state_notify), NULL);
 
+  bus = gst_pipeline_get_bus (GST_PIPELINE (pipe1));
+  gst_bus_add_watch (bus, bus_watch_cb, pipe1);
+  gst_object_unref (bus);
+
   gst_element_set_state (pipe1, GST_STATE_READY);
 
   g_signal_emit_by_name (webrtc1, "create-data-channel", "channel", NULL,
@@ -547,8 +601,6 @@ start_pipeline (gboolean create_offer, guint opus_pt, guint vp8_pt)
   /* Incoming streams will be exposed via this signal */
   g_signal_connect (webrtc1, "pad-added", G_CALLBACK (on_incoming_stream),
       pipe1);
-  /* Lifetime is the same as the pipeline itself */
-  gst_object_unref (webrtc1);
 
   g_timeout_add (100, (GSourceFunc) webrtcbin_get_stats, webrtc1);
 
@@ -1030,8 +1082,15 @@ main (int argc, char *argv[])
     g_main_loop_unref (loop);
 
   if (pipe1) {
+    GstBus *bus;
+
     gst_element_set_state (GST_ELEMENT (pipe1), GST_STATE_NULL);
     gst_print ("Pipeline stopped\n");
+
+    bus = gst_pipeline_get_bus (GST_PIPELINE (pipe1));
+    gst_bus_remove_watch (bus);
+    gst_object_unref (bus);
+
     gst_object_unref (pipe1);
   }
 

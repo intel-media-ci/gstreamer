@@ -1888,14 +1888,14 @@ reference_pic_free (GstVaapiEncoderH264 * encoder, GstVaapiEncoderH264Ref * ref)
     return;
   if (ref->pic)
     gst_vaapi_encoder_release_surface (GST_VAAPI_ENCODER (encoder), ref->pic);
-  g_slice_free (GstVaapiEncoderH264Ref, ref);
+  g_free (ref);
 }
 
 static inline GstVaapiEncoderH264Ref *
 reference_pic_create (GstVaapiEncoderH264 * encoder,
     GstVaapiEncPicture * picture, GstVaapiSurfaceProxy * surface)
 {
-  GstVaapiEncoderH264Ref *const ref = g_slice_new0 (GstVaapiEncoderH264Ref);
+  GstVaapiEncoderH264Ref *const ref = g_new0 (GstVaapiEncoderH264Ref, 1);
 
   ref->pic = surface;
   ref->frame_num = picture->frame_num;
@@ -3017,11 +3017,11 @@ gst_vaapi_encoder_h264_get_pending_reordered (GstVaapiEncoder * base_encoder,
     iter->pic_type = GST_VAAPI_PICTURE_TYPE_B;
   } else if (iter->pic_type == GST_VAAPI_PICTURE_TYPE_B) {
     pic = g_queue_pop_head (&reorder_pool->reorder_frame_list);
-    g_assert (pic);
   } else {
     GST_WARNING ("Unhandled pending picture type");
   }
 
+  g_assert (pic);
   set_frame_num (encoder, pic);
 
   if (GST_CLOCK_TIME_IS_VALID (pic->frame->pts))

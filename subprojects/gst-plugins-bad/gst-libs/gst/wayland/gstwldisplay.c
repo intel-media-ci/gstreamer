@@ -226,7 +226,7 @@ gst_wl_display_check_format_for_dmabuf (GstWlDisplay * self,
     return FALSE;
 
   dmabuf_fmt = gst_video_format_to_wl_dmabuf_format (format);
-  if (dmabuf_fmt == (guint) - 1)
+  if (!dmabuf_fmt)
     return FALSE;
 
   formats = priv->dmabuf_formats;
@@ -349,7 +349,7 @@ gst_wl_display_new (const gchar * name, GError ** error)
 }
 
 GstWlDisplay *
-gst_wl_display_new_existing (struct wl_display * display,
+gst_wl_display_new_existing (struct wl_display *display,
     gboolean take_ownership, GError ** error)
 {
   GstWlDisplay *self;

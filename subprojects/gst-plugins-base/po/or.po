@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: gst-plugins-0.8.3\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2021-10-25 01:01+0100\n"
+"POT-Creation-Date: 2023-02-22 11:52+0000\n"
 "PO-Revision-Date: 2004-09-27 13:32+0530\n"
 "Last-Translator: Gora Mohanty <gora_mohanty@yahoo.co.in>\n"
 "Language-Team: Oriya <gora_mohanty@yahoo.co.in>\n"
@@ -92,10 +92,6 @@ msgstr ""
 msgid "Could not create \"uridecodebin\" element."
 msgstr "\"%s\" ଫାଇଲ ଲେଖିହେଲା ନାହିଁ."
 
-#, fuzzy
-msgid "Could not create \"uridecodebin3\" element."
-msgstr "\"%s\" ଫାଇଲ ଲେଖିହେଲା ନାହିଁ."
-
 #, c-format
 msgid "Both autovideosink and %s elements are missing."
 msgstr ""
@@ -159,7 +155,13 @@ msgstr ""
 msgid "No URI handler implemented for \"%s\"."
 msgstr ""
 
+msgid "Source element can't be prepared"
+msgstr ""
+
 msgid "Source element is invalid."
+msgstr ""
+
+msgid "Source element has no pads."
 msgstr ""
 
 #, fuzzy, c-format
@@ -661,13 +663,13 @@ msgstr ""
 msgid "enable/disable trick modes"
 msgstr ""
 
-msgid "change audio track"
+msgid "change to previous/next audio track"
 msgstr ""
 
-msgid "change video track"
+msgid "change to previous/next video track"
 msgstr ""
 
-msgid "change subtitle track"
+msgid "change to previous/next subtitle track"
 msgstr ""
 
 msgid "seek to beginning"
@@ -677,6 +679,10 @@ msgid "show keyboard shortcuts"
 msgstr ""
 
 msgid "Interactive mode - keyboard controls:"
+msgstr ""
+
+#, c-format
+msgid "Use Windows high-resolution clock, precision: %u ms\n"
 msgstr ""
 
 msgid "Output status information and property notifications"
@@ -694,6 +700,9 @@ msgstr ""
 msgid "Enable gapless playback"
 msgstr ""
 
+msgid "Enable instantaneous uri changes (only with playbin3)"
+msgstr ""
+
 msgid "Shuffle playlist"
 msgstr ""
 
@@ -706,6 +715,9 @@ msgstr "ପ୍ରବଳତା"
 msgid "Start position in seconds."
 msgstr ""
 
+msgid "Enable accurate seeking"
+msgstr ""
+
 msgid "Playlist file containing input media files"
 msgstr ""
 
@@ -715,15 +727,17 @@ msgstr ""
 msgid "Do not print any output (apart from errors)"
 msgstr ""
 
-msgid "Use playbin3 pipeline"
-msgstr ""
-
-msgid "(default varies depending on 'USE_PLAYBIN' env variable)"
+msgid ""
+"Use playbin3 pipeline (default varies depending on 'USE_PLAYBIN' env "
+"variable)"
 msgstr ""
 
 msgid ""
 "Keep showing the last frame on EOS until quit or playlist change command "
 "(gapless is ignored)"
+msgstr ""
+
+msgid "Do not print current position of pipeline"
 msgstr ""
 
 #, c-format
@@ -735,6 +749,10 @@ msgstr ""
 
 msgid "Press 'k' to see a list of keyboard shortcuts.\n"
 msgstr ""
+
+#, fuzzy
+#~ msgid "Could not create \"uridecodebin3\" element."
+#~ msgstr "\"%s\" ଫାଇଲ ଲେଖିହେଲା ନାହିଁ."
 
 #, fuzzy
 #~ msgid "Could not create \"decodebin3\" element."

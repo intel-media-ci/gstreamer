@@ -83,11 +83,10 @@ gst_qsv_av1_enc_rate_control_get_type (void)
     {0, nullptr, nullptr}
   };
 
-  if (g_once_init_enter (&rate_control_type)) {
-    GType type =
+  GST_QSV_CALL_ONCE_BEGIN {
+    rate_control_type =
         g_enum_register_static ("GstQsvAV1EncRateControl", rate_controls);
-    g_once_init_leave (&rate_control_type, type);
-  }
+  } GST_QSV_CALL_ONCE_END;
 
   return rate_control_type;
 }
@@ -122,7 +121,7 @@ enum
 
 #define DOC_SRC_CAPS \
     "video/x-av1, width = (int) [ 16, 8192 ], height = (int) [ 16, 8192 ], " \
-    "alignment = (string) tu"
+    "stream-format = (string) obu-stream, alignment = (string) tu"
 
 typedef struct _GstQsvAV1EncClassData
 {
@@ -317,13 +316,11 @@ gst_qsv_av1_enc_check_update_uint (GstQsvAV1Enc * self, guint * old_val,
   if (*old_val == new_val)
     return;
 
-  g_mutex_lock (&self->prop_lock);
   *old_val = new_val;
   if (is_bitrate_param)
     self->bitrate_updated = TRUE;
   else
     self->property_updated = TRUE;
-  g_mutex_unlock (&self->prop_lock);
 }
 
 static void
@@ -333,10 +330,8 @@ gst_qsv_av1_enc_check_update_enum (GstQsvAV1Enc * self, mfxU16 * old_val,
   if (*old_val == (mfxU16) new_val)
     return;
 
-  g_mutex_lock (&self->prop_lock);
   *old_val = (mfxU16) new_val;
   self->property_updated = TRUE;
-  g_mutex_unlock (&self->prop_lock);
 }
 
 static void
@@ -345,6 +340,7 @@ gst_qsv_av1_enc_set_property (GObject * object, guint prop_id,
 {
   GstQsvAV1Enc *self = GST_QSV_AV1_ENC (object);
 
+  g_mutex_lock (&self->prop_lock);
   switch (prop_id) {
     case PROP_QP_I:
       gst_qsv_av1_enc_check_update_uint (self, &self->qp_i,
@@ -378,6 +374,7 @@ gst_qsv_av1_enc_set_property (GObject * object, guint prop_id,
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
   }
+  g_mutex_unlock (&self->prop_lock);
 }
 
 static void
@@ -386,6 +383,7 @@ gst_qsv_av1_enc_get_property (GObject * object, guint prop_id, GValue * value,
 {
   GstQsvAV1Enc *self = GST_QSV_AV1_ENC (object);
 
+  g_mutex_lock (&self->prop_lock);
   switch (prop_id) {
     case PROP_QP_I:
       g_value_set_uint (value, self->qp_i);
@@ -412,6 +410,7 @@ gst_qsv_av1_enc_get_property (GObject * object, guint prop_id, GValue * value,
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
   }
+  g_mutex_unlock (&self->prop_lock);
 }
 
 static void
@@ -561,7 +560,7 @@ gst_qsv_av1_enc_set_output_state (GstQsvEncoder * encoder,
   }
 
   caps = gst_caps_from_string ("video/x-av1, profile = (string) main, "
-      "alignment= (string) tu");
+      "stream-format = (string) obu-stream, alignment= (string) tu");
   out_state = gst_video_encoder_set_output_state (GST_VIDEO_ENCODER (encoder),
       caps, state);
   gst_video_codec_state_unref (out_state);
@@ -778,7 +777,7 @@ gst_qsv_av1_enc_register (GstPlugin * plugin, guint rank, guint impl_index,
 #endif
 
   std::string src_caps_str = "video/x-av1, profile = (string) main, "
-      "alignment = (string) tu";
+      "stream-format = (string) obu-stream, alignment = (string) tu";
   src_caps_str += ", width=(int) [ 16, " + std::to_string (resolution) + " ]";
   src_caps_str += ", height=(int) [ 16, " + std::to_string (resolution) + " ]";
 

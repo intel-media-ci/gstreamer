@@ -30,14 +30,6 @@
 #include "m3u8.h"
 #include "gstisoff.h"
 #include "gstadaptivedemux.h"
-#if defined(HAVE_OPENSSL)
-#include <openssl/evp.h>
-#elif defined(HAVE_NETTLE)
-#include <nettle/aes.h>
-#include <nettle/cbc.h>
-#elif defined(HAVE_LIBGCRYPT)
-#include <gcrypt.h>
-#endif
 
 G_BEGIN_DECLS
 
@@ -59,22 +51,7 @@ G_BEGIN_DECLS
 typedef struct _GstHLSDemux2 GstHLSDemux;
 typedef struct _GstHLSDemux2Class GstHLSDemuxClass;
 
-#define GST_TYPE_HLS_DEMUX_STREAM \
-  (gst_hls_demux_stream_get_type())
-#define GST_HLS_DEMUX_STREAM(obj) \
-  (G_TYPE_CHECK_INSTANCE_CAST((obj),GST_TYPE_HLS_DEMUX_STREAM,GstHLSDemuxStream))
-#define GST_HLS_DEMUX_STREAM_CAST(obj) ((GstHLSDemuxStream *)obj)
-
 typedef struct _GstHLSDemuxStream GstHLSDemuxStream;
-typedef GstAdaptiveDemux2StreamClass GstHLSDemuxStreamClass;
-
-typedef enum {
-  GST_HLS_PARSER_NONE,
-  GST_HLS_PARSER_MPEGTS,
-  GST_HLS_PARSER_ID3,
-  GST_HLS_PARSER_WEBVTT,
-  GST_HLS_PARSER_ISOBMFF
-} GstHLSParserType;
 
 typedef enum {
   /* More data is needed to parse the fragment */
@@ -87,88 +64,6 @@ typedef enum {
    * GST_ADAPTIVE_DEMUX_FLOW_RESTART_FRAGMENT returned to the parent class */
   GST_HLS_PARSER_RESULT_RESYNC
 } GstHLSParserResult;
-
-struct _GstHLSDemuxStream
-{
-  GstAdaptiveDemux2Stream adaptive_demux_stream;
-
-  /* A stream either variants or renditions */
-  gboolean is_variant;
-
-  /* Rendition-specific fields */
-  GstStreamType rendition_type;	/* FIXME: Also used by variant streams */
-  gchar *lang;
-  gchar *name;
-  GstHLSRenditionStream *current_rendition;
-  /* rendition to switch to */
-  GstHLSRenditionStream *pending_rendition;
-  /* End of Rendition-specific fields */
-
-  /* Whether the underlying playlist was fetched on creation */
-  gboolean playlist_fetched;
-
-  /* The media playlist currently used */
-  GstHLSMediaPlaylist *playlist;
-
-  /* The current header / init_file data */
-  GstM3U8InitFile *init_file;
-
-  /* The segment (from the above playlist) currently being used */
-  GstM3U8MediaSegment *current_segment;
-
-  /* Whether we need to typefind the next buffer */
-  gboolean do_typefind;
-
-  /* for collecting data until typefind succeeds */
-  GstBuffer *pending_typefind_buffer;
-
-  /* for chunking data into 16 byte multiples for decryption */
-  GstAdapter *pending_encrypted_data;
-
- /* last decrypted buffer for pkcs7 unpadding.  We only know that it is the last
-  * on ::finish_fragment() */
-  GstBuffer *pending_decrypted_buffer;
-
-  /* Current offset (in bytes) in fragment data we pushed downstream. Resets to
-   * -1 at every fragment start */
-  guint64 current_offset;
-
-  gboolean reset_pts;
-
-  /* decryption tooling */
-#if defined(HAVE_OPENSSL)
-# if OPENSSL_VERSION_NUMBER < 0x10100000L
-  EVP_CIPHER_CTX aes_ctx;
-# else
-  EVP_CIPHER_CTX *aes_ctx;
-# endif
-#elif defined(HAVE_NETTLE)
-  struct CBC_CTX (struct aes128_ctx, AES_BLOCK_SIZE) aes_ctx;
-#elif defined(HAVE_LIBGCRYPT)
-  gcry_cipher_hd_t aes_ctx;
-#endif
-
-  gchar     *current_key;
-  guint8    *current_iv;
-
-  /* The type of parser used for data handling */
-  GstHLSParserType parser_type;
-
-  /* Is content processing required ? */
-  gboolean process_buffer_content;
-  /* Data to be analyzed by  */
-  GstBuffer *pending_segment_data;
-  /* TRUE if pending_segment_data contains data from a header/index */
-  gboolean pending_data_is_header;
-
-  /* ISOBMFF */
-  GstMoovBox *moov;
-
-  /* Presentation offset to use and report. This value will be appended to all
-   * "output" stream times. Not enabled (i.e 0) if variant is ISOBMFF
-   */
-  GstClockTime presentation_offset;
-};
 
 typedef struct {
   guint8 data[16];
@@ -190,13 +85,19 @@ struct _GstHLSDemux2
   GHashTable *keys;
   GMutex      keys_lock;
 
-  /* FIXME: check locking, protected automatically by manifest_lock already? */
-  /* The master playlist with the available variant streams */
+  /* The master playlist with the available variant streams,
+   * created at demuxer start based on the input multivariant playlist */
   GstHLSMasterPlaylist *master;
 
+  /* A ref to the main playlist, for access from external threads */
+  GstHLSMediaPlaylist *main_playlist;
+
   GstHLSVariantStream  *current_variant;
-  /* The variant to switch to */
+  /* The variant we're switching to (currently being loaded by the playlist loader) */
   GstHLSVariantStream  *pending_variant;
+
+  /* List of failed variants that should be ignored */
+  GList *failed_variants;
 
   GstHLSDemuxStream *main_stream;
 
@@ -209,11 +110,33 @@ struct _GstHLSDemux2Class
   GstAdaptiveDemuxClass parent_class;
 };
 
+GstAdaptiveDemuxTrack *
+gst_hls_demux_new_track_for_rendition (GstHLSDemux * demux,
+		GstHLSRenditionStream * rendition,
+    GstCaps * caps, GstStreamFlags flags, GstTagList * tags);
+
+void gst_hls_demux_start_rendition_streams (GstHLSDemux * hlsdemux);
+void gst_hls_demux_reset_for_lost_sync (GstHLSDemux * hlsdemux);
+const GstHLSKey *gst_hls_demux_get_key (GstHLSDemux * demux,
+    const gchar * key_url, const gchar * referer, gboolean allow_cache);
+
+void gst_hls_demux_handle_variant_playlist_update (GstHLSDemux * demux,
+    const gchar *playlist_uri, GstHLSMediaPlaylist * playlist);
+void gst_hls_demux_handle_variant_playlist_update_error (GstHLSDemux * demux,
+    const gchar *playlist_uri);
+gboolean gst_hls_demux_change_variant_playlist (GstHLSDemux * demux,
+    gboolean iframe_variant, guint max_bitrate, gboolean * changed);
+GstFlowReturn gst_hls_demux_update_variant_playlist (GstHLSDemux * demux,
+    GError ** err);
+
+void gst_hls_demux_add_time_mapping (GstHLSDemux * demux, gint64 dsn,
+    GstClockTimeDiff stream_time, GDateTime * pdt);
+void gst_hls_update_time_mappings (GstHLSDemux * demux,
+    GstHLSMediaPlaylist * playlist);
 
 gchar *gst_hls_buf_to_utf8_text (GstBuffer * buf);
 
 /* Private */
-
 GstHLSParserResult gst_hlsdemux_handle_content_mpegts (GstHLSDemux       *demux,
 						       GstHLSDemuxStream *hls_stream,
 						       gboolean           draining,
@@ -234,14 +157,10 @@ GstHLSParserResult gst_hlsdemux_handle_content_webvtt (GstHLSDemux        *demux
 						       gboolean           draining,
 						       GstBuffer        **buffer);
 
-GstHLSParserResult gst_hlsdemux_handle_internal_time (GstHLSDemux       *demux,
-						      GstHLSDemuxStream *hls_stream,
-						      GstClockTime       internal_time);
-
 GstClockTimeDiff gst_hls_internal_to_stream_time (GstHLSTimeMap *map,
 						  GstClockTime   internal_time);
 
-GstHLSTimeMap *gst_hls_find_time_map (GstHLSDemux * demux, gint64 dsn);
+GstHLSTimeMap *gst_hls_demux_find_time_map (GstHLSDemux * demux, gint64 dsn);
 
 GType gst_hls_demux2_get_type (void);
 GType gst_hls_demux_stream_get_type (void);

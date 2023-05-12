@@ -107,6 +107,7 @@ static const FormatInfo formats[] = {
   {"video/x-quicktime", "Quicktime", AVIS_CONTAINER, "mov"},
   {"video/quicktime", "Quicktime", AVIS_CONTAINER, "mov"},
   {"video/mj2", "Motion JPEG 2000", AVIS_CONTAINER, "mj2"},
+  {"video/x-ivf", "Indeo video format (IVF)", AVIS_CONTAINER, "ivf"},
 
   /* audio formats with static descriptions */
   {"audio/x-ac3", "AC-3 (ATSC A/52)", FLAG_AUDIO, "ac3"},
@@ -203,6 +204,7 @@ static const FormatInfo formats[] = {
       FLAG_VIDEO, ""},
   {"subpicture/x-dvd", "DVD subpicture", FLAG_VIDEO, ""},
   {"video/x-ffv", N_("FFMpeg v1"), FLAG_VIDEO, ""},
+  {"video/x-ffvhuff", "FFmpeg Huffman YUV variant", FLAG_VIDEO, ""},
   {"video/x-flash-screen", "Flash Screen Video", FLAG_VIDEO, ""},
   {"video/x-flash-video", "Sorenson Spark Video", FLAG_VIDEO, ""},
   {"video/x-h261", "H.261", FLAG_VIDEO, ""},

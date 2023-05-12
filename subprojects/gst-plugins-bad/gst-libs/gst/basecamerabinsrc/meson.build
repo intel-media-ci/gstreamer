@@ -42,9 +42,11 @@ if build_gir and not static_build
   library_def += {'gir': [gir]}
   if not static_build
     basecamerabin_gir = gnome.generate_gir(gstbasecamerabin, kwargs: gir)
+    library_def += {'gir_targets':  library_def.get('gir_targets', []) + [basecamerabin_gir]}
     gen_sources += basecamerabin_gir
   endif
 endif
+gst_libraries += [[pkg_name, library_def]]
 
 gstbasecamerabin_dep = declare_dependency(link_with : gstbasecamerabin,
   include_directories : [libsinc],

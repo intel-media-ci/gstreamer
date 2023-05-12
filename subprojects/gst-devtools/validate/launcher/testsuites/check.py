@@ -182,12 +182,6 @@ KNOWN_ISSUES = {
         ],
         "max_retries": 1,
     },
-    "https://gitlab.freedesktop.org/gstreamer/gstreamer/-/issues/778": {
-        "tests": [
-            r"check.gstreamer.gst_gstbin.test_watch_for_state_change",
-        ],
-        "max_retries": 1,
-    },
     "https://gitlab.freedesktop.org/gstreamer/gstreamer/-/issues/803": {
         "tests": [
             "check.gst-editing-services.edit_while_seeked_with_stop"
@@ -218,6 +212,17 @@ KNOWN_ISSUES = {
                 "level": "critical",
                 "detected-on": "check_layer_activness_gaps.scenario",
                 # "details": "\n> check_layer_activness_gaps.scenario:22\n    22 | check-property, target-element-factory-name=videotestsrc, property-name=pattern, property-value="Blue"\n       >\n       > <src>::pattern expected value: '(gchararray)Blue' different than observed: '(gchararray)"100\%\ Black"'",
+            },
+        ],
+    },
+    "https://gitlab.freedesktop.org/gstreamer/gstreamer/-/issues/1777": {
+        "tests": [
+            "check.gst-plugins-bad.elements_srtp.test_play.*"
+        ],
+        "issues": [
+            {
+                'returncode': 1,
+                'sometimes': True,
             },
         ],
     },

@@ -248,5 +248,5 @@ KNOWN_ISSUES = {
                 "issue-id": "transcoded-file-wrong-duration",
             },
         ]
-    }
+    },
 }

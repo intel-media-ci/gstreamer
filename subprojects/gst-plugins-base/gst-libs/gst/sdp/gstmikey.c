@@ -136,7 +136,8 @@ static GstMIKEYPayloadKEMAC *
 gst_mikey_payload_kemac_copy (const GstMIKEYPayloadKEMAC * payload)
 {
   guint i, len;
-  GstMIKEYPayloadKEMAC *copy = g_slice_dup (GstMIKEYPayloadKEMAC, payload);
+  GstMIKEYPayloadKEMAC *copy =
+      g_memdup2 (payload, sizeof (GstMIKEYPayloadKEMAC));
   gst_mikey_payload_kemac_set (&copy->pt, payload->enc_alg, payload->mac_alg);
   len = payload->subpayloads->len;
   for (i = 0; i < len; i++) {
@@ -287,7 +288,7 @@ gst_mikey_payload_pke_dispose (GstMIKEYPayloadPKE * payload)
 static GstMIKEYPayloadPKE *
 gst_mikey_payload_pke_copy (const GstMIKEYPayloadPKE * payload)
 {
-  GstMIKEYPayloadPKE *copy = g_slice_dup (GstMIKEYPayloadPKE, payload);
+  GstMIKEYPayloadPKE *copy = g_memdup2 (payload, sizeof (GstMIKEYPayloadPKE));
   gst_mikey_payload_pke_set (&copy->pt, payload->C, payload->data_len,
       payload->data);
   return copy;
@@ -359,7 +360,7 @@ gst_mikey_payload_t_dispose (GstMIKEYPayloadT * payload)
 static GstMIKEYPayloadT *
 gst_mikey_payload_t_copy (const GstMIKEYPayloadT * payload)
 {
-  GstMIKEYPayloadT *copy = g_slice_dup (GstMIKEYPayloadT, payload);
+  GstMIKEYPayloadT *copy = g_memdup2 (payload, sizeof (GstMIKEYPayloadT));
   gst_mikey_payload_t_set (&copy->pt, payload->type, payload->ts_value);
   return copy;
 }
@@ -415,7 +416,7 @@ static GstMIKEYPayloadSP *
 gst_mikey_payload_sp_copy (const GstMIKEYPayloadSP * payload)
 {
   guint i, len;
-  GstMIKEYPayloadSP *copy = g_slice_dup (GstMIKEYPayloadSP, payload);
+  GstMIKEYPayloadSP *copy = g_memdup2 (payload, sizeof (GstMIKEYPayloadSP));
   gst_mikey_payload_sp_set (&copy->pt, payload->policy, payload->proto);
   len = payload->params->len;
   for (i = 0; i < len; i++) {
@@ -574,7 +575,7 @@ gst_mikey_payload_rand_dispose (GstMIKEYPayloadRAND * payload)
 static GstMIKEYPayloadRAND *
 gst_mikey_payload_rand_copy (const GstMIKEYPayloadRAND * payload)
 {
-  GstMIKEYPayloadRAND *copy = g_slice_dup (GstMIKEYPayloadRAND, payload);
+  GstMIKEYPayloadRAND *copy = g_memdup2 (payload, sizeof (GstMIKEYPayloadRAND));
   gst_mikey_payload_rand_set (&copy->pt, payload->len, payload->rand);
   return copy;
 }
@@ -683,7 +684,7 @@ gst_mikey_payload_key_data_set_spi (GstMIKEYPayload * payload,
  * gst_mikey_payload_key_data_set_interval:
  * @payload: a #GstMIKEYPayload
  * @vf_len: the length of @vf_data
- * @vf_data: (array length=vf_data): the Valid From data
+ * @vf_data: (array length=vf_len): the Valid From data
  * @vt_len: the length of @vt_data
  * @vt_data: (array length=vt_len): the Valid To data
  *
@@ -730,7 +731,8 @@ gst_mikey_payload_key_data_dispose (GstMIKEYPayloadKeyData * payload)
 static GstMIKEYPayloadKeyData *
 gst_mikey_payload_key_data_copy (const GstMIKEYPayloadKeyData * payload)
 {
-  GstMIKEYPayloadKeyData *copy = g_slice_dup (GstMIKEYPayloadKeyData, payload);
+  GstMIKEYPayloadKeyData *copy =
+      g_memdup2 (payload, sizeof (GstMIKEYPayloadKeyData));
   gst_mikey_payload_key_data_set_key (&copy->pt, payload->key_type,
       payload->key_len, payload->key_data);
   gst_mikey_payload_key_data_set_salt (&copy->pt, payload->salt_len,
@@ -753,7 +755,7 @@ gst_mikey_payload_key_data_copy (const GstMIKEYPayloadKeyData * payload)
 static void
 mikey_payload_free (GstMIKEYPayload * payload)
 {
-  g_slice_free1 (payload->len, payload);
+  g_free (payload);
 }
 
 
@@ -821,7 +823,7 @@ gst_mikey_payload_new (GstMIKEYPayloadType type)
   if (len == 0)
     return NULL;
 
-  result = g_slice_alloc0 (len);
+  result = g_malloc0 (len);
   gst_mini_object_init (GST_MINI_OBJECT_CAST (result),
       0, GST_TYPE_MIKEY_PAYLOAD, copy, clear,
       (GstMiniObjectFreeFunction) mikey_payload_free);
@@ -862,7 +864,7 @@ mikey_message_free (GstMIKEYMessage * msg)
   FREE_ARRAY (msg->map_info);
   FREE_ARRAY (msg->payloads);
 
-  g_slice_free (GstMIKEYMessage, msg);
+  g_free (msg);
 }
 
 /**
@@ -879,7 +881,7 @@ gst_mikey_message_new (void)
 {
   GstMIKEYMessage *result;
 
-  result = g_slice_new0 (GstMIKEYMessage);
+  result = g_new0 (GstMIKEYMessage, 1);
   gst_mini_object_init (GST_MINI_OBJECT_CAST (result),
       0, GST_TYPE_MIKEY_MESSAGE,
       (GstMiniObjectCopyFunction) mikey_message_copy, NULL,
@@ -2377,6 +2379,7 @@ gboolean
 gst_mikey_message_to_caps (const GstMIKEYMessage * msg, GstCaps * caps)
 {
   gboolean res = FALSE;
+  const GstMIKEYMapSRTP *srtp;
   const GstMIKEYPayload *payload;
   const gchar *srtp_cipher;
   const gchar *srtp_auth;
@@ -2384,8 +2387,16 @@ gst_mikey_message_to_caps (const GstMIKEYMessage * msg, GstCaps * caps)
   srtp_cipher = "aes-128-icm";
   srtp_auth = "hmac-sha1-80";
 
-  /* check the Security policy if any */
-  if ((payload = gst_mikey_message_find_payload (msg, GST_MIKEY_PT_SP, 0))) {
+  /* Look for first crypto session */
+  if (!(srtp = gst_mikey_message_get_cs_srtp (msg, 0))) {
+    GST_ERROR ("No crypto session found at index 0");
+    goto done;
+  }
+
+  /* Look for crypto policy corresponding to first crypto session */
+  if ((payload =
+          gst_mikey_message_find_payload (msg, GST_MIKEY_PT_SP,
+              (unsigned int) srtp->policy))) {
     GstMIKEYPayloadSP *p = (GstMIKEYPayloadSP *) payload;
     guint len, i;
     guint enc_alg = GST_MIKEY_ENC_NULL;
@@ -2478,7 +2489,7 @@ gst_mikey_message_to_caps (const GstMIKEYMessage * msg, GstCaps * caps)
     GstMIKEYPayloadKEMAC *p = (GstMIKEYPayloadKEMAC *) payload;
     const GstMIKEYPayload *sub;
     GstMIKEYPayloadKeyData *pkd;
-    GstBuffer *buf;
+    GstBuffer *buf, *saltbuf;
 
     if (p->enc_alg != GST_MIKEY_ENC_NULL || p->mac_alg != GST_MIKEY_MAC_NULL)
       goto done;
@@ -2491,8 +2502,15 @@ gst_mikey_message_to_caps (const GstMIKEYMessage * msg, GstCaps * caps)
 
     pkd = (GstMIKEYPayloadKeyData *) sub;
     buf = gst_buffer_new_memdup (pkd->key_data, pkd->key_len);
+    if (pkd->salt_len) {
+      saltbuf = gst_buffer_new_memdup (pkd->salt_data, pkd->salt_len);
+      gst_buffer_append (buf, saltbuf);
+      gst_buffer_unref (saltbuf);
+    }
     gst_caps_set_simple (caps, "srtp-key", GST_TYPE_BUFFER, buf, NULL);
     gst_buffer_unref (buf);
+
+    gst_caps_set_simple (caps, "roc", G_TYPE_UINT, srtp->roc, NULL);
   }
 
   gst_caps_set_simple (caps,

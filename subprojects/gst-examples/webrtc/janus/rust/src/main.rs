@@ -96,10 +96,13 @@ impl App {
                     .map(|s| String::from(s.path_string()))
                     .unwrap_or_else(|| String::from("None")),
                 err.error(),
-                err.debug().unwrap_or_else(|| String::from("None")),
+                err.debug().unwrap_or_else(|| glib::GString::from("None")),
             ),
             MessageView::Warning(warning) => {
                 println!("Warning: \"{}\"", warning.debug().unwrap());
+            }
+            MessageView::Latency(_) => {
+                let _ = self.pipeline.recalculate_latency();
             }
             _ => (),
         }
@@ -139,7 +142,7 @@ impl Drop for AppInner {
 fn check_plugins() -> Result<(), anyhow::Error> {
     let needed = [
         "videotestsrc",
-        "videoconvert",
+        "videoconvertscale",
         "autodetect",
         "vpx",
         "webrtc",
@@ -158,7 +161,7 @@ fn check_plugins() -> Result<(), anyhow::Error> {
         .collect::<Vec<_>>();
 
     if !missing.is_empty() {
-        bail!("Missing plugins: {:?}", missing);
+        bail!("Missing plugins: {missing:?}");
     } else {
         Ok(())
     }

@@ -82,9 +82,11 @@ enum _GstAdaptiveDemux2StreamState {
   GST_ADAPTIVE_DEMUX2_STREAM_STATE_STOPPED, /* Stream was stopped */
   GST_ADAPTIVE_DEMUX2_STREAM_STATE_RESTART, /* Stream stopped but needs restart logic */
   GST_ADAPTIVE_DEMUX2_STREAM_STATE_START_FRAGMENT,
+  GST_ADAPTIVE_DEMUX2_STREAM_STATE_WAITING_PREPARE, /* Sub-class is busy and can't update_fragment_info() yet */
   GST_ADAPTIVE_DEMUX2_STREAM_STATE_WAITING_LIVE,
   GST_ADAPTIVE_DEMUX2_STREAM_STATE_WAITING_OUTPUT_SPACE,
   GST_ADAPTIVE_DEMUX2_STREAM_STATE_WAITING_MANIFEST_UPDATE,
+  GST_ADAPTIVE_DEMUX2_STREAM_STATE_WAITING_BEFORE_DOWNLOAD, /* Ready, but not allowed to download yet */
   GST_ADAPTIVE_DEMUX2_STREAM_STATE_DOWNLOADING,
   GST_ADAPTIVE_DEMUX2_STREAM_STATE_EOS,
   GST_ADAPTIVE_DEMUX2_STREAM_STATE_ERRORED
@@ -101,10 +103,24 @@ struct _GstAdaptiveDemux2StreamClass
    * Requests the stream to set the information about the current fragment to its
    * current fragment struct
    *
-   * Returns: #GST_FLOW_OK in success, #GST_FLOW_ERROR on error and #GST_FLOW_EOS
-   *          if there is no fragment.
+   * Returns: #GST_FLOW_OK in success, #GST_FLOW_ERROR on error, #GST_FLOW_EOS
+   *          if there is no fragment, or the custom GST_ADAPTIVE_DEMUX_FLOW_BUSY
+   *          if the sub-class is still preparing.
    */
   GstFlowReturn (*update_fragment_info) (GstAdaptiveDemux2Stream * stream);
+
+  /**
+   * submit_request:
+   * @stream: #GstAdaptiveDemux2Stream
+   * @download_req: #DownloadRequest
+   *
+   * Requests the stream submit the provided download request for processing,
+   * either through the DownloadHelper (default), or through some sub-class
+   * mechanism
+   *
+   * Returns: #GST_FLOW_OK in success, #GST_FLOW_ERROR on error
+   */
+  GstFlowReturn (*submit_request) (GstAdaptiveDemux2Stream * stream, DownloadRequest * download_req);
 
   /**
    * finish_fragment:
@@ -138,14 +154,26 @@ struct _GstAdaptiveDemux2StreamClass
 				    GstClockTimeDiff       * final_ts);
 
   /**
-   * can_start:
+   * start:
    * @stream: a #GstAdaptiveDemux2Stream
    *
-   * Called before starting a @stream. sub-classes can return %FALSE if more
-   * information is required before it can be started. Sub-classes will have to
-   * call gst_adaptive_demux2_stream_start() when the stream should be started.
+   * Called to start downloading a @stream, sub-classes should chain up to the default
+   * implementation. Sub-classes can return %FALSE if more
+   * information is required before the stream can be started. In that case, sub-classes
+   * will have to call gst_adaptive_demux2_stream_start() again when the stream should
+   * be started.
    */
-  gboolean      (*can_start) (GstAdaptiveDemux2Stream *stream);
+  void       (*start) (GstAdaptiveDemux2Stream *stream);
+
+  /**
+   * stop:
+   * @stream: a #GstAdaptiveDemux2Stream
+   *
+   * Called to stop downloading a @stream, sub-classes should chain up to the default
+   * implementation.
+   */
+  void       (*stop) (GstAdaptiveDemux2Stream *stream);
+
 
   /**
    * create_tracks:
@@ -281,6 +309,10 @@ struct _GstAdaptiveDemux2Stream
   GstAdaptiveDemux2StreamState state;
   guint pending_cb_id;
   gboolean download_active;
+
+  GMutex prepare_lock;
+  GCond prepare_cond;
+
   /* The (global output) time at which this stream should be woken
    * to download more input */
   GstClockTimeDiff next_input_wakeup_time;
@@ -310,6 +342,7 @@ struct _GstAdaptiveDemux2Stream
 
   GstAdaptiveDemux2StreamFragment fragment;
 
+  gboolean download_error_retry;
   guint download_error_count;
 
   /* Last collection provided by parsebin */
@@ -346,6 +379,9 @@ GstFlowReturn gst_adaptive_demux2_stream_advance_fragment (GstAdaptiveDemux2Stre
 
 gboolean gst_adaptive_demux2_stream_handle_collection (GstAdaptiveDemux2Stream *stream,
     GstStreamCollection *collection, gboolean *had_pending_tracks);
+
+void gst_adaptive_demux2_stream_mark_prepared(GstAdaptiveDemux2Stream *stream);
+gboolean gst_adaptive_demux2_stream_wait_prepared(GstAdaptiveDemux2Stream *stream);
 
 void gst_adaptive_demux2_stream_fragment_clear (GstAdaptiveDemux2StreamFragment * f);
 

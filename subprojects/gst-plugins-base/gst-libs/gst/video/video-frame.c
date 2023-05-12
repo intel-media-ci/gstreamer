@@ -39,7 +39,7 @@ video_frame_get_perf_category (void)
   static GstDebugCategory *cat = NULL;
 
   if (g_once_init_enter (&cat)) {
-    GstDebugCategory *c;
+    GstDebugCategory *c = NULL;
 
     GST_DEBUG_CATEGORY_GET (c, "GST_PERFORMANCE");
     g_once_init_leave (&cat, c);
@@ -349,11 +349,10 @@ gst_video_frame_copy_plane (GstVideoFrame * dest, const GstVideoFrame * src,
   if (GST_VIDEO_FORMAT_INFO_IS_TILED (finfo)) {
     gint tile_size;
     gint sx_tiles, sy_tiles, dx_tiles, dy_tiles;
-    guint i, j, ws, hs, ts;
+    guint i, j;
     GstVideoTileMode mode;
 
-    tile_size = gst_video_format_info_get_tile_sizes (finfo, plane, &ws, &hs);
-    ts = ws + hs;
+    tile_size = GST_VIDEO_FORMAT_INFO_TILE_SIZE (finfo, plane);
 
     mode = GST_VIDEO_FORMAT_INFO_TILE_MODE (finfo);
 
@@ -364,8 +363,8 @@ gst_video_frame_copy_plane (GstVideoFrame * dest, const GstVideoFrame * src,
     dy_tiles = GST_VIDEO_TILE_Y_TILES (ds);
 
     /* this is the amount of tiles to copy */
-    w = ((w - 1) >> ws) + 1;
-    h = ((h - 1) >> hs) + 1;
+    w = MIN (sx_tiles, dx_tiles);
+    h = MIN (sy_tiles, dy_tiles);
 
     /* FIXME can possibly do better when no retiling is needed, it depends on
      * the stride and the tile_size */
@@ -376,7 +375,7 @@ gst_video_frame_copy_plane (GstVideoFrame * dest, const GstVideoFrame * src,
         si = gst_video_tile_get_index (mode, i, j, sx_tiles, sy_tiles);
         di = gst_video_tile_get_index (mode, i, j, dx_tiles, dy_tiles);
 
-        memcpy (dp + (di << ts), sp + (si << ts), tile_size);
+        memcpy (dp + (di * tile_size), sp + (si * tile_size), tile_size);
       }
     }
   } else {

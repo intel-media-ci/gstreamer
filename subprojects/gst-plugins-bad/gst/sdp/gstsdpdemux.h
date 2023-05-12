@@ -72,6 +72,10 @@ struct _GstSDPStream {
   guint         ttl;
   gboolean      multicast;
 
+  /* source-filter */
+  gchar        *src_list;
+  gchar        *src_incl_list;
+
   /* our udp sink back to the server */
   GstElement   *udpsink;
   GstPad       *rtcppad;
@@ -80,6 +84,24 @@ struct _GstSDPStream {
   gint          pt;
   gboolean      container;
 };
+
+/**
+ * GstSDPDemuxRTCPMode:
+ * @GST_SDP_DEMUX_RTCP_MODE_INACTIVE: Don't send or receive RTCP packets
+ * @GST_SDP_DEMUX_RTCP_MODE_RECVONLY: Only receive RTCP packets
+ * @GST_SDP_DEMUX_RTCP_MODE_SENDONLY: Only send RTCP packets
+ * @GST_SDP_DEMUX_RTCP_MODE_SENDRECV: Send and receive RTCP packets
+ *
+ * RTCP configuration.
+ *
+ * Since: 1.24
+ */
+typedef enum {
+  GST_SDP_DEMUX_RTCP_MODE_INACTIVE = 0,
+  GST_SDP_DEMUX_RTCP_MODE_RECVONLY = 1,
+  GST_SDP_DEMUX_RTCP_MODE_SENDONLY = 2,
+  GST_SDP_DEMUX_RTCP_MODE_SENDRECV = 3,
+} GstSDPDemuxRTCPMode;
 
 struct _GstSDPDemux {
   GstBin           parent;
@@ -100,6 +122,8 @@ struct _GstSDPDemux {
   guint64           udp_timeout;
   guint             latency;
   gboolean          redirect;
+  const gchar      *media; /* if non-NULL only hook up these kinds of media (video/audio) */ /* interned string */
+  GstSDPDemuxRTCPMode rtcp_mode;
 
   /* session management */
   GstElement      *session;

@@ -29,9 +29,6 @@
  * by supporting publication and selection of available streams via the
  * #GstStreamCollection message and #GST_EVENT_SELECT_STREAMS event API.
  *
- * > playbin3 is still experimental API and a technology preview.
- * > Its behaviour and exposed API is subject to change.
- *
  * playbin3 can handle both audio and video files and features
  *
  * * automatic file type recognition and based on that automatic
@@ -189,6 +186,9 @@
  * a structure named 'redirect' along with a 'new-location' field of string
  * type. The new location may be a relative or an absolute URI. Examples
  * for such redirects can be found in many quicktime movie trailers.
+ *
+ * NOTE: playbin3 (via uridecodebin3) will handle the redirect messages if
+ * possible. The message will only be forwarded if it can't handle it.
  *
  * ## Examples
  * |[
@@ -2240,7 +2240,7 @@ static void
 control_source_pad (GstPlayBin3 * playbin, GstPad * pad,
     GstPad * combine_pad, GstStreamType stream_type)
 {
-  SourcePad *sourcepad = g_slice_new0 (SourcePad);
+  SourcePad *sourcepad = g_new0 (SourcePad, 1);
 
   sourcepad->pad = pad;
   sourcepad->event_probe_id =
@@ -2418,7 +2418,7 @@ release_source_pad (GstPlayBin3 * playbin,
 
   /* Remove from list of controlled pads and check again for EOS status */
   playbin->source_pads = g_list_remove (playbin->source_pads, sourcepad);
-  g_slice_free (SourcePad, sourcepad);
+  g_free (sourcepad);
 }
 
 /* this function is called when a new pad is added to decodebin. We check the

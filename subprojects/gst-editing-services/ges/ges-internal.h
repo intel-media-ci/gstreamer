@@ -500,7 +500,7 @@ G_GNUC_INTERNAL GstElement * ges_track_get_composition (GESTrack *track);
 
 
 /*********************************************
- *  GESTrackElement subclasses contructores  *
+ *  GESTrackElement subclasses constructors  *
  ********************************************/
 G_GNUC_INTERNAL GESAudioTestSource * ges_audio_test_source_new (void);
 G_GNUC_INTERNAL GESAudioUriSource  * ges_audio_uri_source_new  (gchar *uri);
@@ -593,6 +593,14 @@ G_GNUC_INTERNAL gchar *ges_test_source_asset_check_id         (GType type, const
 G_GNUC_INTERNAL GESMarker * ges_marker_list_get_closest (GESMarkerList *list, GstClockTime position);
 G_GNUC_INTERNAL gchar * ges_marker_list_serialize (const GValue * v);
 G_GNUC_INTERNAL gboolean ges_marker_list_deserialize (GValue *dest, const gchar *s);
+
+/*******************************
+ *       GESDiscovererManager   *
+ *******************************/
+G_GNUC_INTERNAL void ges_discoverer_manager_cleanup                  (void);
+G_GNUC_INTERNAL gboolean ges_discoverer_manager_start_discovery      (GESDiscovererManager *self,
+                                                                      const gchar *uri);
+G_GNUC_INTERNAL void ges_discoverer_manager_recreate_discoverer      (GESDiscovererManager *self);
 
 /********************
  *  Gnonlin helpers *

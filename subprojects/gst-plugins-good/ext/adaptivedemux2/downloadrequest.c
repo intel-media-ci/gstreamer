@@ -27,6 +27,7 @@
 #include <gst/base/gsttypefindhelper.h>
 #include <gst/base/gstadapter.h>
 #include "downloadrequest.h"
+#include <stdlib.h>
 
 typedef struct _DownloadRequestPrivate DownloadRequestPrivate;
 
@@ -53,7 +54,7 @@ DownloadRequest *
 download_request_new (void)
 {
   DownloadRequest *request =
-      (DownloadRequest *) g_slice_new0 (DownloadRequestPrivate);
+      (DownloadRequest *) g_new0 (DownloadRequestPrivate, 1);
   DownloadRequestPrivate *priv = DOWNLOAD_REQUEST_PRIVATE (request);
 
   g_atomic_int_set (&request->ref_count, 1);
@@ -122,7 +123,7 @@ download_request_free (DownloadRequest * request)
 
   g_rec_mutex_clear (&priv->lock);
 
-  g_slice_free1 (sizeof (DownloadRequestPrivate), priv);
+  g_free (priv);
 }
 
 void
@@ -233,6 +234,115 @@ download_request_take_buffer (DownloadRequest * request)
   g_rec_mutex_unlock (&priv->lock);
 
   return buffer;
+}
+
+/* Extract the byte range of the download, matching the
+ * requested range against the GST_BUFFER_OFFSET() values of the
+ * data buffer, which tracks the byte position in the
+ * original resource */
+GstBuffer *
+download_request_take_buffer_range (DownloadRequest * request,
+    gint64 target_range_start, gint64 target_range_end)
+{
+  DownloadRequestPrivate *priv = DOWNLOAD_REQUEST_PRIVATE (request);
+  GstBuffer *buffer = NULL;
+  GstBuffer *input_buffer = NULL;
+
+  g_return_val_if_fail (request != NULL, NULL);
+
+  g_rec_mutex_lock (&priv->lock);
+
+  if (request->state != DOWNLOAD_REQUEST_STATE_LOADING
+      && request->state != DOWNLOAD_REQUEST_STATE_COMPLETE) {
+    g_rec_mutex_unlock (&priv->lock);
+    return NULL;
+  }
+
+  input_buffer = priv->buffer;
+  priv->buffer = NULL;
+  if (input_buffer == NULL)
+    goto out;
+
+  /* Figure out how much of the available data (if any) belongs to
+   * the target range */
+  gint64 avail_start = GST_BUFFER_OFFSET (input_buffer);
+  gint64 avail_end = avail_start + gst_buffer_get_size (input_buffer) - 1;
+
+  target_range_start = MAX (avail_start, target_range_start);
+
+  if (target_range_start <= avail_end) {
+    /* There's at least 1 byte available that belongs to this target request, but
+     * does this buffer need splitting in two? */
+    if (target_range_end != -1 && target_range_end < avail_end) {
+      /* Yes, it does. Drop the front of the buffer if needed and take the piece we want */
+      guint64 start_offset = target_range_start - avail_start;
+
+      buffer =
+          gst_buffer_copy_region (input_buffer, GST_BUFFER_COPY_MEMORY,
+          start_offset, target_range_end - avail_start);
+      GST_BUFFER_OFFSET (buffer) =
+          GST_BUFFER_OFFSET (input_buffer) + start_offset;
+
+      /* Put the rest of the buffer back */
+      priv->buffer =
+          gst_buffer_copy_region (input_buffer, GST_BUFFER_COPY_MEMORY,
+          target_range_end - avail_start, -1);
+
+      /* Release the original buffer. The sub-buffers are holding their own refs as needed */
+      gst_buffer_unref (input_buffer);
+    } else if (target_range_start != avail_start) {
+      /* We want to the end of the buffer, but need to drop a piece at the front */
+      guint64 start_offset = target_range_start - avail_start;
+
+      buffer =
+          gst_buffer_copy_region (input_buffer, GST_BUFFER_COPY_MEMORY,
+          start_offset, -1);
+      GST_BUFFER_OFFSET (buffer) =
+          GST_BUFFER_OFFSET (input_buffer) + start_offset;
+
+      /* Release the original buffer. The sub-buffer is holding its own ref as needed */
+      gst_buffer_unref (input_buffer);
+    } else {
+      /* No, return the entire buffer as-is */
+      buffer = input_buffer;
+    }
+  }
+
+out:
+  g_rec_mutex_unlock (&priv->lock);
+  return buffer;
+}
+
+guint64
+download_request_get_bytes_available (DownloadRequest * request)
+{
+  DownloadRequestPrivate *priv = DOWNLOAD_REQUEST_PRIVATE (request);
+  guint64 ret = 0;
+
+  g_rec_mutex_lock (&priv->lock);
+
+  if (priv->buffer != NULL)
+    ret = gst_buffer_get_size (priv->buffer);
+
+  g_rec_mutex_unlock (&priv->lock);
+
+  return ret;
+}
+
+guint64
+download_request_get_cur_offset (DownloadRequest * request)
+{
+  DownloadRequestPrivate *priv = DOWNLOAD_REQUEST_PRIVATE (request);
+  guint64 ret = GST_BUFFER_OFFSET_NONE;
+
+  g_rec_mutex_lock (&priv->lock);
+
+  if (priv->buffer != NULL)
+    ret = GST_BUFFER_OFFSET (priv->buffer);
+
+  g_rec_mutex_unlock (&priv->lock);
+
+  return ret;
 }
 
 void
@@ -365,6 +475,54 @@ download_request_get_caps (DownloadRequest * request)
   g_rec_mutex_unlock (&priv->lock);
 
   return caps;
+}
+
+static GstClockTime
+_get_age_header (GstStructure * headers)
+{
+  const GstStructure *response_headers;
+  const gchar *http_age;
+  const GValue *val;
+
+  val = gst_structure_get_value (headers, "response-headers");
+  if (!val) {
+    return 0;
+  }
+
+  response_headers = gst_value_get_structure (val);
+  http_age = gst_structure_get_string (response_headers, "Date");
+  if (!http_age) {
+    return 0;
+  }
+
+  return atoi (http_age) * GST_SECOND;
+}
+
+/* Return the age of the download from the Age header,
+ * or 0 if there was none */
+GstClockTime
+download_request_get_age (DownloadRequest * request)
+{
+  DownloadRequestPrivate *priv = DOWNLOAD_REQUEST_PRIVATE (request);
+  GstClockTime age = 0;
+
+  g_return_val_if_fail (request != NULL, age);
+
+  if (request->state != DOWNLOAD_REQUEST_STATE_LOADING
+      && request->state != DOWNLOAD_REQUEST_STATE_COMPLETE)
+    return age;
+
+  g_rec_mutex_lock (&priv->lock);
+
+  if (request->headers != NULL) {
+    /* We have headers for the download, see if there was an Age
+     * header in the response */
+    GstClockTime age = _get_age_header (request->headers);
+    GST_LOG ("Got cached data with age %" GST_TIMEP_FORMAT, &age);
+  }
+  g_rec_mutex_unlock (&priv->lock);
+
+  return age;
 }
 
 void

@@ -1256,7 +1256,7 @@ gst_rtspsrc_class_init (GstRTSPSrcClass * klass)
   gst_rtspsrc_signals[SIGNAL_PUSH_BACKCHANNEL_SAMPLE] =
       g_signal_new ("push-backchannel-sample", G_TYPE_FROM_CLASS (klass),
       G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION | G_SIGNAL_DEPRECATED,
-      G_STRUCT_OFFSET (GstRTSPSrcClass, push_backchannel_buffer), NULL, NULL,
+      G_STRUCT_OFFSET (GstRTSPSrcClass, push_backchannel_sample), NULL, NULL,
       NULL, GST_TYPE_FLOW_RETURN, 2, G_TYPE_UINT, GST_TYPE_SAMPLE);
 
   /**
@@ -1593,6 +1593,9 @@ gst_rtspsrc_finalize (GObject * object)
 
   if (rtspsrc->tls_interaction)
     g_object_unref (rtspsrc->tls_interaction);
+
+  if (rtspsrc->initial_seek)
+    gst_event_unref (rtspsrc->initial_seek);
 
   /* free locks */
   g_rec_mutex_clear (&rtspsrc->stream_rec_lock);
@@ -2298,6 +2301,13 @@ gst_rtspsrc_collect_payloads (GstRTSPSrc * src, const GstSDPMessage * sdp,
     outcaps = gst_caps_intersect (caps, global_caps);
     gst_caps_unref (caps);
 
+    if (gst_caps_is_empty (outcaps)) {
+      GST_WARNING_OBJECT (src,
+          " skipping pt %d with caps conflicting with the global caps", pt);
+      gst_caps_unref (outcaps);
+      continue;
+    }
+
     /* the first pt will be the default */
     if (stream->ptmap->len == 0)
       stream->default_pt = pt;
@@ -2439,7 +2449,7 @@ gst_rtspsrc_create_stream (GstRTSPSrc * src, GstSDPMessage * sdp, gint idx,
 
       base = get_aggregate_control (src);
       if (g_strcmp0 (control_path, "*") == 0)
-        control_path = g_strdup (base);
+        stream->conninfo.location = g_strdup (base);
       else
         stream->conninfo.location = gst_uri_join_strings (base, control_path);
     }
@@ -2967,7 +2977,7 @@ gst_rtspsrc_perform_seek (GstRTSPSrc * src, GstEvent * event)
 
   /* If an accurate seek was requested, we want to clip the segment we
    * output in ONVIF mode to the requested bounds */
-  src->clip_out_segment = ! !(flags & GST_SEEK_FLAG_ACCURATE);
+  src->clip_out_segment = !!(flags & GST_SEEK_FLAG_ACCURATE);
   src->seek_seqnum = gst_event_get_seqnum (event);
 
   /* prepare for streaming again */
@@ -3483,6 +3493,7 @@ copy_sticky_events (GstPad * pad, GstEvent ** event, gpointer user_data)
       gst_rtspsrc_update_src_event (data->src, data->stream,
       gst_event_ref (*event));
   gst_pad_store_sticky_event (data->stream->srcpad, new_event);
+  gst_event_unref (new_event);
 
   return TRUE;
 }
@@ -6026,11 +6037,11 @@ interrupt:
   }
 connect_error:
   {
-    gchar *str = gst_rtsp_strresult (res);
     GstFlowReturn ret;
 
     src->conninfo.connected = FALSE;
     if (res != GST_RTSP_EINTR) {
+      gchar *str = gst_rtsp_strresult (res);
       GST_ELEMENT_ERROR (src, RESOURCE, OPEN_READ_WRITE, (NULL),
           ("Could not connect to server. (%s)", str));
       g_free (str);
@@ -6051,11 +6062,11 @@ receive_error:
   }
 handle_request_failed:
   {
-    gchar *str = gst_rtsp_strresult (res);
     GstFlowReturn ret;
 
     gst_rtsp_message_unset (&message);
     if (res != GST_RTSP_EINTR) {
+      gchar *str = gst_rtsp_strresult (res);
       GST_ELEMENT_ERROR (src, RESOURCE, WRITE, (NULL),
           ("Could not handle server message. (%s)", str));
       g_free (str);
@@ -6435,21 +6446,21 @@ gst_rtsp_auth_method_to_string (GstRTSPAuthMethod method)
  *
  * At the moment, for Basic auth, we just do a minimal check and don't
  * even parse out the realm */
-static void
+static gboolean
 gst_rtspsrc_parse_auth_hdr (GstRTSPMessage * response,
     GstRTSPAuthMethod * methods, GstRTSPConnection * conn, gboolean * stale)
 {
   GstRTSPAuthCredential **credentials, **credential;
 
-  g_return_if_fail (response != NULL);
-  g_return_if_fail (methods != NULL);
-  g_return_if_fail (stale != NULL);
+  g_return_val_if_fail (response != NULL, FALSE);
+  g_return_val_if_fail (methods != NULL, FALSE);
+  g_return_val_if_fail (stale != NULL, FALSE);
 
   credentials =
       gst_rtsp_message_parse_auth_credentials (response,
       GST_RTSP_HDR_WWW_AUTHENTICATE);
   if (!credentials)
-    return;
+    return FALSE;
 
   credential = credentials;
   while (*credential) {
@@ -6477,6 +6488,8 @@ gst_rtspsrc_parse_auth_hdr (GstRTSPMessage * response,
   }
 
   gst_rtsp_auth_credentials_free (credentials);
+
+  return TRUE;
 }
 
 /**
@@ -6505,10 +6518,14 @@ gst_rtspsrc_setup_auth (GstRTSPSrc * src, GstRTSPMessage * response)
   GstRTSPConnection *conn;
   gboolean stale = FALSE;
 
+  g_return_val_if_fail (response != NULL, FALSE);
+
   conn = src->conninfo.connection;
 
-  /* Identify the available auth methods and see if any are supported */
-  gst_rtspsrc_parse_auth_hdr (response, &avail_methods, conn, &stale);
+  /* Identify the available auth methods and see if any are supported. If no
+   * headers were found, propagate the HTTP error. */
+  if (!gst_rtspsrc_parse_auth_hdr (response, &avail_methods, conn, &stale))
+    goto propagate_error;
 
   if (avail_methods == GST_RTSP_AUTH_NONE)
     goto no_auth_available;
@@ -6540,9 +6557,10 @@ gst_rtspsrc_setup_auth (GstRTSPSrc * src, GstRTSPMessage * response)
    * already, request a username and passwd from the application via some kind
    * of credentials request message */
 
-  /* If we don't have a username and passwd at this point, bail out. */
+  /* If we don't have a username and passwd at this point, bail out and
+   * propagate the normal NOT_AUTHORIZED error. */
   if (user == NULL || pass == NULL)
-    goto no_user_pass;
+    goto propagate_error;
 
   /* Try to configure for each available authentication method, strongest to
    * weakest */
@@ -6575,10 +6593,11 @@ no_auth_available:
         ("No supported authentication protocol was found"));
     return FALSE;
   }
-no_user_pass:
+
+propagate_error:
   {
     /* We don't fire an error message, we just return FALSE and let the
-     * normal NOT_AUTHORIZED error be propagated */
+     * normal error be propagated */
     return FALSE;
   }
 }
@@ -7708,6 +7727,8 @@ gst_rtspsrc_setup_streams_start (GstRTSPSrc * src, gboolean async)
           goto retry;
       case GST_RTSP_STS_BAD_REQUEST:
       case GST_RTSP_STS_NOT_FOUND:
+      case GST_RTSP_STS_METHOD_NOT_VALID_IN_THIS_STATE:
+      case GST_RTSP_STS_PARAMETER_NOT_UNDERSTOOD:
         /* There are various non-compliant servers that don't require control
          * URLs that are not resolved correctly but instead are just appended.
          * See e.g.
@@ -9567,12 +9588,12 @@ gst_rtspsrc_send_event (GstElement * element, GstEvent * event)
   if (GST_EVENT_TYPE (event) == GST_EVENT_SEEK) {
     if (rtspsrc->state >= GST_RTSP_STATE_READY) {
       res = gst_rtspsrc_perform_seek (rtspsrc, event);
-      gst_event_unref (event);
     } else {
       /* Store for later use */
       res = TRUE;
-      rtspsrc->initial_seek = event;
+      gst_event_replace (&rtspsrc->initial_seek, event);
     }
+    gst_event_unref (event);
   } else if (GST_EVENT_IS_DOWNSTREAM (event)) {
     res = gst_rtspsrc_push_event (rtspsrc, event);
   } else {

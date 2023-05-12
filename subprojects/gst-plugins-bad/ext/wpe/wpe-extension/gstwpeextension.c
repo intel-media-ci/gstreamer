@@ -30,10 +30,33 @@
 #include <gio/gunixfdlist.h>
 #include <wpe/webkit-web-extension.h>
 
+GST_DEBUG_CATEGORY_STATIC (wpe_extension_debug);
+#define GST_CAT_DEFAULT wpe_extension_debug
+
 G_MODULE_EXPORT void webkit_web_extension_initialize (WebKitWebExtension *
     extension);
 
 static WebKitWebExtension *global_extension = NULL;
+
+
+static void
+console_message_cb (WebKitWebPage * page,
+    WebKitConsoleMessage * console_message, gpointer data)
+{
+  char *message = g_strdup (webkit_console_message_get_text (console_message));
+  gst_wpe_extension_send_message (webkit_user_message_new
+      ("gstwpe.console_message", g_variant_new ("(s)", message)), NULL, NULL,
+      NULL);
+  g_free (message);
+}
+
+static void
+web_page_created_callback (WebKitWebExtension * extension,
+    WebKitWebPage * web_page, gpointer data)
+{
+  g_signal_connect (web_page, "console-message-sent",
+      G_CALLBACK (console_message_cb), NULL);
+}
 
 void
 webkit_web_extension_initialize (WebKitWebExtension * extension)
@@ -42,13 +65,19 @@ webkit_web_extension_initialize (WebKitWebExtension * extension)
 
   gst_init (NULL, NULL);
 
+  GST_DEBUG_CATEGORY_INIT (wpe_extension_debug, "wpewebextension", 0,
+      "GstWPE WebExtension");
+
   /* Register our own audio sink to */
   gst_element_register (NULL, "gstwpeaudiosink", GST_RANK_PRIMARY + 500,
       gst_wpe_audio_sink_get_type ());
   gst_object_unref (g_object_new (gst_wpe_bus_msg_forwarder_get_type (), NULL));
 
   global_extension = extension;
-  GST_INFO_OBJECT (global_extension, "Setting as global extension.");
+  GST_INFO ("Setting as global extension.");
+
+  g_signal_connect (global_extension, "page-created",
+      G_CALLBACK (web_page_created_callback), NULL);
 }
 
 void

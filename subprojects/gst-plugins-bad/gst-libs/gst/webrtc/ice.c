@@ -101,17 +101,19 @@ gst_webrtc_ice_find_transport (GstWebRTCICE * ice,
  * @ice: The #GstWebRTCICE
  * @stream: The #GstWebRTCICEStream
  * @candidate: The ICE candidate
+ * @promise: (nullable): A #GstPromise for task notifications (Since: 1.24)
  *
  * Since: 1.22
  */
 void
 gst_webrtc_ice_add_candidate (GstWebRTCICE * ice,
-    GstWebRTCICEStream * stream, const gchar * candidate)
+    GstWebRTCICEStream * stream, const gchar * candidate, GstPromise * promise)
 {
   g_return_if_fail (GST_IS_WEBRTC_ICE (ice));
   g_assert (GST_WEBRTC_ICE_GET_CLASS (ice)->add_candidate);
 
-  GST_WEBRTC_ICE_GET_CLASS (ice)->add_candidate (ice, stream, candidate);
+  GST_WEBRTC_ICE_GET_CLASS (ice)->add_candidate (ice, stream, candidate,
+      promise);
 }
 
 /**
@@ -452,6 +454,45 @@ gst_webrtc_ice_get_turn_server (GstWebRTCICE * ice)
   return GST_WEBRTC_ICE_GET_CLASS (ice)->get_turn_server (ice);
 }
 
+/**
+ * gst_webrtc_ice_set_http_proxy:
+ * @ice: The #GstWebRTCICE
+ * @uri: (transfer none): URI of the HTTP proxy of the form
+ *   http://[username:password@]hostname[:port]
+ *
+ * Set HTTP Proxy to be used when connecting to TURN server.
+ *
+ * Since: 1.22
+ */
+void
+gst_webrtc_ice_set_http_proxy (GstWebRTCICE * ice, const gchar * uri_s)
+{
+  g_return_if_fail (GST_IS_WEBRTC_ICE (ice));
+  g_assert (GST_WEBRTC_ICE_GET_CLASS (ice)->set_http_proxy);
+
+  GST_WEBRTC_ICE_GET_CLASS (ice)->set_http_proxy (ice, uri_s);
+}
+
+/**
+ * gst_webrtc_ice_get_http_proxy:
+ * @ice: The #GstWebRTCICE
+ *
+ * Returns: (transfer full): URI of the HTTP proxy of the form
+ *   http://[username:password@]hostname[:port]
+ *
+ * Get HTTP Proxy to be used when connecting to TURN server.
+ *
+ * Since: 1.22
+ */
+gchar *
+gst_webrtc_ice_get_http_proxy (GstWebRTCICE * ice)
+{
+  g_return_val_if_fail (GST_IS_WEBRTC_ICE (ice), NULL);
+  g_assert (GST_WEBRTC_ICE_GET_CLASS (ice)->get_http_proxy);
+
+  return GST_WEBRTC_ICE_GET_CLASS (ice)->get_http_proxy (ice);
+}
+
 
 static void
 gst_webrtc_ice_set_property (GObject * object, guint prop_id,
@@ -516,6 +557,8 @@ gst_webrtc_ice_class_init (GstWebRTCICEClass * klass)
   klass->get_stun_server = NULL;
   klass->set_turn_server = NULL;
   klass->get_turn_server = NULL;
+  klass->get_http_proxy = NULL;
+  klass->set_http_proxy = NULL;
   klass->set_tos = NULL;
   klass->set_on_ice_candidate = NULL;
   klass->get_local_candidates = NULL;

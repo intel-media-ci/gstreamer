@@ -56,6 +56,15 @@
 GST_DEBUG_CATEGORY_EXTERN (gst_msdkav1enc_debug);
 #define GST_CAT_DEFAULT gst_msdkav1enc_debug
 
+#define GST_MSDKAV1ENC(obj) \
+  (G_TYPE_CHECK_INSTANCE_CAST((obj), G_TYPE_FROM_INSTANCE (obj), GstMsdkAV1Enc))
+#define GST_MSDKAV1ENC_CLASS(klass) \
+  (G_TYPE_CHECK_CLASS_CAST((klass), G_TYPE_FROM_CLASS (klass), GstMsdkAV1EncClass))
+#define GST_IS_MSDKAV1ENC(obj) \
+  (G_TYPE_CHECK_INSTANCE_TYPE((obj), G_TYPE_FROM_INSTANCE (obj)))
+#define GST_IS_MSDKAV1ENC_CLASS(klass) \
+  (G_TYPE_CHECK_CLASS_TYPE((klass), G_TYPE_FROM_CLASS (klass)))
+
 enum
 {
   PROP_TILE_ROW = GST_MSDKENC_PROP_MAX,
@@ -69,48 +78,39 @@ enum
 #define PROP_B_PYRAMID_DEFAULT          MFX_B_REF_UNKNOWN
 #define PROP_P_PYRAMID_DEFAULT          MFX_P_REF_DEFAULT
 
-#define RAW_FORMATS "NV12, P010_10LE"
-#define PROFILES    "main"
+/* *INDENT-OFF* */
+static const gchar *doc_sink_caps_str =
+    GST_VIDEO_CAPS_MAKE ("{ NV12, P010_10LE }") " ;"
+    GST_VIDEO_CAPS_MAKE_WITH_FEATURES ("memory:DMABuf",
+        "{ NV12, P010_10LE }") " ;"
+    GST_VIDEO_CAPS_MAKE_WITH_FEATURES ("memory:VAMemory", "{ NV12 }") " ;"
+    GST_VIDEO_CAPS_MAKE_WITH_FEATURES ("memory:D3D11Memory", "{ NV12 }");
+/* *INDENT-ON* */
 
-#define COMMON_FORMAT "{ " RAW_FORMATS " }"
-#define SRC_PROFILES  "{ " PROFILES " }"
+static const gchar *doc_src_caps_str = "video/x-av1";
 
-static GstStaticPadTemplate sink_factory = GST_STATIC_PAD_TEMPLATE ("sink",
-    GST_PAD_SINK,
-    GST_PAD_ALWAYS,
-    GST_STATIC_CAPS (GST_MSDK_CAPS_STR (COMMON_FORMAT,
-            COMMON_FORMAT)));
-
-static GstStaticPadTemplate src_factory = GST_STATIC_PAD_TEMPLATE ("src",
-    GST_PAD_SRC,
-    GST_PAD_ALWAYS,
-    GST_STATIC_CAPS ("video/x-av1, "
-        "framerate = (fraction) [0/1, MAX], "
-        "width = (int) [ 1, MAX ], height = (int) [ 1, MAX ], "
-        "profile = (string) " SRC_PROFILES)
-    );
-
-#define gst_msdkav1enc_parent_class parent_class
-G_DEFINE_TYPE (GstMsdkAV1Enc, gst_msdkav1enc, GST_TYPE_MSDKENC);
+static GstElementClass *parent_class = NULL;
 
 static gboolean
 gst_msdkav1enc_set_format (GstMsdkEnc * encoder)
 {
   GstMsdkAV1Enc *thiz = GST_MSDKAV1ENC (encoder);
+  GstPad *srcpad;
   GstCaps *template_caps;
   GstCaps *allowed_caps = NULL;
 
   thiz->profile = MFX_PROFILE_AV1_MAIN;
 
-  allowed_caps = gst_pad_get_allowed_caps (GST_VIDEO_ENCODER_SRC_PAD (encoder));
+  srcpad = GST_VIDEO_ENCODER_SRC_PAD (encoder);
 
+  allowed_caps = gst_pad_get_allowed_caps (srcpad);
   if (!allowed_caps || gst_caps_is_empty (allowed_caps)) {
     if (allowed_caps)
       gst_caps_unref (allowed_caps);
     return FALSE;
   }
 
-  template_caps = gst_static_pad_template_get_caps (&src_factory);
+  template_caps = gst_pad_get_pad_template_caps (srcpad);
 
   /* If downstream has ANY caps let encoder decide profile and level */
   if (gst_caps_is_equal (allowed_caps, template_caps)) {
@@ -314,26 +314,9 @@ gst_msdkav1enc_finalize (GObject * object)
 }
 
 static void
-gst_msdkav1enc_class_init (GstMsdkAV1EncClass * klass)
+_msdkav1enc_install_properties (GObjectClass * gobject_class,
+    GstMsdkEncClass * encoder_class)
 {
-  GObjectClass *gobject_class;
-  GstElementClass *element_class;
-  GstMsdkEncClass *encoder_class;
-
-  gobject_class = G_OBJECT_CLASS (klass);
-  element_class = GST_ELEMENT_CLASS (klass);
-  encoder_class = GST_MSDKENC_CLASS (klass);
-
-  gobject_class->finalize = gst_msdkav1enc_finalize;
-  gobject_class->set_property = gst_msdkav1enc_set_property;
-  gobject_class->get_property = gst_msdkav1enc_get_property;
-
-  encoder_class->set_format = gst_msdkav1enc_set_format;
-  encoder_class->configure = gst_msdkav1enc_configure;
-  encoder_class->set_src_caps = gst_msdkav1enc_set_src_caps;
-  encoder_class->qp_max = 255;
-  encoder_class->qp_min = 0;
-
   gst_msdkenc_install_common_properties (encoder_class);
 
   g_object_class_install_property (gobject_class, PROP_TILE_ROW,
@@ -357,6 +340,33 @@ gst_msdkav1enc_class_init (GstMsdkAV1EncClass * klass)
       g_param_spec_boolean ("p-pyramid", "P-pyramid",
           "Enable P-Pyramid Reference structure", PROP_P_PYRAMID_DEFAULT,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+}
+
+static void
+gst_msdkav1enc_class_init (gpointer klass, gpointer data)
+{
+  GObjectClass *gobject_class;
+  GstElementClass *element_class;
+  GstMsdkEncClass *encoder_class;
+  MsdkEncCData *cdata = data;
+
+  parent_class = g_type_class_peek_parent (klass);
+
+  gobject_class = G_OBJECT_CLASS (klass);
+  element_class = GST_ELEMENT_CLASS (klass);
+  encoder_class = GST_MSDKENC_CLASS (klass);
+
+  gobject_class->finalize = gst_msdkav1enc_finalize;
+  gobject_class->set_property = gst_msdkav1enc_set_property;
+  gobject_class->get_property = gst_msdkav1enc_get_property;
+
+  encoder_class->set_format = gst_msdkav1enc_set_format;
+  encoder_class->configure = gst_msdkav1enc_configure;
+  encoder_class->set_src_caps = gst_msdkav1enc_set_src_caps;
+  encoder_class->qp_max = 255;
+  encoder_class->qp_min = 0;
+
+  _msdkav1enc_install_properties (gobject_class, encoder_class);
 
   gst_element_class_set_static_metadata (element_class,
       "Intel MSDK AV1 encoder",
@@ -365,15 +375,61 @@ gst_msdkav1enc_class_init (GstMsdkAV1EncClass * klass)
       "Haihao Xiang <haihao.xiang@intel.com>, "
       "Mengkejiergeli Ba <mengkejiergeli.ba@intel.com>");
 
-  gst_element_class_add_static_pad_template (element_class, &sink_factory);
-  gst_element_class_add_static_pad_template (element_class, &src_factory);
+  gst_msdkcaps_pad_template_init (element_class,
+      cdata->sink_caps, cdata->src_caps, doc_sink_caps_str, doc_src_caps_str);
+
+  gst_caps_unref (cdata->sink_caps);
+  gst_caps_unref (cdata->src_caps);
+  g_free (cdata);
 }
 
 static void
-gst_msdkav1enc_init (GstMsdkAV1Enc * thiz)
+gst_msdkav1enc_init (GTypeInstance * instance, gpointer g_class)
 {
+  GstMsdkAV1Enc *thiz = GST_MSDKAV1ENC (instance);
   thiz->num_tile_rows = PROP_TILE_ROW_DEFAULT;
   thiz->num_tile_cols = PROP_TILE_COL_DEFAULT;
   thiz->b_pyramid = PROP_B_PYRAMID_DEFAULT;
   thiz->p_pyramid = PROP_P_PYRAMID_DEFAULT;
+}
+
+gboolean
+gst_msdkav1enc_register (GstPlugin * plugin,
+    GstMsdkContext * context, GstCaps * sink_caps,
+    GstCaps * src_caps, guint rank)
+{
+  GType type;
+  MsdkEncCData *cdata;
+  gchar *type_name, *feature_name;
+  gboolean ret = FALSE;
+
+  GTypeInfo type_info = {
+    .class_size = sizeof (GstMsdkAV1EncClass),
+    .class_init = gst_msdkav1enc_class_init,
+    .instance_size = sizeof (GstMsdkAV1Enc),
+    .instance_init = gst_msdkav1enc_init
+  };
+
+  cdata = g_new (MsdkEncCData, 1);
+  cdata->sink_caps = gst_caps_ref (sink_caps);
+  cdata->src_caps = gst_caps_ref (src_caps);
+
+  GST_MINI_OBJECT_FLAG_SET (cdata->sink_caps,
+      GST_MINI_OBJECT_FLAG_MAY_BE_LEAKED);
+  GST_MINI_OBJECT_FLAG_SET (cdata->src_caps,
+      GST_MINI_OBJECT_FLAG_MAY_BE_LEAKED);
+
+  type_info.class_data = cdata;
+
+  type_name = g_strdup ("GstMsdkAV1Enc");
+  feature_name = g_strdup ("msdkav1enc");
+
+  type = g_type_register_static (GST_TYPE_MSDKENC, type_name, &type_info, 0);
+  if (type)
+    ret = gst_element_register (plugin, feature_name, rank, type);
+
+  g_free (type_name);
+  g_free (feature_name);
+
+  return ret;
 }

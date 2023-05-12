@@ -180,7 +180,6 @@ enum
   ARG_DEBUG_COLOR_MODE,
   ARG_DEBUG_HELP,
 #endif
-  ARG_PLUGIN_SPEW,
   ARG_PLUGIN_PATH,
   ARG_PLUGIN_LOAD,
   ARG_SEGTRAP_DISABLE,
@@ -271,10 +270,6 @@ gst_init_get_option_group (void)
     {"gst-debug-disable", 0, G_OPTION_FLAG_NO_ARG, G_OPTION_ARG_CALLBACK,
         (gpointer) parse_goption_arg, N_("Disable debugging"), NULL},
 #endif
-    {"gst-plugin-spew", 0, G_OPTION_FLAG_NO_ARG, G_OPTION_ARG_CALLBACK,
-          (gpointer) parse_goption_arg,
-          N_("Enable verbose plugin loading diagnostics"),
-        NULL},
     {"gst-plugin-path", 0, 0, G_OPTION_ARG_CALLBACK,
           (gpointer) parse_goption_arg,
         N_("Colon-separated paths containing plugins"), N_("PATHS")},
@@ -450,11 +445,6 @@ gst_init_check (int *argc, char **argv[], GError ** error)
  * WARNING: This function will terminate your program if it was unable to
  * initialize GStreamer for some reason. If you want your program to fall back,
  * use gst_init_check() instead.
- *
- * WARNING: This function does not work in the same way as corresponding
- * functions in other glib-style libraries, such as gtk_init\(\). In
- * particular, unknown command line options cause this function to
- * abort program execution.
  */
 void
 gst_init (int *argc, char **argv[])
@@ -817,7 +807,7 @@ init_post (GOptionContext * context, GOptionGroup * group, gpointer data,
    * environment variable */
   _priv_gst_plugin_feature_rank_initialize ();
 
-#ifndef GST_DISABLE_GST_DEBUG
+#ifndef GST_DISABLE_GST_TRACER_HOOKS
   _priv_gst_tracing_init ();
 #endif
 
@@ -992,8 +982,6 @@ parse_one_option (gint opt, const gchar * arg, GError ** err)
       gst_debug_help ();
       exit (0);
 #endif
-    case ARG_PLUGIN_SPEW:
-      break;
     case ARG_PLUGIN_PATH:
 #ifndef GST_DISABLE_REGISTRY
       if (!_priv_gst_disable_registry)
@@ -1047,7 +1035,6 @@ parse_goption_arg (const gchar * opt,
     "--gst-debug-help", ARG_DEBUG_HELP},
 #endif
     {
-    "--gst-plugin-spew", ARG_PLUGIN_SPEW}, {
     "--gst-plugin-path", ARG_PLUGIN_PATH}, {
     "--gst-plugin-load", ARG_PLUGIN_LOAD}, {
     "--gst-disable-segtrap", ARG_SEGTRAP_DISABLE}, {

@@ -795,7 +795,7 @@ gst_mpd_client2_add_media_segment (GstActiveStream * stream,
 
   g_return_val_if_fail (stream->segments != NULL, FALSE);
 
-  media_segment = g_slice_new0 (GstMediaSegment);
+  media_segment = g_new0 (GstMediaSegment, 1);
 
   media_segment->SegmentURL = url_node;
   media_segment->number = number;
@@ -1420,7 +1420,7 @@ gst_mpd_client2_setup_media_presentation (GstMPDClient2 * client,
       goto syntax_error;
     }
 
-    stream_period = g_slice_new0 (GstStreamPeriod);
+    stream_period = g_new0 (GstStreamPeriod, 1);
     client->periods = g_list_append (client->periods, stream_period);
     stream_period->period = period_node;
     stream_period->number = idx++;
@@ -1612,11 +1612,14 @@ gst_mpd_client2_get_adaptation_sets (GstMPDClient2 * client)
 
 gboolean
 gst_mpd_client2_setup_streaming (GstMPDClient2 * client,
-    GstMPDAdaptationSetNode * adapt_set)
+    GstMPDAdaptationSetNode * adapt_set, gint64 max_bandwidth,
+    gint max_video_width, gint max_video_height,
+    gint max_video_framerate_n, gint max_video_framerate_d)
 {
-  GstMPDRepresentationNode *representation;
+  GstMPDRepresentationNode *representation = NULL;
   GList *rep_list = NULL;
   GstActiveStream *stream;
+  gint rep_id;
 
   rep_list = adapt_set->Representations;
   if (!rep_list) {
@@ -1624,7 +1627,7 @@ gst_mpd_client2_setup_streaming (GstMPDClient2 * client,
     return FALSE;
   }
 
-  stream = g_slice_new0 (GstActiveStream);
+  stream = g_new0 (GstActiveStream, 1);
   gst_mpdparser_init_active_stream_segments (stream);
 
   stream->baseURL_idx = 0;
@@ -1632,21 +1635,23 @@ gst_mpd_client2_setup_streaming (GstMPDClient2 * client,
 
   GST_DEBUG ("0. Current stream %p", stream);
 
-#if 0
-  /* fast start */
-  representation =
-      gst_mpdparser_get_representation_with_max_bandwidth (rep_list,
-      stream->max_bandwidth);
+  rep_id = gst_mpd_client2_get_rep_idx_with_max_bandwidth (rep_list,
+      max_bandwidth, max_video_width, max_video_height,
+      max_video_framerate_n, max_video_framerate_d);
+
+  if (rep_id >= 0) {
+    GList *best_rep;
+
+    best_rep = g_list_nth (rep_list, rep_id);
+    if (best_rep)
+      representation = (GstMPDRepresentationNode *) best_rep->data;
+  }
 
   if (!representation) {
-    GST_WARNING
-        ("Can not retrieve a representation with the requested bandwidth");
+    GST_WARNING ("No representation with the requested bandwidth or video "
+        "resolution/framerate restriction");
     representation = gst_mpd_client2_get_lowest_representation (rep_list);
   }
-#else
-  /* slow start */
-  representation = gst_mpd_client2_get_lowest_representation (rep_list);
-#endif
 
   if (!representation) {
     GST_WARNING ("No valid representation in the MPD file, aborting...");
@@ -1770,7 +1775,7 @@ gst_mpd_client2_stream_seek (GstMPDClient2 * client, GstActiveStream * stream,
 
     g_return_val_if_fail (GST_MPD_MULT_SEGMENT_BASE_NODE
         (stream->cur_seg_template)->SegmentTimeline == NULL, FALSE);
-    if (!GST_CLOCK_TIME_IS_VALID (duration)) {
+    if (!GST_CLOCK_TIME_IS_VALID (duration) || duration == 0) {
       return FALSE;
     }
 
@@ -2566,7 +2571,9 @@ gst_mpd_client2_get_rep_idx_with_max_bandwidth (GList * Representations,
   GstMPDRepresentationNode *representation;
   gint best_bandwidth = 0;
 
-  GST_DEBUG ("max_bandwidth = %" G_GINT64_FORMAT, max_bandwidth);
+  GST_DEBUG ("Selecting rep with restrictions: bandwidth=%" G_GINT64_FORMAT ", "
+      "width=%i, height=%i, framerate=%i/%i", max_bandwidth, max_video_width,
+      max_video_height, max_video_framerate_n, max_video_framerate_d);
 
   if (Representations == NULL)
     return -1;

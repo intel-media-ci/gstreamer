@@ -1183,8 +1183,16 @@ gboolean
 gst_plugin_is_loaded (GstPlugin * plugin)
 {
   g_return_val_if_fail (plugin != NULL, FALSE);
+  gboolean ret;
 
-  return (plugin->module != NULL || plugin->filename == NULL);
+  if (plugin->filename == NULL)
+    return TRUE;                /* Static plugin */
+
+  g_mutex_lock (&gst_plugin_loading_mutex);
+  ret = (plugin->module != NULL);
+  g_mutex_unlock (&gst_plugin_loading_mutex);
+
+  return ret;
 }
 
 /**
@@ -1406,22 +1414,27 @@ gst_plugin_load_by_name (const gchar * name)
 
   GST_DEBUG ("looking up plugin %s in default registry", name);
   plugin = gst_registry_find_plugin (gst_registry_get (), name);
-  if (plugin) {
-    GST_DEBUG ("loading plugin %s from file %s", name, plugin->filename);
-    newplugin = gst_plugin_load_file (plugin->filename, &error);
-    gst_object_unref (plugin);
-
-    if (!newplugin) {
-      GST_WARNING ("load_plugin error: %s", error->message);
-      g_error_free (error);
-      return NULL;
-    }
-    /* newplugin was reffed by load_file */
-    return newplugin;
+  if (plugin == NULL) {
+    GST_DEBUG ("Could not find plugin %s in registry", name);
+    return NULL;
   }
 
-  GST_DEBUG ("Could not find plugin %s in registry", name);
-  return NULL;
+  if (gst_plugin_is_loaded (plugin)) {
+    GST_DEBUG ("plugin %s already loaded", name);
+    return plugin;
+  }
+
+  GST_DEBUG ("loading plugin %s from file %s", name, plugin->filename);
+  newplugin = gst_plugin_load_file (plugin->filename, &error);
+  gst_object_unref (plugin);
+
+  if (!newplugin) {
+    GST_WARNING ("load_plugin error: %s", error->message);
+    g_error_free (error);
+    return NULL;
+  }
+  /* newplugin was reffed by load_file */
+  return newplugin;
 }
 
 /**
@@ -1606,8 +1619,9 @@ gst_plugin_ext_dep_extract_env_vars_paths (GstPlugin * plugin,
         gchar *full_path;
 
         if (!g_path_is_absolute (arr[i])) {
-          GST_INFO_OBJECT (plugin, "ignoring environment variable content '%s'"
-              ": either not an absolute path or not a path at all", arr[i]);
+          GST_INFO_OBJECT (plugin, "ignoring environment variable '%s' with "
+              "content #%u '%s': either not an absolute path or not a path at all",
+              components[0], i, arr[i]);
           continue;
         }
 
@@ -1689,7 +1703,7 @@ gst_plugin_ext_dep_scan_dir_and_match_names (GstPlugin * plugin,
   GDir *dir;
   guint hash = 0;
 
-  recurse_dirs = ! !(flags & GST_PLUGIN_DEPENDENCY_FLAG_RECURSE);
+  recurse_dirs = !!(flags & GST_PLUGIN_DEPENDENCY_FLAG_RECURSE);
 
   dir = g_dir_open (path, 0, &err);
   if (dir == NULL) {
@@ -1751,7 +1765,7 @@ gst_plugin_ext_dep_scan_path_with_filenames (GstPlugin * plugin,
   if (filenames == NULL || *filenames == NULL)
     filenames = empty_filenames;
 
-  recurse_into_dirs = ! !(flags & GST_PLUGIN_DEPENDENCY_FLAG_RECURSE);
+  recurse_into_dirs = !!(flags & GST_PLUGIN_DEPENDENCY_FLAG_RECURSE);
 
   if ((flags & GST_PLUGIN_DEPENDENCY_FLAG_FILE_NAME_IS_SUFFIX) ||
       (flags & GST_PLUGIN_DEPENDENCY_FLAG_FILE_NAME_IS_PREFIX))
@@ -1868,7 +1882,7 @@ gst_plugin_ext_dep_free (GstPluginDep * dep)
   g_strfreev (dep->env_vars);
   g_strfreev (dep->paths);
   g_strfreev (dep->names);
-  g_slice_free (GstPluginDep, dep);
+  g_free (dep);
 }
 
 static gboolean
@@ -1947,7 +1961,7 @@ gst_plugin_add_dependency (GstPlugin * plugin, const gchar ** env_vars,
     }
   }
 
-  dep = g_slice_new (GstPluginDep);
+  dep = g_new (GstPluginDep, 1);
 
   dep->env_vars = g_strdupv ((gchar **) env_vars);
   dep->paths = g_strdupv ((gchar **) paths);

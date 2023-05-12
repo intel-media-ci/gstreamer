@@ -1,5 +1,5 @@
 project('gst-plugins-ugly', 'c',
-  version : '1.21.2.1',
+  version : '1.23.0.1',
   meson_version : '>= 0.62',
   default_options : [ 'warning_level=1',
                       'buildtype=debugoptimized' ])
@@ -328,6 +328,8 @@ if gst_version_nano == 0
 endif
 
 configure_file(output : 'config.h', configuration : cdata)
+
+meson.add_dist_script('scripts/gen-changelog.py', meson.project_name(), '1.20.0', meson.project_version())
 
 plugin_names = []
 gst_plugins = []

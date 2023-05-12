@@ -360,8 +360,18 @@ display_current_fps (gpointer data)
     return TRUE;
   }
 
+  if (frames_rendered < self->last_frames_rendered ||
+      frames_dropped < self->last_frames_dropped) {
+    /* avoid negative drop rates on reset */
+    GST_DEBUG_OBJECT (self, "Frame counters have been reset, skipping update");
+    goto update_last_values;
+  }
+
   time_diff = (gdouble) (current_ts - self->last_ts) / GST_SECOND;
   time_elapsed = (gdouble) (current_ts - self->start_ts) / GST_SECOND;
+
+  if (G_UNLIKELY (time_diff <= 0 && time_elapsed <= 0))
+    return TRUE;
 
   rr = (gdouble) (frames_rendered - self->last_frames_rendered) / time_diff;
   dr = (gdouble) (frames_dropped - self->last_frames_dropped) / time_diff;
@@ -415,6 +425,7 @@ display_current_fps (gpointer data)
     g_object_notify_by_pspec ((GObject *) self, pspec_last_message);
   }
 
+update_last_values:
   self->last_frames_rendered = frames_rendered;
   self->last_frames_dropped = frames_dropped;
   self->last_ts = current_ts;
@@ -476,6 +487,22 @@ no_text_overlay:
 static void
 fps_display_sink_stop (GstFPSDisplaySink * self)
 {
+  gchar *fps_message;
+  gdouble time_elapsed, average_fps;
+  time_elapsed = (gdouble) (self->last_ts - self->start_ts) / GST_SECOND;
+
+  if (G_LIKELY (time_elapsed > 0))
+    average_fps = (gdouble) self->frames_rendered / time_elapsed;
+  else
+    average_fps = 0;
+
+  /* print the max and minimum fps values */
+  fps_message =
+      g_strdup_printf ("Max-fps: %0.2f, Min-fps: %0.2f, Average-fps: %0.2f",
+      self->max_fps, self->min_fps, average_fps);
+
+  GST_DEBUG_OBJECT (self, "%s", fps_message);
+
   if (self->text_overlay) {
     gst_element_unlink (self->text_overlay, self->video_sink);
     gst_bin_remove (GST_BIN (self), self->text_overlay);
@@ -484,17 +511,13 @@ fps_display_sink_stop (GstFPSDisplaySink * self)
   }
 
   if (!self->silent) {
-    gchar *str;
-
-    /* print the max and minimum fps values */
-    str =
-        g_strdup_printf ("Max-fps: %0.2f, Min-fps: %0.2f", self->max_fps,
-        self->min_fps);
     GST_OBJECT_LOCK (self);
     g_free (self->last_message);
-    self->last_message = str;
+    self->last_message = fps_message;
     GST_OBJECT_UNLOCK (self);
     g_object_notify_by_pspec ((GObject *) self, pspec_last_message);
+  } else {
+    g_free (fps_message);
   }
 
   GST_OBJECT_LOCK (self);

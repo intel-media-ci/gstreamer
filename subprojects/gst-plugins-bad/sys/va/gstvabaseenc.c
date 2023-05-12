@@ -25,6 +25,7 @@
 
 #include "vacompat.h"
 #include "gstvacaps.h"
+#include "gstvapluginutils.h"
 
 #define GST_CAT_DEFAULT gst_va_base_enc_debug
 GST_DEBUG_CATEGORY_STATIC (GST_CAT_DEFAULT);
@@ -197,7 +198,7 @@ _get_sinkpad_pool (GstVaBaseEnc * base)
   GstAllocationParams params = { 0, };
   guint size, usage_hint = 0;
   GArray *surface_formats = NULL;
-  GstCaps *caps;
+  GstCaps *caps = NULL;
 
   if (base->priv->raw_pool)
     return base->priv->raw_pool;
@@ -217,6 +218,8 @@ _get_sinkpad_pool (GstVaBaseEnc * base)
 
   base->priv->raw_pool = gst_va_pool_new_with_config (caps, size, 1, 0,
       usage_hint, GST_VA_FEATURE_AUTO, allocator, &params);
+  gst_clear_caps (&caps);
+
   if (!base->priv->raw_pool) {
     gst_object_unref (allocator);
     return NULL;
@@ -227,7 +230,10 @@ _get_sinkpad_pool (GstVaBaseEnc * base)
 
   gst_object_unref (allocator);
 
-  gst_buffer_pool_set_active (base->priv->raw_pool, TRUE);
+  if (!gst_buffer_pool_set_active (base->priv->raw_pool, TRUE)) {
+    GST_WARNING_OBJECT (base, "Failed to activate sinkpad pool");
+    return NULL;
+  }
 
   return base->priv->raw_pool;
 }
@@ -688,8 +694,10 @@ error_reorder:
   {
     GST_ELEMENT_ERROR (venc, STREAM, ENCODE,
         ("Failed to reorder the input frame."), (NULL));
-    gst_clear_buffer (&frame->output_buffer);
-    gst_video_encoder_finish_frame (venc, frame);
+    if (frame) {
+      gst_clear_buffer (&frame->output_buffer);
+      gst_video_encoder_finish_frame (venc, frame);
+    }
     return GST_FLOW_ERROR;
   }
 error_encode:
@@ -841,14 +849,17 @@ gst_va_base_enc_get_property (GObject * object, guint prop_id,
     GValue * value, GParamSpec * pspec)
 {
   GstVaBaseEnc *base = GST_VA_BASE_ENC (object);
+  GstVaBaseEncClass *klass = GST_VA_BASE_ENC_GET_CLASS (base);
 
   switch (prop_id) {
     case PROP_DEVICE_PATH:{
-      if (!(base->display && GST_IS_VA_DISPLAY_DRM (base->display))) {
+      if (!base->display)
+        g_value_set_string (value, klass->render_device_path);
+      else if (GST_IS_VA_DISPLAY_PLATFORM (base->display))
+        g_object_get_property (G_OBJECT (base->display), "path", value);
+      else
         g_value_set_string (value, NULL);
-        return;
-      }
-      g_object_get_property (G_OBJECT (base->display), "path", value);
+
       break;
     }
     default:
@@ -910,8 +921,8 @@ gst_va_base_enc_class_init (GstVaBaseEncClass * klass)
    * It shows the DRM device path used for the VA operation, if any.
    */
   properties[PROP_DEVICE_PATH] = g_param_spec_string ("device-path",
-      "Device Path", "DRM device path", NULL,
-      G_PARAM_READABLE | G_PARAM_STATIC_STRINGS);
+      "Device Path", GST_VA_DEVICE_PATH_PROP_DESC, NULL,
+      GST_PARAM_DOC_SHOW_DEFAULT | G_PARAM_READABLE | G_PARAM_STATIC_STRINGS);
 
   g_object_class_install_properties (gobject_class, N_PROPERTIES, properties);
 

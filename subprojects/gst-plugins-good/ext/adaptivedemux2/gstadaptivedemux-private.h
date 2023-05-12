@@ -83,6 +83,8 @@ struct _GstAdaptiveDemuxPrivate
 
   /* Callback / timer id for the next manifest update */
   guint manifest_updates_cb;
+  gboolean manifest_updates_enabled;
+  gboolean need_manual_manifest_update;
 
   /* Count of failed manifest updates */
   gint update_failed_count;
@@ -99,6 +101,11 @@ struct _GstAdaptiveDemuxPrivate
 
   /* Set to TRUE if any stream is waiting on the manifest update */
   gboolean stream_waiting_for_manifest;
+
+  /* Set to TRUE if streams can download fragment data. If FALSE,
+   * they can load playlists / prepare for updata_fragment_info()
+   */
+  gboolean streams_can_download_fragments;
 
   GMutex api_lock;
 
@@ -140,7 +147,7 @@ struct _GstAdaptiveDemuxPrivate
   /* Current output selection seqnum */
   guint32 current_selection_seqnum;
   /* Current output position (in running time) */
-  GstClockTimeDiff global_output_position;
+  GstClockTime global_output_position;
   /* End of fields protected by output_lock */
 
   gint n_audio_streams, n_video_streams, n_subtitle_streams;
@@ -181,6 +188,7 @@ gboolean gst_adaptive_demux_is_live (GstAdaptiveDemux * demux);
 
 void gst_adaptive_demux2_stream_on_manifest_update (GstAdaptiveDemux2Stream * stream);
 void gst_adaptive_demux2_stream_on_output_space_available (GstAdaptiveDemux2Stream *stream);
+void gst_adaptive_demux2_stream_on_can_download_fragments(GstAdaptiveDemux2Stream *stream);
 
 gboolean gst_adaptive_demux2_stream_has_next_fragment (GstAdaptiveDemux2Stream * stream);
 GstFlowReturn gst_adaptive_demux2_stream_seek (GstAdaptiveDemux2Stream * stream,
@@ -212,10 +220,7 @@ typedef struct
   GstClockTimeDiff runningtime_buffering;
 } TrackQueueItem;
 
-GstAdaptiveDemux2Stream *find_stream_for_track_locked (GstAdaptiveDemux *
-    demux, GstAdaptiveDemuxTrack * track);
-
-GstMiniObject * track_dequeue_data_locked (GstAdaptiveDemux * demux, GstAdaptiveDemuxTrack * track, gboolean check_sticky_events);
+GstMiniObject * gst_adaptive_demux_track_dequeue_data_locked (GstAdaptiveDemux * demux, GstAdaptiveDemuxTrack * track, gboolean check_sticky_events);
 void gst_adaptive_demux_track_flush (GstAdaptiveDemuxTrack * track);
 void gst_adaptive_demux_track_drain_to (GstAdaptiveDemuxTrack * track, GstClockTime drain_running_time);
 void gst_adaptive_demux_track_update_next_position (GstAdaptiveDemuxTrack * track);
@@ -227,6 +232,8 @@ GstAdaptiveDemuxPeriod * gst_adaptive_demux_period_new (GstAdaptiveDemux * demux
 GstAdaptiveDemuxPeriod * gst_adaptive_demux_period_ref (GstAdaptiveDemuxPeriod * period);
 void                     gst_adaptive_demux_period_unref (GstAdaptiveDemuxPeriod * period);
 
+gboolean                 gst_adaptive_demux_period_add_stream (GstAdaptiveDemuxPeriod * period,
+							      GstAdaptiveDemux2Stream * stream);
 gboolean                 gst_adaptive_demux_period_add_track (GstAdaptiveDemuxPeriod * period,
 							      GstAdaptiveDemuxTrack * track);
 gboolean                 gst_adaptive_demux_track_add_elements (GstAdaptiveDemuxTrack * track,

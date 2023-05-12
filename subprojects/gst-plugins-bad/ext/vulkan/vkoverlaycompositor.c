@@ -204,8 +204,8 @@ vk_overlay_upload (struct vk_overlay *overlay, GstVideoInfo * out_info,
       .srcAccessMask = buf_mem->barrier.parent.access_flags,
       .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
       /* FIXME: implement exclusive transfers */
-      .srcQueueFamilyIndex = 0,
-      .dstQueueFamilyIndex = 0,
+      .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+      .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
       .buffer = buf_mem->buffer,
       .offset = region.bufferOffset,
       .size = region.bufferRowLength * region.bufferImageHeight,
@@ -219,8 +219,8 @@ vk_overlay_upload (struct vk_overlay *overlay, GstVideoInfo * out_info,
       .oldLayout = img_mem->barrier.image_layout,
       .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
       /* FIXME: implement exclusive transfers */
-      .srcQueueFamilyIndex = 0,
-      .dstQueueFamilyIndex = 0,
+      .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+      .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
       .image = img_mem->image,
       .subresourceRange = img_mem->barrier.subresource_range,
   };
@@ -446,7 +446,7 @@ static GstFlowReturn
 gst_vulkan_overlay_compositor_transform_ip (GstBaseTransform * bt,
     GstBuffer * inbuf);
 
-#define IMAGE_FORMATS " { BGRA }"
+#define IMAGE_FORMATS " { BGRA, RGBA }"
 
 static GstStaticPadTemplate gst_vulkan_sink_template =
     GST_STATIC_PAD_TEMPLATE ("sink",
@@ -729,6 +729,7 @@ gst_vulkan_overlay_compositor_transform_ip (GstBaseTransform * bt,
 
   comp = gst_video_overlay_composition_ref (ometa->overlay);
   gst_buffer_remove_meta (buffer, (GstMeta *) ometa);
+  ometa = NULL;
 
   n = gst_video_overlay_composition_n_rectangles (comp);
   if (n == 0) {
@@ -765,7 +766,7 @@ gst_vulkan_overlay_compositor_transform_ip (GstBaseTransform * bt,
     struct vk_overlay *over =
         &g_array_index (vk_overlay->overlays, struct vk_overlay, i);
 
-    if (!overlay_in_rectangles (over, ometa->overlay)) {
+    if (!overlay_in_rectangles (over, comp)) {
       g_array_remove_index (vk_overlay->overlays, i);
       continue;
     }

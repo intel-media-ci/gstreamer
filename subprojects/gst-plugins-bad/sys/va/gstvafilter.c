@@ -31,6 +31,7 @@
 
 #include "gstvacaps.h"
 #include "gstvadisplay_priv.h"
+#include <string.h>
 
 struct _GstVaFilter
 {
@@ -358,9 +359,6 @@ gst_va_filter_open (GstVaFilter * self)
   if (!gst_va_filter_ensure_config_attributes (self, &attrib.value))
     return FALSE;
 
-  if (!gst_va_filter_ensure_pipeline_caps (self))
-    return FALSE;
-
   self->image_formats = gst_va_display_get_image_formats (self->display);
   if (!self->image_formats)
     return FALSE;
@@ -381,6 +379,11 @@ gst_va_filter_open (GstVaFilter * self)
       &self->context);
   if (status != VA_STATUS_SUCCESS) {
     GST_ERROR_OBJECT (self, "vaCreateContext: %s", vaErrorStr (status));
+    goto bail;
+  }
+
+  if (!gst_va_filter_ensure_pipeline_caps (self)) {
+    vaDestroyContext (dpy, self->context);
     goto bail;
   }
 
@@ -442,9 +445,9 @@ static const struct VaFilterCapMap {
   F(SkinToneEnhancement, 1),
   F(TotalColorCorrection, VAProcTotalColorCorrectionCount),
   F(HVSNoiseReduction, 0),
-  F(HighDynamicRangeToneMapping, 1),
+  F(HighDynamicRangeToneMapping, VAProcHighDynamicRangeMetadataTypeCount),
 #if VA_CHECK_VERSION (1, 12, 0)
-  F(3DLUT, 1),
+  F(3DLUT, 16),
 #endif
 #undef F
 };
@@ -480,7 +483,11 @@ struct VaFilter
     VAProcFilterCapDeinterlacing deint[VAProcDeinterlacingCount];
     VAProcFilterCapColorBalance cb[VAProcColorBalanceCount];
     VAProcFilterCapTotalColorCorrection cc[VAProcTotalColorCorrectionCount];
-    VAProcFilterCapHighDynamicRange hdr;
+      VAProcFilterCapHighDynamicRange
+        hdr[VAProcHighDynamicRangeMetadataTypeCount];
+#if VA_CHECK_VERSION (1, 12, 0)
+    VAProcFilterCap3DLUT lut[16];
+#endif
   } caps;
 };
 
@@ -662,12 +669,16 @@ gst_va_filter_install_properties (GstVaFilter * self, GObjectClass * klass)
         break;
       }
       case VAProcFilterHighDynamicRangeToneMapping:{
-        const VAProcFilterCapHighDynamicRange *caps = &filter->caps.hdr;
-        if (caps->metadata_type == VAProcHighDynamicRangeMetadataHDR10
-            && (caps->caps_flag & VA_TONE_MAPPING_HDR_TO_SDR)) {
-          g_object_class_install_property (klass, GST_VA_FILTER_PROP_HDR,
-              g_param_spec_boolean ("hdr-tone-mapping", "HDR tone mapping",
-                  "Enable HDR to SDR tone mapping", FALSE, common_flags));
+        guint j;
+        for (j = 0; j < filter->num_caps; j++) {
+          const VAProcFilterCapHighDynamicRange *caps = &filter->caps.hdr[j];
+          if (caps->metadata_type == VAProcHighDynamicRangeMetadataHDR10
+              && (caps->caps_flag & VA_TONE_MAPPING_HDR_TO_SDR)) {
+            g_object_class_install_property (klass, GST_VA_FILTER_PROP_HDR,
+                g_param_spec_boolean ("hdr-tone-mapping", "HDR tone mapping",
+                    "Enable HDR to SDR tone mapping", FALSE, common_flags));
+            break;
+          }
         }
       }
       default:
@@ -1250,9 +1261,7 @@ _config_color_properties (VAProcColorStandardType * std,
   if (worstscore == 0) {
     /* No properties specified, there's not a useful choice. */
     *std = VAProcColorStandardNone;
-    *props = (VAProcColorProperties) {
-    };
-
+    memset (props, 0, sizeof (VAProcColorProperties));
     return;
   }
 

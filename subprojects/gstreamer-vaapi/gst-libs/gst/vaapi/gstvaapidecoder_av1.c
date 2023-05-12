@@ -297,8 +297,9 @@ av1_decode_seqeunce (GstVaapiDecoderAV1 * decoder, GstVaapiDecoderUnit * unit)
 
   /* update the sequence */
   if (priv->seq_header)
-    g_slice_free (GstAV1SequenceHeaderOBU, priv->seq_header);
-  priv->seq_header = g_slice_dup (GstAV1SequenceHeaderOBU, &pi->seq_header);
+    g_free (priv->seq_header);
+  priv->seq_header =
+      g_memdup2 (&pi->seq_header, sizeof (GstAV1SequenceHeaderOBU));
 
   return GST_VAAPI_DECODER_STATUS_SUCCESS;
 }
@@ -313,15 +314,19 @@ av1_decoder_ensure_context (GstVaapiDecoderAV1 * decoder)
     if (priv->current_picture)
       gst_vaapi_picture_replace (&priv->current_picture, NULL);
 
-    info.profile = priv->profile;
-    info.entrypoint = GST_VAAPI_ENTRYPOINT_VLD;
-    info.width = priv->width;
-    info.height = priv->height;
-    info.chroma_type = av1_get_chroma_type (info.profile, priv->seq_header);
+    /* *INDENT-OFF* */
+    info = (GstVaapiContextInfo) {
+      .profile = priv->profile,
+      .entrypoint = GST_VAAPI_ENTRYPOINT_VLD,
+      .chroma_type = av1_get_chroma_type (priv->profile, priv->seq_header),
+      .width = priv->width,
+      .height = priv->height,
+      .ref_frames = GST_AV1_NUM_REF_FRAMES + 2,
+    };
+    /* *INDENT-ON* */
+
     if (!info.chroma_type)
       return GST_VAAPI_DECODER_STATUS_ERROR_UNSUPPORTED_CHROMA_FORMAT;
-
-    info.ref_frames = GST_AV1_NUM_REF_FRAMES + 2;
 
     priv->reset_context = FALSE;
     if (!gst_vaapi_decoder_ensure_context (GST_VAAPI_DECODER (decoder), &info)) {
@@ -988,7 +993,7 @@ av1_decoder_reset (GstVaapiDecoderAV1 * decoder)
     gst_vaapi_picture_replace (&priv->current_picture, NULL);
 
   if (priv->seq_header) {
-    g_slice_free (GstAV1SequenceHeaderOBU, priv->seq_header);
+    g_free (priv->seq_header);
     priv->seq_header = NULL;
   }
 

@@ -15,7 +15,7 @@ sudo dnf install -y \
   "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm" \
   "https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm"
 
-dnf upgrade -y
+dnf upgrade -y && dnf distro-sync -y
 
 # install rest of the extra deps
 dnf install -y \
@@ -207,7 +207,7 @@ dnf remove -y meson
 # FIXME: Install ninja from rpm when we update our base image as we fail building
 # documentation with rust plugins as we the version from F31 we hit:
 # `ninja: error: build.ninja:26557: multiple outputs aren't (yet?) supported by depslog; bring this up on the mailing list if it affects you
-pip3 install meson==0.62.2 hotdoc python-gitlab ninja tomli
+pip3 install meson==0.62.2 hotdoc==0.15 python-gitlab ninja tomli
 
 
 # Remove gst-devel packages installed by builddep above
@@ -220,8 +220,8 @@ rpm -i --reinstall *.rpm
 rm -f *.rpm
 
 # Install Rust
-RUSTUP_VERSION=1.25.1
-RUST_VERSION=1.63.0
+RUSTUP_VERSION=1.25.2
+RUST_VERSION=1.69.0
 RUST_ARCH="x86_64-unknown-linux-gnu"
 
 dnf install -y wget
@@ -238,7 +238,7 @@ chmod +x rustup-init;
 rm rustup-init;
 chmod -R a+w $RUSTUP_HOME $CARGO_HOME
 
-cargo install cargo-c --version 0.9.12+cargo-0.64
+cargo install cargo-c --version 0.9.17+cargo-0.69
 rustup --version
 cargo --version
 rustc --version

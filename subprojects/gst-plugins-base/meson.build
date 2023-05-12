@@ -1,5 +1,5 @@
 project('gst-plugins-base', 'c',
-  version : '1.21.2.1',
+  version : '1.23.0.1',
   meson_version : '>= 0.62',
   default_options : [ 'warning_level=1',
                       'buildtype=debugoptimized' ])
@@ -105,20 +105,12 @@ core_conf = configuration_data()
 core_conf.set('ENABLE_NLS', 1)
 
 # Symbol visibility
-if cc.get_id() == 'msvc'
-  export_define = '__declspec(dllexport) extern'
-elif cc.has_argument('-fvisibility=hidden')
+if cc.has_argument('-fvisibility=hidden')
   add_project_arguments('-fvisibility=hidden', language: 'c')
   if have_objc
     add_project_arguments('-fvisibility=hidden', language: 'objc')
   endif
-  export_define = 'extern __attribute__ ((visibility ("default")))'
-else
-  export_define = 'extern'
 endif
-
-# Passing this through the command line would be too messy
-core_conf.set('GST_API_EXPORT', export_define)
 
 # Disable strict aliasing
 if cc.has_argument('-fno-strict-aliasing')
@@ -312,6 +304,13 @@ gst_plugins_base_args = ['-DHAVE_CONFIG_H']
 if get_option('default_library') == 'static'
   gst_plugins_base_args += ['-DGST_STATIC_COMPILATION']
 endif
+
+libdrm_dep = dependency('libdrm', version : '>= 2.4.98',
+  required : get_option('drm'),
+  allow_fallback: host_system not in ['darwin', 'ios', 'android', 'windows']
+)
+
+core_conf.set('HAVE_LIBDRM', libdrm_dep.found())
 
 # X11 checks are for sys/ and tests/
 x11_dep = dependency('x11', required : get_option('x11'))
@@ -549,6 +548,8 @@ endif
 
 # Use core_conf after all subdirs have set values
 configure_file(output : 'config.h', configuration : core_conf)
+
+meson.add_dist_script('scripts/gen-changelog.py', meson.project_name(), '1.20.0', meson.project_version())
 
 plugin_names = []
 gst_plugins = []

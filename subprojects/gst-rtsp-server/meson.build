@@ -1,5 +1,5 @@
 project('gst-rtsp-server', 'c',
-  version : '1.21.2.1',
+  version : '1.23.0.1',
   meson_version : '>= 0.62',
   default_options : ['warning_level=1', 'buildtype=debugoptimized'])
 
@@ -49,17 +49,9 @@ if cc.has_link_argument('-Wl,-z,nodelete')
 endif
 
 # Symbol visibility
-if cc.get_id() == 'msvc'
-  export_define = '__declspec(dllexport) extern'
-elif cc.has_argument('-fvisibility=hidden')
+if cc.has_argument('-fvisibility=hidden')
   add_project_arguments('-fvisibility=hidden', language: 'c')
-  export_define = 'extern __attribute__ ((visibility ("default")))'
-else
-  export_define = 'extern'
 endif
-
-# Passing this through the command line would be too messy
-cdata.set('GST_API_EXPORT', export_define)
 
 # Disable strict aliasing
 if cc.has_argument('-fno-strict-aliasing')
@@ -217,7 +209,14 @@ if gst_version_nano == 0
   message('Package release date: ' + release_date)
 endif
 
+glib_gio_dep = dependency('gio-2.0', version: glib_req)
+if glib_gio_dep.version().version_compare('< 2.67.4')
+  cdata.set('g_memdup2(ptr,sz)', '(G_LIKELY(((guint64)(sz)) < G_MAXUINT)) ? g_memdup(ptr,sz) : (g_abort(),NULL)')
+endif
+
 configure_file(output: 'config.h', configuration: cdata)
+
+meson.add_dist_script('scripts/gen-changelog.py', meson.project_name(), '1.20.0', meson.project_version())
 
 plugin_names = []
 gst_plugins = []

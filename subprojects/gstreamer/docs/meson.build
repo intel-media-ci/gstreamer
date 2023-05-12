@@ -132,6 +132,7 @@ libs_doc = [hotdoc.generate_doc('gstreamer',
     gi_c_source_roots: [join_paths(meson.current_source_dir(), '../gst/'), ],
     dependencies: [gst_dep, gmodule_dep],
     extra_assets: [join_paths(meson.current_source_dir(), 'images')],
+    depends: gst_gir[0],
 )]
 
 libs = [
@@ -158,31 +159,27 @@ foreach lib: libs
       gi_order_generated_subpages: true,
       dependencies: deps,
       install: false,
+      depends: gir[0],
   )]
 endforeach
 
-plugins_doc = [
-    hotdoc.generate_doc('coreelements',
-        project_version: apiversion,
-        sitemap: 'plugins/sitemap.txt',
-        index: 'plugins/index.md',
-        gst_index: 'plugins/index.md',
-        gst_smart_index: true,
-        gst_c_sources: ['../plugins/elements/*.c', '../plugins/elements/*.h'],
-        dependencies: [gst_plugins_doc_dep],
-        gst_cache_file: plugins_cache,
-        gst_plugin_name: 'coreelements',
-    ),
-    hotdoc.generate_doc('coretracers',
-        project_version: apiversion,
-        sitemap: 'plugins/coretracers/sitemap.txt',
-        index: 'plugins/coretracers/index.md',
-        gst_index: 'plugins/coretracers/index.md',
-        gst_smart_index: true,
-        gst_c_sources: ['../plugins/tracers/*.c', '../plugins/tracers/*.h'],
-        dependencies: [gst_plugins_doc_dep],
-        gst_cache_file: plugins_cache,
-        gst_plugin_name: 'coretracers',
-    )
-
-]
+cdir = meson.current_source_dir()
+if host_machine.system() == 'windows'
+  pathsep = ';'
+else
+  pathsep = ':'
+endif
+gst_plugins_doc = run_command(
+    plugins_cache_generator,
+    'hotdoc-config',
+    '--builddir', meson.current_build_dir(),
+    '--project_version', apiversion,
+    '--sitemap', cdir / 'plugins/sitemap.txt',
+    '--index', cdir / 'plugins/index.md',
+    '--gst_index', cdir / 'plugins/index.md',
+    '--gst_c_sources',
+        cdir / '../plugins/*/*.c',
+        cdir / '../plugins/*/*.h',
+    '--gst_cache_file', plugins_cache,
+    check: true,
+).stdout().split(pathsep)

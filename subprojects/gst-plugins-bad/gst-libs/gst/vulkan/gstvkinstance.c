@@ -456,32 +456,14 @@ gst_vulkan_instance_get_extension_info (GstVulkanInstance * instance,
   return ret;
 }
 
-/* reimplement a specfic case of g_ptr_array_find_with_equal_func as that
- * requires Glib 2.54 */
-static gboolean
-ptr_array_find_string (GPtrArray * array, const gchar * str, guint * index)
-{
-  guint i;
-
-  for (i = 0; i < array->len; i++) {
-    gchar *val = (gchar *) g_ptr_array_index (array, i);
-    if (g_strcmp0 (val, str) == 0) {
-      if (index)
-        *index = i;
-      return TRUE;
-    }
-  }
-
-  return FALSE;
-}
-
 static gboolean
 gst_vulkan_instance_is_extension_enabled_unlocked (GstVulkanInstance * instance,
     const gchar * name, guint * index)
 {
   GstVulkanInstancePrivate *priv = GET_PRIV (instance);
 
-  return ptr_array_find_string (priv->enabled_extensions, name, index);
+  return g_ptr_array_find_with_equal_func (priv->enabled_extensions, name,
+      g_str_equal, index);
 }
 
 /**
@@ -627,7 +609,8 @@ gst_vulkan_instance_is_layer_enabled_unlocked (GstVulkanInstance * instance,
 {
   GstVulkanInstancePrivate *priv = GET_PRIV (instance);
 
-  return ptr_array_find_string (priv->enabled_layers, name, NULL);
+  return g_ptr_array_find_with_equal_func (priv->enabled_layers, name,
+      g_str_equal, NULL);
 }
 
 /**
@@ -940,6 +923,16 @@ gst_vulkan_instance_open (GstVulkanInstance * instance, GError ** error)
   {
     VkApplicationInfo app = { 0, };
     VkInstanceCreateInfo inst_info = { 0, };
+#if !defined (GST_DISABLE_DEBUG) && defined (VK_API_VERSION_1_2)
+    VkValidationFeaturesEXT validation_features;
+    VkValidationFeatureEnableEXT feat_list[] = {
+      VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT,
+      VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_RESERVE_BINDING_SLOT_EXT,
+#if defined (VK_API_VERSION_1_3)
+      VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT,
+#endif
+    };
+#endif
 
     /* *INDENT-OFF* */
     app = (VkApplicationInfo) {
@@ -948,7 +941,8 @@ gst_vulkan_instance_open (GstVulkanInstance * instance, GError ** error)
         .pApplicationName = APP_SHORT_NAME,
         .applicationVersion = 0,
         .pEngineName = APP_SHORT_NAME,
-        .engineVersion = 0,
+        .engineVersion = VK_MAKE_VERSION (GST_VERSION_MAJOR, GST_VERSION_MINOR,
+            GST_VERSION_MICRO),
         .apiVersion = requested_instance_api,
     };
 
@@ -962,6 +956,24 @@ gst_vulkan_instance_open (GstVulkanInstance * instance, GError ** error)
         .ppEnabledExtensionNames = (const char *const *) priv->enabled_extensions->pdata,
     };
     /* *INDENT-ON* */
+
+#if !defined (GST_DISABLE_DEBUG)
+    vulkan_debug_level =
+        gst_debug_category_get_threshold (GST_VULKAN_DEBUG_CAT);
+
+#if defined (VK_API_VERSION_1_2)
+    if (vulkan_debug_level >= GST_LEVEL_ERROR) {
+      /* *INDENT-OFF* */
+      validation_features = (VkValidationFeaturesEXT) {
+          .sType = VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT,
+          .pEnabledValidationFeatures = feat_list,
+          .enabledValidationFeatureCount = G_N_ELEMENTS (feat_list),
+      };
+      inst_info.pNext = &validation_features;
+      /* *INDENT-ON* */
+    }
+#endif
+#endif
 
     err = vkCreateInstance (&inst_info, NULL, &instance->instance);
     if (gst_vulkan_error_to_g_error (err, error, "vkCreateInstance") < 0) {
@@ -994,8 +1006,6 @@ gst_vulkan_instance_open (GstVulkanInstance * instance, GError ** error)
     goto error;
 
 #if !defined (GST_DISABLE_DEBUG)
-  vulkan_debug_level = gst_debug_category_get_threshold (GST_VULKAN_DEBUG_CAT);
-
   if (vulkan_debug_level >= GST_LEVEL_ERROR
       && gst_vulkan_instance_is_extension_enabled_unlocked (instance,
           VK_EXT_DEBUG_REPORT_EXTENSION_NAME, NULL)) {
@@ -1095,7 +1105,7 @@ gst_vulkan_instance_get_proc_address (GstVulkanInstance * instance,
 /**
  * gst_vulkan_instance_create_device:
  * @instance: a #GstVulkanInstance
- * @error: (optional): a #GError
+ * @error: (out) (optional): a #GError
  *
  * Returns: (transfer full): a new #GstVulkanDevice
  *

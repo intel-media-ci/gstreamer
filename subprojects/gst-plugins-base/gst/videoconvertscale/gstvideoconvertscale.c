@@ -408,6 +408,8 @@ gst_video_convert_scale_class_init (GstVideoConvertScaleClass * klass)
   klass->any_memory = FALSE;
   klass->converts = TRUE;
   klass->scales = TRUE;
+
+  gst_type_mark_as_plugin_api (GST_TYPE_VIDEO_CONVERT_SCALE, 0);
 }
 
 static void
@@ -686,6 +688,7 @@ gst_video_convert_scale_transform_meta (GstBaseTransform * trans,
     GST_META_TAG_VIDEO_STR,
     GST_META_TAG_VIDEO_ORIENTATION_STR,
     GST_META_TAG_VIDEO_SIZE_STR,
+    NULL
   };
 
   tags = gst_meta_api_type_get_tags (info->api);

@@ -1787,8 +1787,58 @@ gst_video_flip_sink_event (GstBaseTransform * trans, GstEvent * event)
       gst_event_parse_tag (event, &taglist);
 
       if (gst_video_orientation_from_tag (taglist, &method)) {
-        gst_video_flip_set_method (vf, method, TRUE);
+        if (gst_tag_list_get_scope (taglist) == GST_TAG_SCOPE_STREAM) {
+          vf->got_orientation_stream_tag = TRUE;
+        } else if (gst_tag_list_get_scope (taglist) == GST_TAG_SCOPE_GLOBAL) {
+          vf->global_tag_method = method;
+        }
+
+        if (gst_tag_list_get_scope (taglist) == GST_TAG_SCOPE_GLOBAL
+            && vf->got_orientation_stream_tag) {
+          GST_DEBUG_OBJECT (vf,
+              "ignoring global tags as we received stream specific ones: %"
+              GST_PTR_FORMAT, taglist);
+        } else {
+          gst_video_flip_set_method (vf, method, TRUE);
+        }
+      } else {
+        // no orientation in tag
+        if (gst_tag_list_get_scope (taglist) == GST_TAG_SCOPE_STREAM) {
+          GST_DEBUG_OBJECT (vf,
+              "stream tag does not contain orientation, restore the global one: %d",
+              vf->global_tag_method);
+          vf->got_orientation_stream_tag = FALSE;
+          gst_video_flip_set_method (vf, vf->global_tag_method, TRUE);
+        } else if (gst_tag_list_get_scope (taglist) == GST_TAG_SCOPE_GLOBAL) {
+          vf->global_tag_method = GST_VIDEO_ORIENTATION_IDENTITY;
+
+          if (!vf->got_orientation_stream_tag) {
+            GST_DEBUG_OBJECT (vf,
+                "global taglist withtout orientation, set to identity");
+            gst_video_flip_set_method (vf, GST_VIDEO_ORIENTATION_IDENTITY,
+                TRUE);
+          } else {
+            // keep using the orientation from the stream tag
+          }
+        }
       }
+
+      break;
+    case GST_EVENT_STREAM_START:
+    {
+      const gchar *stream_id;
+
+      gst_event_parse_stream_start (event, &stream_id);
+      if (g_strcmp0 (stream_id, vf->stream_id) != 0) {
+        GST_DEBUG_OBJECT (vf, "new stream, reset orientation from tags");
+        vf->got_orientation_stream_tag = FALSE;
+        vf->global_tag_method = GST_VIDEO_ORIENTATION_IDENTITY;
+        gst_video_flip_set_method (vf, GST_VIDEO_ORIENTATION_IDENTITY, TRUE);
+
+        g_clear_pointer (&vf->stream_id, g_free);
+        vf->stream_id = g_strdup (stream_id);
+      }
+    }
       break;
     default:
       break;
@@ -1834,6 +1884,46 @@ gst_video_flip_get_property (GObject * object, guint prop_id, GValue * value,
 }
 
 static void
+gst_video_flip_finalize (GObject * object)
+{
+  GstVideoFlip *videoflip = GST_VIDEO_FLIP (object);
+
+  g_clear_pointer (&videoflip->stream_id, g_free);
+
+  G_OBJECT_CLASS (gst_video_flip_parent_class)->finalize (object);
+}
+
+static GstStateChangeReturn
+gst_video_flip_change_state (GstElement * element, GstStateChange transition)
+{
+  GstVideoFlip *videoflip = GST_VIDEO_FLIP (element);
+  GstStateChangeReturn result;
+
+  result = GST_ELEMENT_CLASS (parent_class)->change_state (element, transition);
+
+  switch (transition) {
+    case GST_STATE_CHANGE_PAUSED_TO_READY:
+      g_clear_pointer (&videoflip->stream_id, g_free);
+      break;
+    default:
+      break;
+  }
+
+  return result;
+}
+
+static void
+gst_video_flip_constructed (GObject * object)
+{
+  GstVideoFlip *self = GST_VIDEO_FLIP (object);
+
+  if (self->method == (GstVideoOrientationMethod) PROP_METHOD_DEFAULT) {
+    gst_video_flip_set_method (self,
+        (GstVideoOrientationMethod) PROP_METHOD_DEFAULT, FALSE);
+  }
+}
+
+static void
 gst_video_flip_class_init (GstVideoFlipClass * klass)
 {
   GObjectClass *gobject_class = (GObjectClass *) klass;
@@ -1846,19 +1936,23 @@ gst_video_flip_class_init (GstVideoFlipClass * klass)
 
   gobject_class->set_property = gst_video_flip_set_property;
   gobject_class->get_property = gst_video_flip_get_property;
+  gobject_class->constructed = gst_video_flip_constructed;
+  gobject_class->finalize = gst_video_flip_finalize;
 
   g_object_class_install_property (gobject_class, PROP_METHOD,
       g_param_spec_enum ("method", "method",
           "method (deprecated, use video-direction instead)",
           GST_TYPE_VIDEO_FLIP_METHOD, PROP_METHOD_DEFAULT,
           GST_PARAM_CONTROLLABLE | GST_PARAM_MUTABLE_PLAYING |
-          G_PARAM_READWRITE | G_PARAM_CONSTRUCT | G_PARAM_STATIC_STRINGS));
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
   g_object_class_override_property (gobject_class, PROP_VIDEO_DIRECTION,
       "video-direction");
   /* override the overriden property's flags to include the mutable in playing
    * flag */
   pspec = g_object_class_find_property (gobject_class, "video-direction");
   pspec->flags |= GST_PARAM_MUTABLE_PLAYING;
+
+  gstelement_class->change_state = gst_video_flip_change_state;
 
   gst_element_class_set_static_metadata (gstelement_class, "Video flipper",
       "Filter/Effect/Video",
@@ -1886,6 +1980,12 @@ gst_video_flip_class_init (GstVideoFlipClass * klass)
 static void
 gst_video_flip_init (GstVideoFlip * videoflip)
 {
+  /* We initialize to the default and call set_method() from constructed
+   * if the value hasn't changed, this ensures set_method() does get called
+   * even if the non-construct method / direction properties aren't set
+   */
+  videoflip->method = (GstVideoOrientationMethod) PROP_METHOD_DEFAULT;
+
   /* AUTO is not valid for active method, this is just to ensure we setup the
    * method in gst_video_flip_set_method() */
   videoflip->active_method = GST_VIDEO_ORIENTATION_AUTO;

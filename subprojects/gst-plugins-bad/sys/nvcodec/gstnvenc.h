@@ -22,7 +22,7 @@
 
 #include <gst/gst.h>
 #include <gst/video/video.h>
-#include <gst/cuda/gstcudaloader.h>
+#include <gst/cuda/gstcuda.h>
 
 #include "nvEncodeAPI.h"
 
@@ -87,6 +87,8 @@ guint32                 gst_nvenc_get_sequence_param_payload_version (void);
 guint32                 gst_nvenc_get_event_params_version (void);
 
 guint32                 gst_nvenc_get_open_encode_session_ex_params_version (void);
+
+gboolean                gst_nvenc_have_set_io_cuda_streams (void);
 
 gboolean                gst_nvenc_load_library (guint * api_major_ver,
                                                 guint * api_minor_ver);

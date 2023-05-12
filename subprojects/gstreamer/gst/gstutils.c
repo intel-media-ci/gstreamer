@@ -199,7 +199,8 @@ gst_util_set_object_arg (GObject * object, const gchar * name,
 
   value_type = pspec->value_type;
 
-  GST_DEBUG ("pspec->flags is %d, pspec->value_type is %s",
+  GST_CAT_DEBUG_OBJECT (GST_CAT_PARAMS, object,
+      "pspec->flags is %d, pspec->value_type is %s",
       pspec->flags, g_type_name (value_type));
 
   if (!(pspec->flags & G_PARAM_WRITABLE))
@@ -1145,9 +1146,8 @@ gst_element_get_compatible_pad (GstElement * element, GstPad * pad,
   g_return_val_if_fail (GST_IS_ELEMENT (element), NULL);
   g_return_val_if_fail (GST_IS_PAD (pad), NULL);
 
-  GST_CAT_DEBUG (GST_CAT_ELEMENT_PADS,
-      "finding pad in %s compatible with %s:%s",
-      GST_ELEMENT_NAME (element), GST_DEBUG_PAD_NAME (pad));
+  GST_CAT_DEBUG_OBJECT (GST_CAT_ELEMENT_PADS, element,
+      "finding pad compatible with %s:%s", GST_DEBUG_PAD_NAME (pad));
 
   g_return_val_if_fail (GST_PAD_PEER (pad) == NULL, NULL);
 
@@ -1173,8 +1173,8 @@ gst_element_get_compatible_pad (GstElement * element, GstPad * pad,
 
         current = g_value_get_object (&padptr);
 
-        GST_CAT_LOG (GST_CAT_ELEMENT_PADS, "examining pad %s:%s",
-            GST_DEBUG_PAD_NAME (current));
+        GST_CAT_LOG_OBJECT (GST_CAT_ELEMENT_PADS, element,
+            "examining pad %s:%s", GST_DEBUG_PAD_NAME (current));
 
         if (GST_PAD_IS_SRC (current)) {
           srcpad = current;
@@ -1204,7 +1204,7 @@ gst_element_get_compatible_pad (GstElement * element, GstPad * pad,
           gst_caps_unref (intersection);
 
           if (compatible) {
-            GST_CAT_DEBUG (GST_CAT_ELEMENT_PADS,
+            GST_CAT_DEBUG_OBJECT (GST_CAT_ELEMENT_PADS, element,
                 "found existing unlinked compatible pad %s:%s",
                 GST_DEBUG_PAD_NAME (current));
             gst_iterator_free (pads);
@@ -1262,7 +1262,7 @@ gst_element_get_compatible_pad (GstElement * element, GstPad * pad,
   gst_object_unref (templ);
 
   if (foundpad) {
-    GST_CAT_DEBUG (GST_CAT_ELEMENT_PADS,
+    GST_CAT_DEBUG_OBJECT (GST_CAT_ELEMENT_PADS, element,
         "found existing request pad %s:%s", GST_DEBUG_PAD_NAME (foundpad));
     return foundpad;
   }
@@ -1618,13 +1618,15 @@ prepare_link_maybe_ghosting (GstPad ** src, GstPad ** sink,
   e2 = GST_OBJECT_PARENT (*sink);
 
   if (G_UNLIKELY (e1 == NULL)) {
-    GST_WARNING ("Trying to ghost a pad that doesn't have a parent: %"
-        GST_PTR_FORMAT, *src);
+    GST_CAT_WARNING (GST_CAT_ELEMENT_PADS,
+        "Trying to ghost a pad that doesn't have a parent: %" GST_PTR_FORMAT,
+        *src);
     return FALSE;
   }
   if (G_UNLIKELY (e2 == NULL)) {
-    GST_WARNING ("Trying to ghost a pad that doesn't have a parent: %"
-        GST_PTR_FORMAT, *sink);
+    GST_CAT_WARNING (GST_CAT_ELEMENT_PADS,
+        "Trying to ghost a pad that doesn't have a parent: %" GST_PTR_FORMAT,
+        *sink);
     return FALSE;
   }
 
@@ -2158,7 +2160,7 @@ gst_element_link_pads_filtered (GstElement * src, const gchar * srcpadname,
 
     capsfilter = gst_element_factory_make ("capsfilter", NULL);
     if (!capsfilter) {
-      GST_ERROR ("Could not make a capsfilter");
+      GST_CAT_ERROR (GST_CAT_ELEMENT_PADS, "Could not make a capsfilter");
       return FALSE;
     }
 
@@ -2168,7 +2170,7 @@ gst_element_link_pads_filtered (GstElement * src, const gchar * srcpadname,
     gst_element_get_state (GST_ELEMENT_CAST (parent), &state, &pending, 0);
 
     if (!gst_bin_add (GST_BIN (parent), capsfilter)) {
-      GST_ERROR ("Could not add capsfilter");
+      GST_CAT_ERROR (GST_CAT_ELEMENT_PADS, "Could not add capsfilter");
       gst_object_unref (parent);
       return FALSE;
     }
@@ -2327,15 +2329,16 @@ gst_element_unlink_pads (GstElement * src, const gchar * srcpadname,
     if ((srcpad = gst_element_request_pad_simple (src, srcpadname)))
       srcrequest = TRUE;
   if (srcpad == NULL) {
-    GST_WARNING_OBJECT (src, "source element has no pad \"%s\"", srcpadname);
+    GST_CAT_WARNING_OBJECT (GST_CAT_ELEMENT_PADS, src,
+        "source element has no pad \"%s\"", srcpadname);
     return;
   }
   if (!(destpad = gst_element_get_static_pad (dest, destpadname)))
     if ((destpad = gst_element_request_pad_simple (dest, destpadname)))
       destrequest = TRUE;
   if (destpad == NULL) {
-    GST_WARNING_OBJECT (dest, "destination element has no pad \"%s\"",
-        destpadname);
+    GST_CAT_WARNING_OBJECT (GST_CAT_ELEMENT_PADS, dest,
+        "destination element has no pad \"%s\"", destpadname);
     goto free_src;
   }
 
@@ -2813,9 +2816,11 @@ query_caps_func (GstPad * pad, QueryCapsData * data)
     GstCaps *peercaps, *intersection;
 
     gst_query_parse_caps_result (data->query, &peercaps);
-    GST_DEBUG_OBJECT (pad, "intersect with result %" GST_PTR_FORMAT, peercaps);
+    GST_CAT_DEBUG_OBJECT (GST_CAT_PADS, pad,
+        "intersect with result %" GST_PTR_FORMAT, peercaps);
     intersection = gst_caps_intersect (data->ret, peercaps);
-    GST_DEBUG_OBJECT (pad, "intersected %" GST_PTR_FORMAT, intersection);
+    GST_CAT_DEBUG_OBJECT (GST_CAT_PADS, pad,
+        "intersected %" GST_PTR_FORMAT, intersection);
 
     gst_caps_unref (data->ret);
     data->ret = intersection;
@@ -3194,7 +3199,7 @@ gst_pad_query_accept_caps (GstPad * pad, GstCaps * caps)
   query = gst_query_new_accept_caps (caps);
   if (gst_pad_query (pad, query)) {
     gst_query_parse_accept_caps_result (query, &res);
-    GST_DEBUG_OBJECT (pad, "query returned %d", res);
+    GST_CAT_DEBUG_OBJECT (GST_CAT_CAPS, pad, "query returned %d", res);
   }
   gst_query_unref (query);
 
@@ -3223,7 +3228,7 @@ gst_pad_peer_query_accept_caps (GstPad * pad, GstCaps * caps)
   query = gst_query_new_accept_caps (caps);
   if (gst_pad_peer_query (pad, query)) {
     gst_query_parse_accept_caps_result (query, &res);
-    GST_DEBUG_OBJECT (pad, "query returned %d", res);
+    GST_CAT_DEBUG_OBJECT (GST_CAT_CAPS, pad, "query returned %d", res);
   }
   gst_query_unref (query);
 
@@ -3256,14 +3261,14 @@ element_find_unlinked_pad (GstElement * element, GstPadDirection direction)
         GstPad *peer;
         GstPad *pad = g_value_get_object (&data);
 
-        GST_CAT_LOG (GST_CAT_ELEMENT_PADS, "examining pad %s:%s",
-            GST_DEBUG_PAD_NAME (pad));
+        GST_CAT_LOG_OBJECT (GST_CAT_ELEMENT_PADS, element,
+            "examining pad %s:%s", GST_DEBUG_PAD_NAME (pad));
 
         peer = gst_pad_get_peer (pad);
         if (peer == NULL) {
           unlinked_pad = gst_object_ref (pad);
           done = TRUE;
-          GST_CAT_DEBUG (GST_CAT_ELEMENT_PADS,
+          GST_CAT_DEBUG_OBJECT (GST_CAT_ELEMENT_PADS, element,
               "found existing unlinked pad %s:%s",
               GST_DEBUG_PAD_NAME (unlinked_pad));
         } else {
@@ -3968,28 +3973,16 @@ gst_util_fraction_compare (gint a_n, gint a_d, gint b_n, gint b_d)
 }
 
 static gchar *
-gst_pad_create_stream_id_internal (GstPad * pad, GstElement * parent,
+gst_element_decorate_stream_id_internal (GstElement * element,
     const gchar * stream_id)
 {
   GstEvent *upstream_event;
   gchar *upstream_stream_id = NULL, *new_stream_id;
   GstPad *sinkpad;
 
-  g_return_val_if_fail (GST_IS_PAD (pad), NULL);
-  g_return_val_if_fail (GST_PAD_IS_SRC (pad), NULL);
-  g_return_val_if_fail (GST_IS_ELEMENT (parent), NULL);
-
-  g_return_val_if_fail (parent->numsinkpads <= 1, NULL);
-
-  /* If the element has multiple source pads it must
-   * provide a stream-id for every source pad, otherwise
-   * all source pads will have the same and are not
-   * distinguishable */
-  g_return_val_if_fail (parent->numsrcpads <= 1 || stream_id, NULL);
-
   /* First try to get the upstream stream-start stream-id from the sinkpad.
    * This will only work for non-source elements */
-  sinkpad = gst_element_get_static_pad (parent, "sink");
+  sinkpad = gst_element_get_static_pad (element, "sink");
   if (sinkpad) {
     upstream_event =
         gst_pad_get_sticky_event (sinkpad, GST_EVENT_STREAM_START, 0);
@@ -4013,7 +4006,7 @@ gst_pad_create_stream_id_internal (GstPad * pad, GstElement * parent,
     /* Try to generate one from the URI query and
      * if it fails take a random number instead */
     query = gst_query_new_uri ();
-    if (gst_element_query (parent, query)) {
+    if (gst_element_query (element, query)) {
       gst_query_parse_uri (query, &uri);
     }
 
@@ -4028,7 +4021,7 @@ gst_pad_create_stream_id_internal (GstPad * pad, GstElement * parent,
       g_checksum_free (cs);
     } else {
       /* Just get some random number if the URI query fails */
-      GST_FIXME_OBJECT (pad, "Creating random stream-id, consider "
+      GST_FIXME_OBJECT (element, "Creating random stream-id, consider "
           "implementing a deterministic way of creating a stream-id");
       upstream_stream_id =
           g_strdup_printf ("%08x%08x%08x%08x", g_random_int (), g_random_int (),
@@ -4047,6 +4040,139 @@ gst_pad_create_stream_id_internal (GstPad * pad, GstElement * parent,
   g_free (upstream_stream_id);
 
   return new_stream_id;
+}
+
+/**
+ * gst_element_decorate_stream_id_printf_valist:
+ * @element: The  #GstElement to create a stream-id for
+ * @format: (not nullable): The stream-id
+ * @var_args: parameters for the @format string
+ *
+ * Creates a stream-id for @element by combining the upstream information with
+ * the @format.
+ *
+ * This function generates an unique stream-id by getting the upstream
+ * stream-start event stream ID and appending @format to it. If the element
+ * has no sinkpad it will generate an upstream stream-id by doing an URI query
+ * on the element and in the worst case just uses a random number. Source
+ * elements that don't implement the URI handler interface should ideally
+ * generate a unique, deterministic stream-id manually instead.
+ *
+ * Since stream IDs are sorted alphabetically, any numbers in the stream ID
+ * should be printed with a fixed number of characters, preceded by 0's, such as
+ * by using the format \%03u instead of \%u.
+ *
+ * Returns: (transfer full): A stream-id for @element.
+ *
+ * Since: 1.24
+ */
+gchar *
+gst_element_decorate_stream_id_printf_valist (GstElement * element,
+    const gchar * format, va_list var_args)
+{
+  gchar *stream_id, *res;
+
+  g_return_val_if_fail (format, NULL);
+
+  stream_id = g_strdup_vprintf (format, var_args);
+
+  res = gst_element_decorate_stream_id_internal (element, stream_id);
+
+  g_free (stream_id);
+
+  return res;
+}
+
+/**
+ * gst_element_decorate_stream_id_printf:
+ * @element: The  #GstElement to create a stream-id for
+ * @format: (not nullable): The stream-id
+ *
+ * Creates a stream-id for @element by combining the upstream information with
+ * the @format.
+ *
+ * This function generates an unique stream-id by getting the upstream
+ * stream-start event stream ID and appending the stream-id to it. If the element
+ * has no sinkpad it will generate an upstream stream-id by doing an URI query
+ * on the element and in the worst case just uses a random number. Source
+ * elements that don't implement the URI handler interface should ideally
+ * generate a unique, deterministic stream-id manually instead.
+ *
+ * Since stream IDs are sorted alphabetically, any numbers in the stream ID
+ * should be printed with a fixed number of characters, preceded by 0's, such as
+ * by using the format \%03u instead of \%u.
+ *
+ * Returns: (transfer full): A stream-id for @element.
+ *
+ * Since: 1.24
+ */
+gchar *
+gst_element_decorate_stream_id_printf (GstElement * element,
+    const gchar * format, ...)
+{
+  gchar *res;
+  va_list var_args;
+
+  g_return_val_if_fail (format, NULL);
+
+  va_start (var_args, format);
+  res =
+      gst_element_decorate_stream_id_printf_valist (element, format, var_args);
+  va_end (var_args);
+
+  return res;
+}
+
+
+/**
+ * gst_element_decorate_stream_id:
+ * @element: The  #GstElement to create a stream-id for
+ * @stream_id: (not nullable): The stream-id
+ *
+ * Creates a stream-id for @element by combining the upstream information with
+ * the @stream_id.
+ *
+ * This function generates an unique stream-id by getting the upstream
+ * stream-start event stream ID and appending @stream_id to it. If the element
+ * has no sinkpad it will generate an upstream stream-id by doing an URI query
+ * on the element and in the worst case just uses a random number. Source
+ * elements that don't implement the URI handler interface should ideally
+ * generate a unique, deterministic stream-id manually instead.
+ *
+ * Since stream IDs are sorted alphabetically, any numbers in the stream ID
+ * should be printed with a fixed number of characters, preceded by 0's, such as
+ * by using the format \%03u instead of \%u.
+ *
+ * Returns: (transfer full): A stream-id for @element.
+ *
+ * Since: 1.24
+ */
+gchar *
+gst_element_decorate_stream_id (GstElement * element, const gchar * stream_id)
+{
+  g_return_val_if_fail (stream_id, NULL);
+  g_return_val_if_fail (GST_IS_ELEMENT (element), NULL);
+
+  return gst_element_decorate_stream_id_internal (element, stream_id);
+}
+
+static gchar *
+gst_pad_create_stream_id_internal (GstPad * pad, GstElement * parent,
+    const gchar * stream_id)
+{
+  g_return_val_if_fail (GST_IS_PAD (pad), NULL);
+  g_return_val_if_fail (GST_PAD_IS_SRC (pad), NULL);
+  g_return_val_if_fail (GST_IS_ELEMENT (parent), NULL);
+
+  g_return_val_if_fail (parent->numsinkpads <= 1, NULL);
+
+  /* If the element has multiple source pads it must
+   * provide a stream-id for every source pad, otherwise
+   * all source pads will have the same and are not
+   * distinguishable */
+  g_return_val_if_fail (parent->numsrcpads <= 1 || stream_id, NULL);
+
+  return gst_element_decorate_stream_id_internal (parent, stream_id);
 }
 
 /**
@@ -4192,9 +4318,10 @@ gst_pad_get_stream_id (GstPad * pad)
     gst_event_parse_stream_start (event, &stream_id);
     ret = g_strdup (stream_id);
     gst_event_unref (event);
-    GST_LOG_OBJECT (pad, "pad has stream-id '%s'", ret);
+    GST_CAT_LOG_OBJECT (GST_CAT_PADS, pad, "pad has stream-id '%s'", ret);
   } else {
-    GST_DEBUG_OBJECT (pad, "pad has not received a stream-start event yet");
+    GST_CAT_DEBUG_OBJECT (GST_CAT_PADS, pad,
+        "pad has not received a stream-start event yet");
   }
 
   return ret;
@@ -4227,9 +4354,10 @@ gst_pad_get_stream (GstPad * pad)
   if (event != NULL) {
     gst_event_parse_stream (event, &stream);
     gst_event_unref (event);
-    GST_LOG_OBJECT (pad, "pad has stream object %p", stream);
+    GST_CAT_LOG_OBJECT (GST_CAT_PADS, pad, "pad has stream object %p", stream);
   } else {
-    GST_DEBUG_OBJECT (pad, "pad has not received a stream-start event yet");
+    GST_CAT_DEBUG_OBJECT (GST_CAT_PADS, pad,
+        "pad has not received a stream-start event yet");
   }
 
   return stream;
@@ -4566,7 +4694,7 @@ gboolean
 gst_type_is_plugin_api (GType type, GstPluginAPIFlags * flags)
 {
   gboolean ret =
-      ! !GPOINTER_TO_INT (g_type_get_qdata (type, GST_QUARK (PLUGIN_API)));
+      !!GPOINTER_TO_INT (g_type_get_qdata (type, GST_QUARK (PLUGIN_API)));
 
   if (ret && flags) {
     *flags =

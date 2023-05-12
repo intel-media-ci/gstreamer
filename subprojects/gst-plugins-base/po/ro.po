@@ -3,26 +3,33 @@
 #
 # Lucian Adrian Grijincu <lucian.grijincu@gmail.com>, 2010.
 # Florentina Mușat <florentina.musat.28@gmail.com>, 2020.
+# Remus-Gabriel Chelu <remusgabriel.chelu@disroot.org>. 2022 - 2023.
+#
+# Cronologia traducerii fișierului „gst-plugins-base”:
+# Traducerea inițială, făcută de LAG, pentru versiunea gst-plugins-base 0.10.29.2
+# Actualizare a traducerii pentru versiunea 1.16.0, făcută de FM, iun-2020.
 # Actualizare a mesajelor, de la fișierul „gst-plugins-base-1.19.2.pot”.
 # Eliminare a mesajelor ce-au dispărut în ultima versiune.
-# Actualizări realizate de Remus-Gabriel Chelu <remusgabriel.chelu@disroot.org>, 15.01.2022.
+# Actualizare a traducerii pentru versiunea 1.19.2, făcută de R-GC, ian-2022.
+# Actualizare a traducerii pentru versiunea 1.21.90, făcută de R-GC, ian-2023
+# Actualizare a traducerii pentru versiunea Y, făcută de X, Z(anul).
 #
 msgid ""
 msgstr ""
-"Project-Id-Version: gst-plugins-base 1.19.2\n"
+"Project-Id-Version: gst-plugins-base 1.21.90\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2021-09-23 01:33+0100\n"
-"PO-Revision-Date: 2022-01-21 01:00+0100\n"
+"POT-Creation-Date: 2023-02-22 11:52+0000\n"
+"PO-Revision-Date: 2023-01-15 20:42+0100\n"
 "Last-Translator: Remus-Gabriel Chelu <remusgabriel.chelu@disroot.org>\n"
 "Language-Team: Romanian <translation-team-ro@lists.sourceforge.net>\n"
 "Language: ro\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"X-Bugs: Report translation errors to the Language-Team address.\n"
 "Plural-Forms: nplurals=3; plural=(n==1 ? 0 : (n==0 || (n%100 > 0 && n%100 < "
-"20)) ? 1 : 2);;\n"
-"X-Generator: Poedit 2.3.1\n"
+"20)) ? 1 : 2);\n"
+"X-Bugs: Report translation errors to the Language-Team address.\n"
+"X-Generator: Poedit 3.2.2\n"
 
 msgid "Could not open device for playback in mono mode."
 msgstr "Nu s-a putut deschide dispozitivul pentru redare în modul mono."
@@ -97,9 +104,6 @@ msgstr "Element %s lipsă - verificați instalarea GStreamer."
 msgid "Could not create \"uridecodebin\" element."
 msgstr "Nu s-a putut crea elementul „uridecodebin”."
 
-msgid "Could not create \"uridecodebin3\" element."
-msgstr "Nu s-a putut crea elementul „uridecodebin3”."
-
 #, c-format
 msgid "Both autovideosink and %s elements are missing."
 msgstr "Lipsește atât elementul autovideosink cât și %s."
@@ -169,8 +173,15 @@ msgstr "Acest tip de flux nu poate fi redat încă."
 msgid "No URI handler implemented for \"%s\"."
 msgstr "Nu a fost implementată nicio rutină de tratare a URI-ului pentru „%s”."
 
+#, fuzzy
+msgid "Source element can't be prepared"
+msgstr "Elementul sursă nu are pini (pads)."
+
 msgid "Source element is invalid."
-msgstr "Element sursă nevalid."
+msgstr "Elementul sursă nu este valid."
+
+msgid "Source element has no pads."
+msgstr "Elementul sursă nu are pini (pads)."
 
 #, c-format
 msgid "Error while sending data to \"%s:%d\"."
@@ -390,10 +401,10 @@ msgid "Unknown element"
 msgstr "Element necunoscut"
 
 msgid "Unknown decoder element"
-msgstr "Element de decodare necunoscut"
+msgstr "Element de decodificare necunoscut"
 
 msgid "Unknown encoder element"
-msgstr "Element de codare necunoscut"
+msgstr "Element de codificare necunoscut"
 
 #. we should really never get here, but we better still return
 #. * something if we do
@@ -724,23 +735,27 @@ msgstr "schimbă direcția de redare"
 msgid "enable/disable trick modes"
 msgstr "activează/dezactivează sugestiile"
 
-msgid "change audio track"
-msgstr "modifică pista audio"
+msgid "change to previous/next audio track"
+msgstr "schimbă la pista audio anterioară/următoare"
 
-msgid "change video track"
-msgstr "schimbă pista video"
+msgid "change to previous/next video track"
+msgstr "schimbă la pista video anterioară/următoare"
 
-msgid "change subtitle track"
-msgstr "modifică pista de subtitrări"
+msgid "change to previous/next subtitle track"
+msgstr "schimbă la pista de subtitrare anterioară/următoare"
 
 msgid "seek to beginning"
-msgstr "caută la început"
+msgstr "caută de la început"
 
 msgid "show keyboard shortcuts"
 msgstr "arată scurtăturile de tastatură"
 
 msgid "Interactive mode - keyboard controls:"
 msgstr "Mod interactiv - controale de tastatură:"
+
+#, c-format
+msgid "Use Windows high-resolution clock, precision: %u ms\n"
+msgstr "Utilizați ceasul Windows de înaltă rezoluție, precizie: %u ms\n"
 
 msgid "Output status information and property notifications"
 msgstr "Afișează informații de stare și înștiințări de proprietate"
@@ -759,6 +774,9 @@ msgstr "Colectarea audio ce se utilizează (predefinită este autoaudiosink)"
 msgid "Enable gapless playback"
 msgstr "Activează redarea fără întreruperi"
 
+msgid "Enable instantaneous uri changes (only with playbin3)"
+msgstr "Activează modificările instantanee ale adresei uri (numai cu playbin3)"
+
 msgid "Shuffle playlist"
 msgstr "Amestecă lista de redare"
 
@@ -771,6 +789,9 @@ msgstr "Volum"
 msgid "Start position in seconds."
 msgstr "Poziția de start în secunde."
 
+msgid "Enable accurate seeking"
+msgstr ""
+
 msgid "Playlist file containing input media files"
 msgstr "Fișierul listei de redare care conține fișierele media de intrare"
 
@@ -782,12 +803,12 @@ msgstr ""
 msgid "Do not print any output (apart from errors)"
 msgstr "Nu imprimă nicio ieșire (în afară de erori)"
 
-msgid "Use playbin3 pipeline"
-msgstr "Utilizează linia de conexiune playbin3"
-
-msgid "(default varies depending on 'USE_PLAYBIN' env variable)"
+msgid ""
+"Use playbin3 pipeline (default varies depending on 'USE_PLAYBIN' env "
+"variable)"
 msgstr ""
-"(valoarea predefinită variază în funcție de variabila de mediu „USE_PLAYBIN”)"
+"Utilizează linia de asamblare(pipeline) playbin3 (valoarea predefinită "
+"variază în funcție de variabila de mediu „USE_PLAYBIN”)"
 
 msgid ""
 "Keep showing the last frame on EOS until quit or playlist change command "
@@ -796,6 +817,9 @@ msgstr ""
 "Se continuă afișarea ultimului cadru pe EOS până se iese sau până se "
 "primește comanda de schimbare a listei de redare (fără întreruperi este "
 "ignorat)"
+
+msgid "Do not print current position of pipeline"
+msgstr ""
 
 #, c-format
 msgid "Usage: %s FILE1|URI1 [FILE2|URI2] [FILE3|URI3] ..."
@@ -806,3 +830,9 @@ msgstr "Trebuie să furnizați cel puțin un nume de fișier sau URI de redat."
 
 msgid "Press 'k' to see a list of keyboard shortcuts.\n"
 msgstr "Apăsați „k” pentru a vedea o listă de scurtături de tastatură.\n"
+
+#~ msgid "Could not create \"uridecodebin3\" element."
+#~ msgstr "Nu s-a putut crea elementul „uridecodebin3”."
+
+#~ msgid "Use playbin3 pipeline"
+#~ msgstr "Utilizează linia de conexiune playbin3"

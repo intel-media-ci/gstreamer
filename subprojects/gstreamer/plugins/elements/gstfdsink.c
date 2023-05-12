@@ -111,7 +111,7 @@ static void gst_fd_sink_uri_handler_init (gpointer g_iface,
   GST_DEBUG_CATEGORY_INIT (gst_fd_sink__debug, "fdsink", 0, "fdsink element");
 #define gst_fd_sink_parent_class parent_class
 G_DEFINE_TYPE_WITH_CODE (GstFdSink, gst_fd_sink, GST_TYPE_BASE_SINK, _do_init);
-#if defined(HAVE_SYS_SOCKET_H) || defined(_MSC_VER)
+#if defined(HAVE_SYS_SOCKET_H) || defined(G_OS_WIN32)
 GST_ELEMENT_REGISTER_DEFINE (fdsink, "fdsink", GST_RANK_NONE, GST_TYPE_FD_SINK);
 #endif
 
@@ -262,8 +262,14 @@ gst_fd_sink_render_list (GstBaseSink * bsink, GstBufferList * buffer_list)
   for (;;) {
     guint64 bytes_written = 0;
 
+#ifdef G_OS_WIN32
+    int cur_mode = _setmode (sink->fd, O_BINARY);
+#endif
     ret = gst_writev_buffer_list (GST_OBJECT_CAST (sink), sink->fd, sink->fdset,
         buffer_list, &bytes_written, skip, 0, -1, NULL);
+#ifdef G_OS_WIN32
+    _setmode (sink->fd, cur_mode);
+#endif
 
     sink->current_pos += bytes_written;
     skip += bytes_written;
@@ -297,8 +303,14 @@ gst_fd_sink_render (GstBaseSink * bsink, GstBuffer * buffer)
   for (;;) {
     guint64 bytes_written = 0;
 
+#ifdef G_OS_WIN32
+    int cur_mode = _setmode (sink->fd, O_BINARY);
+#endif
     ret = gst_writev_buffer (GST_OBJECT_CAST (sink), sink->fd, sink->fdset,
         buffer, &bytes_written, skip, 0, -1, NULL);
+#ifdef G_OS_WIN32
+    _setmode (sink->fd, cur_mode);
+#endif
 
     sink->current_pos += bytes_written;
     skip += bytes_written;

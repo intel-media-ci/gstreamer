@@ -282,9 +282,17 @@ gst_deinterlace_locking_get_type (void)
   return deinterlace_locking_type;
 }
 
+#if G_BYTE_ORDER == G_BIG_ENDIAN
 #define DEINTERLACE_VIDEO_FORMATS \
     "{ AYUV, ARGB, ABGR, RGBA, BGRA, Y444, xRGB, xBGR, RGBx, BGRx, RGB, " \
-    "BGR, YUY2, YVYU, UYVY, Y42B, I420, YV12, Y41B, NV12, NV21 }"
+    "BGR, YUY2, YVYU, UYVY, Y42B, I420, YV12, Y41B, NV12, NV21, " \
+    "Y444_16BE, Y444_12BE, Y444_10BE, I422_12BE, I422_10BE, I420_12BE, I420_10BE } "
+#else
+#define DEINTERLACE_VIDEO_FORMATS \
+    "{ AYUV, ARGB, ABGR, RGBA, BGRA, Y444, xRGB, xBGR, RGBx, BGRx, RGB, " \
+    "BGR, YUY2, YVYU, UYVY, Y42B, I420, YV12, Y41B, NV12, NV21, " \
+    "Y444_16LE, Y444_12LE, Y444_10LE, I422_12LE, I422_10LE, I420_12LE, I420_10LE } "
+#endif
 
 #define DEINTERLACE_CAPS GST_VIDEO_CAPS_MAKE(DEINTERLACE_VIDEO_FORMATS)
 
@@ -375,17 +383,17 @@ static const struct
   GType (*get_type) (void);
 } _method_types[] = {
   {
-  gst_deinterlace_method_tomsmocomp_get_type}, {
-  gst_deinterlace_method_greedy_h_get_type}, {
-  gst_deinterlace_method_greedy_l_get_type}, {
-  gst_deinterlace_method_vfir_get_type}, {
-  gst_deinterlace_method_linear_get_type}, {
-  gst_deinterlace_method_linear_blend_get_type}, {
-  gst_deinterlace_method_scaler_bob_get_type}, {
-  gst_deinterlace_method_weave_get_type}, {
-  gst_deinterlace_method_weave_tff_get_type}, {
-  gst_deinterlace_method_weave_bff_get_type}, {
-  gst_deinterlace_method_yadif_get_type}
+      gst_deinterlace_method_tomsmocomp_get_type}, {
+      gst_deinterlace_method_greedy_h_get_type}, {
+      gst_deinterlace_method_greedy_l_get_type}, {
+      gst_deinterlace_method_vfir_get_type}, {
+      gst_deinterlace_method_linear_get_type}, {
+      gst_deinterlace_method_linear_blend_get_type}, {
+      gst_deinterlace_method_scaler_bob_get_type}, {
+      gst_deinterlace_method_weave_get_type}, {
+      gst_deinterlace_method_weave_tff_get_type}, {
+      gst_deinterlace_method_weave_bff_get_type}, {
+      gst_deinterlace_method_yadif_get_type}
 };
 
 static void
@@ -2377,8 +2385,10 @@ gst_deinterlace_caps_double_framerate (GstCaps * caps, gboolean half)
     } else if (G_VALUE_TYPE (val) == GST_TYPE_FRACTION_RANGE) {
       const GValue *min, *max;
       GValue nrange = { 0, }, nmin = {
-      0,}, nmax = {
-      0,};
+        0,
+      }, nmax = {
+        0,
+      };
       gint n, d;
 
       g_value_init (&nrange, GST_TYPE_FRACTION_RANGE);

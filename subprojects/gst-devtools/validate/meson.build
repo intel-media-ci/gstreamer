@@ -16,6 +16,11 @@ if cc.has_header('unistd.h')
   cdata.set('HAVE_UNISTD_H', 1)
 endif
 
+# Symbol visibility
+if cc.has_argument('-fvisibility=hidden')
+  add_project_arguments('-fvisibility=hidden', language: 'c')
+endif
+
 configure_file(output : 'config.h', configuration : cdata)
 
 validate_plugins_install_dir = '@0@/gstreamer-1.0/validate'.format(get_option('libdir'))

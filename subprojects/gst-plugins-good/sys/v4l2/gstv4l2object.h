@@ -76,6 +76,8 @@ typedef gboolean  (*GstV4l2UpdateFpsFunction) (GstV4l2Object * v4l2object);
  * 'unsigned long' for the 2nd parameter */
 #ifdef __ANDROID__
 typedef unsigned ioctl_req_t;
+#elif defined(__linux__) && !defined(__GLIBC__) /* musl/linux */
+typedef int ioctl_req_t;
 #else
 typedef gulong ioctl_req_t;
 #endif
@@ -134,6 +136,9 @@ struct _GstV4l2Object {
   /* the video-device's file descriptor */
   gint video_fd;
   GstV4l2IOMode mode;
+  GstPoll *poll;
+  GstPollFD pollfd;
+  gboolean can_poll_device;
 
   gboolean active;
 
@@ -277,7 +282,6 @@ gboolean     gst_v4l2_object_get_property_helper       (GstV4l2Object *v4l2objec
 gboolean     gst_v4l2_object_open            (GstV4l2Object * v4l2object, GstV4l2Error * error);
 gboolean     gst_v4l2_object_open_shared     (GstV4l2Object * v4l2object, GstV4l2Object * other);
 gboolean     gst_v4l2_object_close           (GstV4l2Object * v4l2object);
-gboolean     gst_v4l2_object_clear_format_list (GstV4l2Object * v4l2object);
 
 /* probing */
 
@@ -311,7 +315,12 @@ gboolean     gst_v4l2_object_decide_allocation (GstV4l2Object * v4l2object, GstQ
 
 gboolean     gst_v4l2_object_propose_allocation (GstV4l2Object * obj, GstQuery * query);
 
+GstBufferPool * gst_v4l2_object_get_buffer_pool (GstV4l2Object * v4l2object);
+
 GstStructure * gst_v4l2_object_v4l2fourcc_to_structure (guint32 fourcc);
+
+GstFlowReturn  gst_v4l2_object_poll (GstV4l2Object * v4l2object, GstClockTime timeout);
+gboolean       gst_v4l2_object_subscribe_event (GstV4l2Object * v4l2object, guint32 event);
 
 /* crop / compose */
 gboolean     gst_v4l2_object_set_crop (GstV4l2Object * obj, struct v4l2_rect *result);

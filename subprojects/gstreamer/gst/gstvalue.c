@@ -1527,7 +1527,7 @@ gst_value_deserialize_int_range (GValue * dest, const gchar * s)
 static void
 gst_value_init_int64_range (GValue * value)
 {
-  gint64 *vals = g_slice_alloc0 (3 * sizeof (gint64));
+  gint64 *vals = g_malloc0 (3 * sizeof (gint64));
   value->data[0].v_pointer = vals;
   INT64_RANGE_MIN (value) = 0;
   INT64_RANGE_MAX (value) = 0;
@@ -1538,7 +1538,7 @@ static void
 gst_value_free_int64_range (GValue * value)
 {
   g_return_if_fail (GST_VALUE_HOLDS_INT64_RANGE (value));
-  g_slice_free1 (3 * sizeof (gint64), value->data[0].v_pointer);
+  g_free (value->data[0].v_pointer);
   value->data[0].v_pointer = NULL;
 }
 
@@ -1913,7 +1913,7 @@ gst_value_init_fraction_range (GValue * value)
 
   ftype = GST_TYPE_FRACTION;
 
-  value->data[0].v_pointer = vals = g_slice_alloc0 (2 * sizeof (GValue));
+  value->data[0].v_pointer = vals = g_malloc0 (2 * sizeof (GValue));
   g_value_init (&vals[0], ftype);
   g_value_init (&vals[1], ftype);
 }
@@ -1927,7 +1927,7 @@ gst_value_free_fraction_range (GValue * value)
     /* we know the two values contain fractions without internal allocs */
     /* g_value_unset (&vals[0]); */
     /* g_value_unset (&vals[1]); */
-    g_slice_free1 (2 * sizeof (GValue), vals);
+    g_free (vals);
     value->data[0].v_pointer = NULL;
   }
 }
@@ -2331,6 +2331,8 @@ _priv_gst_value_get_abbrs (gint * n_abbrs)
       {"date", G_TYPE_DATE}
       ,
       {"datetime", GST_TYPE_DATE_TIME}
+      ,
+      {"gdatetime", G_TYPE_DATE_TIME}
       ,
       {"bitmask", GST_TYPE_BITMASK}
       ,
@@ -4804,6 +4806,104 @@ gst_value_union_structure_structure (GValue * dest, const GValue * src1,
 out:
   gst_structure_free (result);
   return ret;
+}
+
+static gboolean
+gst_value_union_fraction_fraction_range (GValue * dest, const GValue * src1,
+    const GValue * src2)
+{
+  GValue *vals;
+  int f_n, f_d, fr_start_n, fr_start_d, fr_end_n, fr_end_d;
+
+  g_return_val_if_fail (GST_VALUE_HOLDS_FRACTION (src1), FALSE);
+  g_return_val_if_fail (GST_VALUE_HOLDS_FRACTION_RANGE (src2), FALSE);
+
+  /* Fraction */
+  f_n = src1->data[0].v_int;
+  f_d = src1->data[1].v_int;
+
+  vals = src2->data[0].v_pointer;
+  /* Fraction range start */
+  fr_start_n = vals[0].data[0].v_int;
+  fr_start_d = vals[0].data[1].v_int;
+  /* Fraction range end */
+  fr_end_n = vals[1].data[0].v_int;
+  fr_end_d = vals[1].data[1].v_int;
+
+  /* Check if it's already in the range. This is the only case in which we can
+   * successfully perform a union. */
+  if (gst_util_fraction_compare (f_n, f_d, fr_start_n, fr_start_d) >= 0 &&
+      gst_util_fraction_compare (f_n, f_d, fr_end_n, fr_end_d) <= 0) {
+    if (dest)
+      gst_value_init_and_copy (dest, src2);
+    return TRUE;
+  }
+
+  return FALSE;
+}
+
+static gboolean
+gst_value_union_fraction_range_fraction_range (GValue * dest,
+    const GValue * src1, const GValue * src2)
+{
+  GValue *vals1, *vals2;
+  int fr1_start_n, fr1_start_d, fr1_end_n, fr1_end_d;
+  int fr2_start_n, fr2_start_d, fr2_end_n, fr2_end_d;
+  int fr_start_n, fr_start_d, fr_end_n, fr_end_d;
+
+  g_return_val_if_fail (GST_VALUE_HOLDS_FRACTION_RANGE (src1), FALSE);
+  g_return_val_if_fail (GST_VALUE_HOLDS_FRACTION_RANGE (src2), FALSE);
+
+  vals1 = src1->data[0].v_pointer;
+  g_return_val_if_fail (vals1 != NULL, FALSE);
+
+  fr1_start_n = vals1[0].data[0].v_int;
+  fr1_start_d = vals1[0].data[1].v_int;
+  fr1_end_n = vals1[1].data[0].v_int;
+  fr1_end_d = vals1[1].data[1].v_int;
+
+  vals2 = src2->data[0].v_pointer;
+  g_return_val_if_fail (vals2 != NULL, FALSE);
+
+  fr2_start_n = vals2[0].data[0].v_int;
+  fr2_start_d = vals2[0].data[1].v_int;
+  fr2_end_n = vals2[1].data[0].v_int;
+  fr2_end_d = vals2[1].data[1].v_int;
+
+  /* Ranges are completely disjoint: end of one range is less than the start of
+   * other range */
+  if (gst_util_fraction_compare (fr2_end_n, fr2_end_d, fr1_start_n,
+          fr1_start_d) < 0
+      || gst_util_fraction_compare (fr1_end_n, fr1_end_d, fr2_start_n,
+          fr2_start_d) < 0)
+    return FALSE;
+
+  /* Ranges overlap, union is trivial */
+  if (!dest)
+    return TRUE;
+
+  if (gst_util_fraction_compare (fr1_start_n, fr1_start_d, fr2_start_n,
+          fr2_start_d) < 0) {
+    fr_start_n = fr1_start_n;
+    fr_start_d = fr1_start_d;
+  } else {
+    fr_start_n = fr2_start_n;
+    fr_start_d = fr2_start_d;
+  }
+
+  if (gst_util_fraction_compare (fr1_end_n, fr1_end_d, fr2_end_n,
+          fr2_end_d) > 0) {
+    fr_end_n = fr1_end_n;
+    fr_end_d = fr1_end_d;
+  } else {
+    fr_end_n = fr2_end_n;
+    fr_end_d = fr2_end_d;
+  }
+
+  g_value_init (dest, GST_TYPE_FRACTION_RANGE);
+  gst_value_set_fraction_range_full (dest, fr_start_n, fr_start_d, fr_end_n,
+      fr_end_d);
+  return TRUE;
 }
 
 /****************
@@ -7283,9 +7383,9 @@ gst_value_deserialize_date (GValue * dest, const gchar * s)
   return TRUE;
 }
 
-/*************
+/***************
  * GstDateTime *
- *************/
+ ***************/
 
 static gint
 gst_value_compare_date_time (const GValue * value1, const GValue * value2)
@@ -7348,6 +7448,60 @@ gst_value_transform_string_date (const GValue * src_value, GValue * dest_value)
   gst_value_deserialize_date (dest_value, src_value->data[0].v_pointer);
 }
 
+/*************
+ * GDateTime *
+ *************/
+
+static gint
+gst_value_compare_g_date_time (const GValue * value1, const GValue * value2)
+{
+  const GDateTime *date1 = (const GDateTime *) g_value_get_boxed (value1);
+  const GDateTime *date2 = (const GDateTime *) g_value_get_boxed (value2);
+
+  if (date1 == date2)
+    return GST_VALUE_EQUAL;
+
+  if ((date1 == NULL) && (date2 != NULL)) {
+    return GST_VALUE_LESS_THAN;
+  }
+  if ((date2 == NULL) && (date1 != NULL)) {
+    return GST_VALUE_LESS_THAN;
+  }
+
+  return g_date_time_compare (date1, date2);
+}
+
+static gchar *
+gst_value_serialize_g_date_time (const GValue * val)
+{
+  GDateTime *date = (GDateTime *) g_value_get_boxed (val);
+
+  if (date == NULL)
+    return g_strdup ("null");
+
+  return g_date_time_format_iso8601 (date);
+}
+
+static gboolean
+gst_value_deserialize_g_date_time (GValue * dest, const gchar * s)
+{
+  GDateTime *datetime;
+
+  if (!s || strcmp (s, "null") == 0) {
+    return FALSE;
+  }
+
+  /* The Gstreamer iso8601 parser is a bit more forgiving */
+  datetime =
+      gst_date_time_to_g_date_time (gst_date_time_new_from_iso8601_string (s));
+  if (datetime != NULL) {
+    g_value_take_boxed (dest, datetime);
+    return TRUE;
+  }
+  GST_WARNING ("Failed to deserialize date time string '%s' to GLibDateTime",
+      s);
+  return FALSE;
+}
 
 /*********
  * bytes *
@@ -8142,6 +8296,7 @@ _priv_gst_value_initialize (void)
   REGISTER_SERIALIZATION (G_TYPE_DATE, date);
   REGISTER_SERIALIZATION (G_TYPE_BYTES, bytes);
   REGISTER_SERIALIZATION (gst_date_time_get_type (), date_time);
+  REGISTER_SERIALIZATION (G_TYPE_DATE_TIME, g_date_time);
   REGISTER_SERIALIZATION (gst_bitmask_get_type (), bitmask);
   REGISTER_SERIALIZATION (gst_structure_get_type (), structure);
   REGISTER_SERIALIZATION (gst_flagset_get_type (), flagset);
@@ -8285,6 +8440,10 @@ _priv_gst_value_initialize (void)
       gst_value_union_flagset_flagset);
   gst_value_register_union_func (GST_TYPE_STRUCTURE, GST_TYPE_STRUCTURE,
       gst_value_union_structure_structure);
+  gst_value_register_union_func (GST_TYPE_FRACTION, GST_TYPE_FRACTION_RANGE,
+      gst_value_union_fraction_fraction_range);
+  gst_value_register_union_func (GST_TYPE_FRACTION_RANGE,
+      GST_TYPE_FRACTION_RANGE, gst_value_union_fraction_range_fraction_range);
 
 #if GST_VERSION_NANO == 1
   /* If building from git master, check starting array sizes matched actual size
@@ -8309,14 +8468,6 @@ _priv_gst_value_initialize (void)
         "Please set GST_VALUE_SUBTRACT_TABLE_DEFAULT_SIZE to %u in gstvalue.c",
         gst_value_subtract_funcs->len);
   }
-#endif
-
-#if 0
-  /* Implement these if needed */
-  gst_value_register_union_func (GST_TYPE_FRACTION, GST_TYPE_FRACTION_RANGE,
-      gst_value_union_fraction_fraction_range);
-  gst_value_register_union_func (GST_TYPE_FRACTION_RANGE,
-      GST_TYPE_FRACTION_RANGE, gst_value_union_fraction_range_fraction_range);
 #endif
 }
 

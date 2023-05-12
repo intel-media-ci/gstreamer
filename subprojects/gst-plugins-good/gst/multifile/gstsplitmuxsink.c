@@ -252,32 +252,32 @@ static GstClockTime calculate_next_max_timecode (GstSplitMuxSink * splitmux,
 static MqStreamBuf *
 mq_stream_buf_new (void)
 {
-  return g_slice_new0 (MqStreamBuf);
+  return g_new0 (MqStreamBuf, 1);
 }
 
 static void
 mq_stream_buf_free (MqStreamBuf * data)
 {
-  g_slice_free (MqStreamBuf, data);
+  g_free (data);
 }
 
 static SplitMuxOutputCommand *
 out_cmd_buf_new (void)
 {
-  return g_slice_new0 (SplitMuxOutputCommand);
+  return g_new0 (SplitMuxOutputCommand, 1);
 }
 
 static void
 out_cmd_buf_free (SplitMuxOutputCommand * data)
 {
-  g_slice_free (SplitMuxOutputCommand, data);
+  g_free (data);
 }
 
 static void
 input_gop_free (InputGop * gop)
 {
   g_clear_pointer (&gop->start_tc, gst_video_time_code_free);
-  g_slice_free (InputGop, gop);
+  g_free (gop);
 }
 
 static void
@@ -569,7 +569,7 @@ gst_splitmux_sink_class_init (GstSplitMuxSinkClass * klass)
    * @splitmux: the #GstSplitMuxSink
    * @muxer: the newly added muxer element
    *
-   * Since: 1.14
+   * Since: 1.16
    */
   signals[SIGNAL_MUXER_ADDED] =
       g_signal_new ("muxer-added", G_TYPE_FROM_CLASS (klass),
@@ -580,7 +580,7 @@ gst_splitmux_sink_class_init (GstSplitMuxSinkClass * klass)
    * @splitmux: the #GstSplitMuxSink
    * @sink: the newly added sink element
    *
-   * Since: 1.14
+   * Since: 1.16
    */
   signals[SIGNAL_SINK_ADDED] =
       g_signal_new ("sink-added", G_TYPE_FROM_CLASS (klass),
@@ -2878,7 +2878,7 @@ handle_mq_input (GstPad * pad, GstPadProbeInfo * info, MqStreamCtx * ctx)
             splitmux->fragment_start_time_pts = rtime;
 
           if (g_queue_is_empty (&splitmux->pending_input_gops)) {
-            InputGop *gop = g_slice_new0 (InputGop);
+            InputGop *gop = g_new0 (InputGop, 1);
 
             gop->from_gap = TRUE;
             gop->start_time = rtime;
@@ -2947,10 +2947,16 @@ handle_mq_input (GstPad * pad, GstPadProbeInfo * info, MqStreamCtx * ctx)
   else
     running_time_pts = GST_CLOCK_STIME_NONE;
 
-  if (GST_CLOCK_TIME_IS_VALID (dts))
+  if (GST_CLOCK_TIME_IS_VALID (dts)) {
     running_time_dts = my_segment_to_running_time (&ctx->in_segment, dts);
-  else
-    running_time_dts = GST_CLOCK_STIME_NONE;
+
+    /* DTS > PTS makes conceptually no sense so catch such invalid DTS here
+     * by clamping to the PTS */
+    running_time_dts = MIN (running_time_pts, running_time_dts);
+  } else {
+    /* If there is no DTS then assume PTS=DTS */
+    running_time_dts = running_time_pts;
+  }
 
   /* Try to make sure we have a valid running time */
   if (!GST_CLOCK_STIME_IS_VALID (ctx->in_running_time)) {
@@ -3026,7 +3032,7 @@ handle_mq_input (GstPad * pad, GstPadProbeInfo * info, MqStreamCtx * ctx)
 
     if (!gop || (!gop->from_gap
             && !GST_BUFFER_FLAG_IS_SET (buf, GST_BUFFER_FLAG_DELTA_UNIT))) {
-      gop = g_slice_new0 (InputGop);
+      gop = g_new0 (InputGop, 1);
 
       gop->start_time = running_time;
       gop->start_time_pts = running_time_pts;

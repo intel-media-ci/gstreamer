@@ -66,6 +66,7 @@
 #include "gstvaencoder.h"
 #include "gstvaprofile.h"
 #include "vacompat.h"
+#include "gstvapluginutils.h"
 
 GST_DEBUG_CATEGORY_STATIC (gst_va_h264enc_debug);
 #define GST_CAT_DEFAULT gst_va_h264enc_debug
@@ -375,7 +376,7 @@ gst_va_enc_frame_new (void)
 {
   GstVaH264EncFrame *frame;
 
-  frame = g_slice_new (GstVaH264EncFrame);
+  frame = g_new (GstVaH264EncFrame, 1);
   frame->frame_num = 0;
   frame->unused_for_reference_pic_num = -1;
   frame->picture = NULL;
@@ -390,7 +391,7 @@ gst_va_enc_frame_free (gpointer pframe)
 {
   GstVaH264EncFrame *frame = pframe;
   g_clear_pointer (&frame->picture, gst_va_encode_picture_free);
-  g_slice_free (GstVaH264EncFrame, frame);
+  g_free (frame);
 }
 
 static inline GstVaH264EncFrame *
@@ -1200,11 +1201,13 @@ _calculate_coded_size (GstVaH264Enc * self)
         BitDepthC = 10;
         MbWidthC = 8;
         MbHeightC = 8;
+        break;
       case VA_RT_FORMAT_YUV422_10:
         BitDepthY = 10;
         BitDepthC = 10;
         MbWidthC = 8;
         MbHeightC = 16;
+        break;
       case VA_RT_FORMAT_YUV444_10:
         BitDepthY = 10;
         BitDepthC = 10;
@@ -2534,7 +2537,7 @@ static void
 _insert_ref_pic_list_modification (GstH264SliceHdr * slice_hdr,
     GstVaH264EncFrame * list[16], guint list_num, gboolean is_asc)
 {
-  GstVaH264EncFrame *list_by_pic_num[16] = { };
+  GstVaH264EncFrame *list_by_pic_num[16] = { NULL, };
   guint modification_num, i;
   GstH264RefPicListModification *ref_pic_list_modification = NULL;
   gint pic_num_diff, pic_num_lx_pred;
@@ -2714,7 +2717,7 @@ static gboolean
 _add_aud (GstVaH264Enc * self, GstVaH264EncFrame * frame)
 {
   GstVaBaseEnc *base = GST_VA_BASE_ENC (self);
-  guint8 aud_data[8] = { };
+  guint8 aud_data[8] = { 0, };
   guint size;
   guint8 primary_pic_type = 0;
 
@@ -3410,9 +3413,30 @@ gst_va_h264_enc_get_property (GObject * object, guint prop_id,
     case PROP_CC:
       g_value_set_boolean (value, self->prop.cc);
       break;
-    case PROP_MBBRC:
-      g_value_set_enum (value, self->prop.mbbrc);
+    case PROP_MBBRC:{
+      GstVaFeature mbbrc = GST_VA_FEATURE_AUTO;
+      /* Macroblock-level rate control.
+       * 0: use default,
+       * 1: always enable,
+       * 2: always disable,
+       * other: reserved. */
+      switch (self->prop.mbbrc) {
+        case 2:
+          mbbrc = GST_VA_FEATURE_DISABLED;
+          break;
+        case 1:
+          mbbrc = GST_VA_FEATURE_ENABLED;
+          break;
+        case 0:
+          mbbrc = GST_VA_FEATURE_AUTO;
+          break;
+        default:
+          g_assert_not_reached ();
+      }
+
+      g_value_set_enum (value, mbbrc);
       break;
+    }
     case PROP_BITRATE:
       g_value_set_uint (value, self->prop.bitrate);
       break;
@@ -3508,22 +3532,23 @@ gst_va_h264_enc_class_init (gpointer g_klass, gpointer class_data)
       GST_DEBUG_FUNCPTR (gst_va_h264_enc_prepare_output);
 
   {
-    display =
-        gst_va_display_drm_new_from_path (va_enc_class->render_device_path);
+    display = gst_va_display_platform_new (va_enc_class->render_device_path);
     encoder = gst_va_encoder_new (display, va_enc_class->codec,
         va_enc_class->entrypoint);
     if (gst_va_encoder_get_rate_control_enum (encoder,
             vah264enc_class->rate_control)) {
+      gchar *basename = g_path_get_basename (va_enc_class->render_device_path);
       g_snprintf (vah264enc_class->rate_control_type_name,
           G_N_ELEMENTS (vah264enc_class->rate_control_type_name) - 1,
           "GstVaEncoderRateControl_%" GST_FOURCC_FORMAT "%s_%s",
           GST_FOURCC_ARGS (va_enc_class->codec),
           (va_enc_class->entrypoint == VAEntrypointEncSliceLP) ? "_LP" : "",
-          g_path_get_basename (va_enc_class->render_device_path));
+          basename);
       vah264enc_class->rate_control_type =
           g_enum_register_static (vah264enc_class->rate_control_type_name,
           vah264enc_class->rate_control);
       gst_type_mark_as_plugin_api (vah264enc_class->rate_control_type, 0);
+      g_free (basename);
     }
     gst_object_unref (encoder);
     gst_object_unref (display);
@@ -3814,32 +3839,15 @@ gst_va_h264_enc_register (GstPlugin * plugin, GstVaDevice * device,
       GST_MINI_OBJECT_FLAG_MAY_BE_LEAKED);
 
   type_info.class_data = cdata;
-  if (entrypoint == VAEntrypointEncSlice) {
-    type_name = g_strdup ("GstVaH264Enc");
-    feature_name = g_strdup ("vah264enc");
-  } else {
-    type_name = g_strdup ("GstVaH264LPEnc");
-    feature_name = g_strdup ("vah264lpenc");
-  }
 
-  /* The first encoder to be registered should use a constant name,
-   * like vah264enc, for any additional encoders, we create unique
-   * names, using inserting the render device name. */
-  if (g_type_from_name (type_name)) {
-    gchar *basename = g_path_get_basename (device->render_device_path);
-    g_free (type_name);
-    g_free (feature_name);
-    if (entrypoint == VAEntrypointEncSlice) {
-      type_name = g_strdup_printf ("GstVa%sH264Enc", basename);
-      feature_name = g_strdup_printf ("va%sh264enc", basename);
-    } else {
-      type_name = g_strdup_printf ("GstVa%sH264LPEnc", basename);
-      feature_name = g_strdup_printf ("va%sh264lpenc", basename);
-    }
-    cdata->description = basename;
-    /* lower rank for non-first device */
-    if (rank > 0)
-      rank--;
+  if (entrypoint == VAEntrypointEncSlice) {
+    gst_va_create_feature_name (device, "GstVaH264Enc", "GstVa%sH264Enc",
+        &type_name, "vah264enc", "va%sh264enc", &feature_name,
+        &cdata->description, &rank);
+  } else {
+    gst_va_create_feature_name (device, "GstVaH264LPEnc", "GstVa%sH264LPEnc",
+        &type_name, "vah264lpenc", "va%sh264lpenc", &feature_name,
+        &cdata->description, &rank);
   }
 
   g_once (&debug_once, _register_debug_category, NULL);

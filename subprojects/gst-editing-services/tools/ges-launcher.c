@@ -278,16 +278,17 @@ print_keyboard_help (void)
     const gchar *key_help;
   } key_controls[] = {
     {
-    "space", "pause/unpause"}, {
-    "q or ESC", "quit"}, {
-    "\342\206\222", "seek forward"}, {
-    "\342\206\220", "seek backward"}, {
-    "+", "increase playback rate"}, {
-    "-", "decrease playback rate"}, {
-    "t", "enable/disable trick modes"}, {
-    "s", "change subtitle track"}, {
-    "0", "seek to beginning"}, {
-  "k", "show keyboard shortcuts"},};
+        "space", "pause/unpause"}, {
+        "q or ESC", "quit"}, {
+        "\342\206\222", "seek forward"}, {
+        "\342\206\220", "seek backward"}, {
+        "+", "increase playback rate"}, {
+        "-", "decrease playback rate"}, {
+        "t", "enable/disable trick modes"}, {
+        "s", "change subtitle track"}, {
+        "0", "seek to beginning"}, {
+        "k", "show keyboard shortcuts"},
+  };
   guint i, chars_to_pad, desc_len, max_desc_len = 0;
 
   gst_print ("\n\n%s\n\n", "Interactive mode - keyboard controls:");
@@ -572,11 +573,13 @@ _set_rendering_details (GESLauncher * self)
   gboolean smart_profile = FALSE;
   GESPipelineFlags cmode = ges_pipeline_get_mode (self->priv->pipeline);
   GESProject *proj;
+  gboolean ret = FALSE;
 
   if (cmode & GES_PIPELINE_MODE_RENDER
       || cmode & GES_PIPELINE_MODE_SMART_RENDER) {
     GST_INFO_OBJECT (self, "Rendering settings already set");
-    return TRUE;
+    ret = TRUE;
+    goto done;
   }
 
   proj =
@@ -616,8 +619,10 @@ _set_rendering_details (GESLauncher * self)
         }
       } else {
         prof = parse_encoding_profile (opts->format);
-        if (!prof)
-          g_error ("Invalid format specified: %s", opts->format);
+        if (!prof) {
+          ges_printerr ("Invalid format specified: %s", opts->format);
+          goto done;
+        }
       }
 
       if (!prof) {
@@ -634,7 +639,45 @@ _set_rendering_details (GESLauncher * self)
       if (!prof) {
         ges_printerr ("Could not find any encoding format for %s\n",
             opts->format);
-        return FALSE;
+        goto done;
+      }
+
+      if (opts->container_profile) {
+        GstEncodingProfile *new_prof;
+        GList *tmp;
+
+        if (!(new_prof = parse_encoding_profile (opts->container_profile))) {
+          ges_printerr ("Failed to parse container profile %s",
+              opts->container_profile);
+          gst_object_unref (prof);
+          goto done;
+        }
+
+        if (!GST_IS_ENCODING_CONTAINER_PROFILE (new_prof)) {
+          ges_printerr ("Top level profile should be container profile");
+          gst_object_unref (prof);
+          gst_object_unref (new_prof);
+          goto done;
+        }
+
+        if (gst_encoding_container_profile_get_profiles
+            (GST_ENCODING_CONTAINER_PROFILE (new_prof))) {
+          ges_printerr ("--container-profile cannot contain children profiles");
+          gst_object_unref (prof);
+          gst_object_unref (new_prof);
+          goto done;
+        }
+
+        for (tmp = (GList *)
+            gst_encoding_container_profile_get_profiles
+            (GST_ENCODING_CONTAINER_PROFILE (prof)); tmp; tmp = tmp->next) {
+          gst_encoding_container_profile_add_profile
+              (GST_ENCODING_CONTAINER_PROFILE (new_prof),
+              GST_ENCODING_PROFILE (gst_encoding_profile_ref (tmp->data)));
+        }
+
+        gst_encoding_profile_unref (prof);
+        prof = new_prof;
       }
 
       gst_print ("\nEncoding details:\n");
@@ -662,14 +705,18 @@ _set_rendering_details (GESLauncher * self)
         || !ges_pipeline_set_mode (self->priv->pipeline,
             opts->smartrender ? GES_PIPELINE_MODE_SMART_RENDER :
             GES_PIPELINE_MODE_RENDER)) {
-      return FALSE;
+      goto done;
     }
 
     gst_encoding_profile_unref (prof);
   } else {
     ges_pipeline_set_mode (self->priv->pipeline, GES_PIPELINE_MODE_PREVIEW);
   }
-  return TRUE;
+
+  ret = TRUE;
+
+done:
+  return ret;
 }
 
 static void
@@ -1087,6 +1134,7 @@ _run_pipeline (GESLauncher * self)
       if (!ges_project_load (project, self->priv->timeline, NULL)) {
         ges_printerr ("Could not load timeline: %s\n",
             opts->sanitized_timeline);
+        g_clear_pointer (&opts->sanitized_timeline, &g_free);
         return FALSE;
       }
     }
@@ -1274,6 +1322,11 @@ ges_launcher_get_rendering_option_group (GESLauncherParsedOptions * opts)
           "of the rendered output. This will have no effect if no outputuri "
           "has been specified.",
         "<clip-name>"},
+    {"container-profile", 0, 0, G_OPTION_ARG_STRING, &opts->container_profile,
+          "Set a container profile for rendering. Applies after --format, "
+          "--encoding-profile and profile-from, potentially overriding the "
+          "existing top level container profile",
+        "<container-profile>"},
     {"forward-tags", 0, 0, G_OPTION_ARG_NONE, &opts->forward_tags,
           "Forward tags from input files to the output",
         NULL},
@@ -1326,6 +1379,7 @@ ges_launcher_parse_options (GESLauncher * self,
   gboolean owns_ctx = ctx == NULL;
   GESLauncherParsedOptions *opts = &self->priv->parsed_options;
   gchar *prev_videosink = opts->videosink, *prev_audiosink = opts->audiosink;
+
 /*  *INDENT-OFF* */
   GOptionEntry options[] = {
     {"disable-mixing", 0, 0, G_OPTION_ARG_NONE, &opts->disable_mixing,
@@ -1494,7 +1548,9 @@ _local_command_line (GApplication * application, gchar ** arguments[],
 
   if (!opts->load_path && !opts->scenario && !opts->testfile
       && !opts->list_transitions && (argc <= 1)) {
-    gst_print ("%s", g_option_context_get_help (ctx, TRUE, NULL));
+    gchar *help_str = g_option_context_get_help (ctx, TRUE, NULL);
+    gst_print ("%s", help_str);
+    g_free (help_str);
     g_option_context_free (ctx);
     *exit_status = 1;
     goto done;
@@ -1669,6 +1725,7 @@ _finalize (GObject * object)
   g_free (opts->format);
   g_free (opts->encoding_profile);
   g_free (opts->profile_from);
+  g_free (opts->container_profile);
   g_free (opts->videosink);
   g_free (opts->audiosink);
   g_free (opts->video_track_caps);

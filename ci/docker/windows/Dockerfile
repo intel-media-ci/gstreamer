@@ -16,8 +16,10 @@ RUN choco install -y cmake --installargs 'ADD_CMAKE_TO_PATH=System'
 RUN choco install -y git --params '/NoAutoCrlf /NoCredentialManager /NoShellHereIntegration /NoGuiHereIntegration /NoShellIntegration'
 RUN choco install -y git-lfs
 RUN choco install -y 7zip
-RUN choco install -y python3 --installargs 'AssociateFiles=1 PrependPath=1 Include_pip=1 Include_dev=1'
+# See https://gitlab.freedesktop.org/gstreamer/cerbero/-/issues/427
+RUN choco install -y python3 --version=3.11.2 --installargs 'AssociateFiles=1 PrependPath=1 Include_pip=1 Include_dev=1'
 RUN choco install -y msys2 --params '/NoPath /NoUpdate /InstallDir:C:\\msys64'
+RUN choco install -y wixtoolset
 
 # Remove MAX_PATH limit of 260 characters
 RUN New-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\FileSystem' `
@@ -56,6 +58,9 @@ RUN 'git config --global user.email "cirunner@gstreamer.freedesktop.org"; git co
 
 COPY install_mingw.ps1 C:\
 RUN C:\install_mingw.ps1
+
+COPY install_rust.ps1 C:\
+RUN C:\install_rust.ps1
 
 ARG DEFAULT_BRANCH="main"
 

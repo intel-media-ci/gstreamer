@@ -54,11 +54,10 @@
 #include <stdlib.h>
 
 #include "gstmsdkvpp.h"
-#include "gstmsdkbufferpool.h"
-#include "gstmsdkvideomemory.h"
-#include "gstmsdksystemmemory.h"
+#include "gstmsdkcaps.h"
 #include "gstmsdkcontextutil.h"
 #include "gstmsdkvpputil.h"
+#include "gstmsdkallocator.h"
 
 #define EXT_FORMATS     ""
 
@@ -73,98 +72,19 @@
 #include <gst/d3d11/gstd3d11.h>
 #endif
 
-#if (MFX_VERSION >= 2004)
-#define EXT_SINK_FORMATS        ", RGB16, Y410, Y210, P012_LE, Y212_LE, Y412_LE"
-#define EXT_SRC_FORMATS         ", YV12, Y410, Y210, RGBP, BGRP, P012_LE, Y212_LE, Y412_LE"
-#elif (MFX_VERSION >= 1032)
-#define EXT_SINK_FORMATS        ", RGB16, Y410, Y210, P012_LE, Y212_LE, Y412_LE"
-#define EXT_SRC_FORMATS         ", YV12, Y410, Y210, P012_LE, Y212_LE, Y412_LE"
-#elif (MFX_VERSION >= 1031)
-#define EXT_SINK_FORMATS        ", RGB16, Y410, Y210, P012_LE, Y212_LE, Y412_LE"
-#define EXT_SRC_FORMATS         ", Y410, Y210, P012_LE, Y212_LE, Y412_LE"
-#elif (MFX_VERSION >= 1028)
-#define EXT_SINK_FORMATS        ", RGB16, Y410, Y210"
-#define EXT_SRC_FORMATS         ", Y410, Y210"
-#elif (MFX_VERSION >= 1027)
-#define EXT_SINK_FORMATS        ", Y410, Y210"
-#define EXT_SRC_FORMATS         ", Y410, Y210"
-#else
-#define EXT_SINK_FORMATS        ""
-#define EXT_SRC_FORMATS         ""
-#endif
 
 GST_DEBUG_CATEGORY_EXTERN (gst_msdkvpp_debug);
 #define GST_CAT_DEFAULT gst_msdkvpp_debug
 
-#define SUPPORTED_SYSTEM_FORMAT \
-    "{ NV12, YV12, I420, YUY2, UYVY, VUYA, BGRA, BGRx, P010_10LE" EXT_SINK_FORMATS "}"
-#define SUPPORTED_DMABUF_FORMAT \
-    "{ NV12, BGRA, YUY2, UYVY, VUYA, P010_10LE" EXT_SINK_FORMATS "}"
-#define SUPPORTED_VA_FORMAT \
-    "{ NV12, VUYA, P010_10LE }"
-#define SUPPORTED_D3D11_FORMAT \
-    "{ NV12, VUYA, P010_10LE }"
-#define SRC_SYSTEM_FORMAT \
-    "{ NV12, BGRA, YUY2, UYVY, VUYA, BGRx, P010_10LE" EXT_FORMATS EXT_SRC_FORMATS "}"
-#define SRC_DMABUF_FORMAT       \
-    "{ NV12, BGRA, YUY2, UYVY, VUYA, BGRx, P010_10LE" EXT_FORMATS EXT_SRC_FORMATS "}"
+#define GST_MSDKVPP(obj) \
+  (G_TYPE_CHECK_INSTANCE_CAST((obj), G_TYPE_FROM_INSTANCE (obj), GstMsdkVPP))
+#define GST_MSDKVPP_CLASS(klass) \
+  (G_TYPE_CHECK_CLASS_CAST((klass), G_TYPE_FROM_CLASS (klass), GstMsdkVPPClass))
+#define GST_IS_MSDKVPP(obj) \
+  (G_TYPE_CHECK_INSTANCE_TYPE((obj), G_TYPE_FROM_INSTANCE (obj)))
+#define GST_IS_MSDKVPP_CLASS(klass) \
+  (G_TYPE_CHECK_CLASS_TYPE((klass), G_TYPE_FROM_CLASS (klass)))
 
-#ifndef _WIN32
-#define DMABUF_SINK_CAPS_STR \
-  GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_DMABUF, \
-      SUPPORTED_DMABUF_FORMAT) ";"
-#define VA_SINK_CAPS_STR \
-  GST_VIDEO_CAPS_MAKE_WITH_FEATURES ("memory:VAMemory", SUPPORTED_VA_FORMAT)
-#else
-#define D3D11_SINK_CAPS_STR \
-  GST_MSDK_CAPS_MAKE_WITH_D3D11_FEATURE (SUPPORTED_D3D11_FORMAT)
-#endif
-
-#ifndef _WIN32
-#define DMABUF_SRC_CAPS_STR \
-  GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_DMABUF, \
-      SRC_DMABUF_FORMAT) ";"
-#define VA_SRC_CAPS_STR \
-  GST_VIDEO_CAPS_MAKE_WITH_FEATURES ("memory:VAMemory", SUPPORTED_VA_FORMAT)
-#else
-#define D3D11_SRC_CAPS_STR \
-  GST_MSDK_CAPS_MAKE_WITH_D3D11_FEATURE (SUPPORTED_D3D11_FORMAT)
-#endif
-
-#ifndef _WIN32
-static GstStaticPadTemplate gst_msdkvpp_sink_factory =
-    GST_STATIC_PAD_TEMPLATE ("sink",
-    GST_PAD_SINK,
-    GST_PAD_ALWAYS,
-    GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE (SUPPORTED_SYSTEM_FORMAT)
-        ", " "interlace-mode = (string){ progressive, interleaved, mixed }" ";"
-        DMABUF_SINK_CAPS_STR VA_SINK_CAPS_STR));
-
-static GstStaticPadTemplate gst_msdkvpp_src_factory =
-    GST_STATIC_PAD_TEMPLATE ("src",
-    GST_PAD_SRC,
-    GST_PAD_ALWAYS,
-    GST_STATIC_CAPS (DMABUF_SRC_CAPS_STR
-        GST_VIDEO_CAPS_MAKE (SRC_SYSTEM_FORMAT) ", "
-        "interlace-mode = (string){ progressive, interleaved, mixed }" ";"
-        VA_SRC_CAPS_STR));
-#else
-static GstStaticPadTemplate gst_msdkvpp_sink_factory =
-    GST_STATIC_PAD_TEMPLATE ("sink",
-    GST_PAD_SINK,
-    GST_PAD_ALWAYS,
-    GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE (SUPPORTED_SYSTEM_FORMAT)
-        ", " "interlace-mode = (string){ progressive, interleaved, mixed }" ";"
-        D3D11_SINK_CAPS_STR));
-
-static GstStaticPadTemplate gst_msdkvpp_src_factory =
-    GST_STATIC_PAD_TEMPLATE ("src",
-    GST_PAD_SRC,
-    GST_PAD_ALWAYS,
-    GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE (SRC_SYSTEM_FORMAT) ", "
-        "interlace-mode = (string){ progressive, interleaved, mixed }" ";"
-        D3D11_SRC_CAPS_STR));
-#endif
 enum
 {
   PROP_0,
@@ -221,8 +141,39 @@ enum
 /* 8 should enough for a normal encoder */
 #define SRC_POOL_SIZE_DEFAULT            8
 
-#define gst_msdkvpp_parent_class parent_class
-G_DEFINE_TYPE (GstMsdkVPP, gst_msdkvpp, GST_TYPE_BASE_TRANSFORM);
+/* *INDENT-OFF* */
+static const gchar *doc_sink_caps_str =
+    GST_VIDEO_CAPS_MAKE (
+        "{ NV12, YV12, I420, P010_10LE, YUY2, UYVY, BGRA, BGRx, RGB16, VUYA, "
+        "Y210, Y410, P012_LE, Y212_LE, Y412_LE }") " ;"
+    GST_VIDEO_CAPS_MAKE_WITH_FEATURES ("memory:DMABuf",
+        "{ NV12, YV12, I420, P010_10LE, YUY2, UYVY, BGRA, BGRx, RGB16, VUYA, "
+        "Y210, Y410, P012_LE, Y212_LE, Y412_LE }") " ;"
+    GST_VIDEO_CAPS_MAKE_WITH_FEATURES ("memory:VAMemory",
+        "{ NV12, VUYA, P010_10LE }") " ;"
+    GST_VIDEO_CAPS_MAKE_WITH_FEATURES ("memory:D3D11Memory",
+        "{ NV12, VUYA, P010_10LE }");
+
+static const gchar *doc_src_caps_str =
+    GST_VIDEO_CAPS_MAKE (
+        "{ NV12, BGRA, YUY2, UYVY, VUYA, BGRx, P010_10LE, BGR10A2_LE, YV12, "
+        "Y410, Y210, RGBP, BGRP, P012_LE, Y212_LE, Y412_LE }") " ;"
+    GST_VIDEO_CAPS_MAKE_WITH_FEATURES ("memory:DMABuf",
+        "{ NV12, BGRA, YUY2, UYVY, VUYA, BGRx, P010_10LE, BGR10A2_LE, YV12, "
+        "Y410, Y210, RGBP, BGRP, P012_LE, Y212_LE, Y412_LE }") " ;"
+    GST_VIDEO_CAPS_MAKE_WITH_FEATURES ("memory:VAMemory",
+        "{ NV12, VUYA, P010_10LE }") " ;"
+    GST_VIDEO_CAPS_MAKE_WITH_FEATURES ("memory:D3D11Memory",
+        "{ NV12, VUYA, P010_10LE }");
+/* *INDENT-ON* */
+
+static GstElementClass *parent_class = NULL;
+
+typedef struct
+{
+  GstCaps *sink_caps;
+  GstCaps *src_caps;
+} MsdkVPPCData;
 
 static void
 free_msdk_surface (gpointer p)
@@ -446,8 +397,12 @@ gst_msdk_create_va_pool (GstVideoInfo * info, GstMsdkContext * msdk_context,
   if (use_dmabuf)
     allocator = gst_va_dmabuf_allocator_new (display);
   else {
-    formats = g_array_new (FALSE, FALSE, sizeof (GstVideoFormat));
-    g_array_append_val (formats, GST_VIDEO_INFO_FORMAT (info));
+    /* From attrib query, va surface format doesn't support RGB565, so leave
+     * the formats as NULL when creating va allocator for RGB565 */
+    if (GST_VIDEO_INFO_FORMAT (info) != GST_VIDEO_FORMAT_RGB16) {
+      formats = g_array_new (FALSE, FALSE, sizeof (GstVideoFormat));
+      g_array_append_val (formats, GST_VIDEO_INFO_FORMAT (info));
+    }
     allocator = gst_va_allocator_new (display, formats);
   }
   if (!allocator) {
@@ -561,13 +516,6 @@ gst_msdkvpp_create_buffer_pool (GstMsdkVPP * thiz, GstPadDirection direction,
     goto error_no_pool;
 
   config = gst_buffer_pool_get_config (GST_BUFFER_POOL_CAST (pool));
-  if (thiz->use_video_memory) {
-    gst_buffer_pool_config_add_option (config,
-        GST_BUFFER_POOL_OPTION_MSDK_USE_VIDEO_MEMORY);
-    if (use_dmabuf)
-      gst_buffer_pool_config_add_option (config,
-          GST_BUFFER_POOL_OPTION_MSDK_USE_DMABUF);
-  }
 
   gst_buffer_pool_config_set_params (config, caps,
       GST_VIDEO_INFO_SIZE (&info), min_num_buffers, 0);
@@ -601,22 +549,6 @@ error_pool_config:
     gst_object_unref (pool);
     return NULL;
   }
-}
-
-static gboolean
-_gst_caps_has_feature (const GstCaps * caps, const gchar * feature)
-{
-  guint i;
-
-  for (i = 0; i < gst_caps_get_size (caps); i++) {
-    GstCapsFeatures *const features = gst_caps_get_features (caps, i);
-    /* Skip ANY features, we need an exact match for correct evaluation */
-    if (gst_caps_features_is_any (features))
-      continue;
-    if (gst_caps_features_contains (features, feature))
-      return TRUE;
-  }
-  return FALSE;
 }
 
 static GstBufferPool *
@@ -693,7 +625,7 @@ gst_msdkvpp_decide_allocation (GstBaseTransform * trans, GstQuery * query)
   }
   /* We allocate the memory of type that downstream allocation requests */
 #ifndef _WIN32
-  if (_gst_caps_has_feature (caps, GST_CAPS_FEATURE_MEMORY_DMABUF)) {
+  if (gst_msdkcaps_has_feature (caps, GST_CAPS_FEATURE_MEMORY_DMABUF)) {
     GST_INFO_OBJECT (thiz, "MSDK VPP srcpad uses DMABuf memory");
     thiz->use_srcpad_dmabuf = TRUE;
   }
@@ -745,7 +677,7 @@ gst_msdkvpp_propose_allocation (GstBaseTransform * trans,
 
   /* if upstream allocation query supports dmabuf-capsfeatures,
    * we do allocate dmabuf backed memory */
-  if (_gst_caps_has_feature (caps, GST_CAPS_FEATURE_MEMORY_DMABUF)) {
+  if (gst_msdkcaps_has_feature (caps, GST_CAPS_FEATURE_MEMORY_DMABUF)) {
     GST_INFO_OBJECT (thiz, "MSDK VPP srcpad uses DMABuf memory");
     thiz->use_sinkpad_dmabuf = TRUE;
   }
@@ -857,7 +789,7 @@ gst_msdkvpp_get_surface_from_pool (GstMsdkVPP * thiz, GstBufferPool * pool,
   } else {
     msdk_surface =
         gst_msdk_import_sys_mem_to_msdk_surface (upload_buf,
-        thiz->sinkpad_buffer_pool_info);
+        &thiz->sinkpad_buffer_pool_info);
   }
 
   if (msdk_surface)
@@ -870,13 +802,6 @@ static GstMsdkSurface *
 get_msdk_surface_from_input_buffer (GstMsdkVPP * thiz, GstBuffer * inbuf)
 {
   GstMsdkSurface *msdk_surface = NULL;
-
-  if (gst_msdk_is_msdk_buffer (inbuf)) {
-    msdk_surface = g_slice_new0 (GstMsdkSurface);
-    msdk_surface->surface = gst_msdk_get_surface_from_buffer (inbuf);
-    msdk_surface->buf = gst_buffer_ref (inbuf);
-    return msdk_surface;
-  }
 
   msdk_surface = gst_msdk_import_to_msdk_surface (inbuf, thiz->context,
       &thiz->sinkpad_info, GST_MAP_READ);
@@ -921,7 +846,7 @@ gst_msdkvpp_transform (GstBaseTransform * trans, GstBuffer * inbuf,
     free_msdk_surface (in_surface);
     return GST_FLOW_ERROR;
   }
-  locked_by_others = ! !in_surface->surface->Data.Locked;
+  locked_by_others = !!in_surface->surface->Data.Locked;
 
   /* always convert timestamp of input surface as msdk timestamp */
   if (inbuf->pts == GST_CLOCK_TIME_NONE)
@@ -930,23 +855,19 @@ gst_msdkvpp_transform (GstBaseTransform * trans, GstBuffer * inbuf,
     in_surface->surface->Data.TimeStamp =
         gst_util_uint64_scale_round (inbuf->pts, 90000, GST_SECOND);
 
-  if (gst_msdk_is_msdk_buffer (outbuf)) {
-    out_surface = g_slice_new0 (GstMsdkSurface);
-    out_surface->surface = gst_msdk_get_surface_from_buffer (outbuf);
+  out_surface = gst_msdk_import_to_msdk_surface (outbuf, thiz->context,
+      &thiz->srcpad_info, GST_MAP_WRITE);
+
+  if (!thiz->use_video_memory)
+    out_surface =
+        gst_msdk_import_sys_mem_to_msdk_surface (outbuf, &thiz->srcpad_info);
+
+  if (out_surface) {
+    out_surface->buf = gst_buffer_ref (outbuf);
   } else {
-    out_surface = gst_msdk_import_to_msdk_surface (outbuf, thiz->context,
-        &thiz->srcpad_info, GST_MAP_WRITE);
-    if (!thiz->use_video_memory) {
-      out_surface =
-          gst_msdk_import_sys_mem_to_msdk_surface (outbuf, thiz->srcpad_info);
-    }
-    if (out_surface)
-      out_surface->buf = gst_buffer_ref (outbuf);
-    else {
-      GST_ERROR_OBJECT (thiz, "Failed to get msdk outsurface!");
-      free_msdk_surface (in_surface);
-      return GST_FLOW_ERROR;
-    }
+    GST_ERROR_OBJECT (thiz, "Failed to get msdk outsurface!");
+    free_msdk_surface (in_surface);
+    return GST_FLOW_ERROR;
   }
 
   /* update surface crop info (NOTE: msdk min frame size is 2x2) */
@@ -1019,29 +940,23 @@ gst_msdkvpp_transform (GstBaseTransform * trans, GstBuffer * inbuf,
       GST_BUFFER_TIMESTAMP (outbuf_new) = timestamp;
       GST_BUFFER_DURATION (outbuf_new) = thiz->buffer_duration;
 
-      if (gst_msdk_is_msdk_buffer (outbuf_new)) {
-        release_out_surface (thiz, out_surface);
-        out_surface = g_slice_new0 (GstMsdkSurface);
-        out_surface->surface = gst_msdk_get_surface_from_buffer (outbuf_new);
+      release_out_surface (thiz, out_surface);
+      out_surface =
+          gst_msdk_import_to_msdk_surface (outbuf_new, thiz->context,
+          &thiz->srcpad_buffer_pool_info, GST_MAP_WRITE);
+
+      if (!thiz->use_video_memory)
+        out_surface =
+            gst_msdk_import_sys_mem_to_msdk_surface (outbuf_new,
+            &thiz->srcpad_buffer_pool_info);
+
+      if (out_surface) {
+        out_surface->buf = gst_buffer_ref (outbuf_new);
         create_new_surface = TRUE;
       } else {
-        release_out_surface (thiz, out_surface);
-        out_surface =
-            gst_msdk_import_to_msdk_surface (outbuf_new, thiz->context,
-            &thiz->srcpad_buffer_pool_info, GST_MAP_WRITE);
-        if (!thiz->use_video_memory) {
-          out_surface =
-              gst_msdk_import_sys_mem_to_msdk_surface (outbuf_new,
-              thiz->srcpad_buffer_pool_info);
-        }
-        if (out_surface) {
-          out_surface->buf = gst_buffer_ref (outbuf_new);
-          create_new_surface = TRUE;
-        } else {
-          GST_ERROR_OBJECT (thiz, "Failed to get msdk outsurface!");
-          release_in_surface (thiz, in_surface, locked_by_others);
-          return GST_FLOW_ERROR;
-        }
+        GST_ERROR_OBJECT (thiz, "Failed to get msdk outsurface!");
+        release_in_surface (thiz, in_surface, locked_by_others);
+        return GST_FLOW_ERROR;
       }
     } else {
       GST_BUFFER_TIMESTAMP (outbuf) = timestamp;
@@ -1434,7 +1349,7 @@ pad_accept_memory (GstMsdkVPP * thiz, const gchar * mem_type,
       || out_caps == caps)
     goto done;
 
-  if (_gst_caps_has_feature (out_caps, mem_type))
+  if (gst_msdkcaps_has_feature (out_caps, mem_type))
     ret = TRUE;
 done:
   if (caps)
@@ -1453,7 +1368,7 @@ gst_msdkvpp_fixate_caps (GstBaseTransform * trans,
   gboolean *use_dmabuf;
 
   if (direction == GST_PAD_SRC) {
-    result = gst_caps_fixate (result);
+    result = gst_caps_fixate (othercaps);
     use_dmabuf = &thiz->use_sinkpad_dmabuf;
   } else {
     /*
@@ -1508,10 +1423,13 @@ gst_msdkvpp_transform_caps (GstBaseTransform * trans,
       "Transforming caps %" GST_PTR_FORMAT " in direction %s", caps,
       (direction == GST_PAD_SINK) ? "sink" : "src");
 
-  if (direction == GST_PAD_SRC)
-    out_caps = gst_static_pad_template_get_caps (&gst_msdkvpp_sink_factory);
-  else
-    out_caps = gst_static_pad_template_get_caps (&gst_msdkvpp_src_factory);
+  if (direction == GST_PAD_SINK) {
+    out_caps =
+        gst_pad_get_pad_template_caps (GST_BASE_TRANSFORM_SRC_PAD (trans));
+  } else {
+    out_caps =
+        gst_pad_get_pad_template_caps (GST_BASE_TRANSFORM_SINK_PAD (trans));
+  }
 
   if (out_caps && filter) {
     GstCaps *intersection;
@@ -1771,48 +1689,9 @@ gst_msdkvpp_set_context (GstElement * element, GstContext * context)
 }
 
 static void
-gst_msdkvpp_class_init (GstMsdkVPPClass * klass)
+_msdkvpp_install_properties (GObjectClass * gobject_class)
 {
-  GObjectClass *gobject_class;
-  GstElementClass *element_class;
-  GstBaseTransformClass *trans_class;
   GParamSpec *obj_properties[PROP_N] = { NULL, };
-
-  gobject_class = G_OBJECT_CLASS (klass);
-  element_class = GST_ELEMENT_CLASS (klass);
-  trans_class = GST_BASE_TRANSFORM_CLASS (klass);
-
-  gobject_class->set_property = gst_msdkvpp_set_property;
-  gobject_class->get_property = gst_msdkvpp_get_property;
-  gobject_class->dispose = gst_msdkvpp_dispose;
-
-  element_class->set_context = gst_msdkvpp_set_context;
-
-  gst_element_class_add_static_pad_template (element_class,
-      &gst_msdkvpp_src_factory);
-  gst_element_class_add_static_pad_template (element_class,
-      &gst_msdkvpp_sink_factory);
-
-  gst_element_class_set_static_metadata (element_class,
-      "Intel MSDK Video Postprocessor",
-      "Filter/Converter/Video;Filter/Converter/Video/Scaler;"
-      "Filter/Effect/Video;Filter/Effect/Video/Deinterlace",
-      "Video Postprocessing Filter based on " MFX_API_SDK,
-      "Sreerenj Balachandrn <sreerenj.balachandran@intel.com>");
-
-  trans_class->start = GST_DEBUG_FUNCPTR (gst_msdkvpp_start);
-  trans_class->stop = GST_DEBUG_FUNCPTR (gst_msdkvpp_stop);
-  trans_class->transform_caps = GST_DEBUG_FUNCPTR (gst_msdkvpp_transform_caps);
-  trans_class->fixate_caps = GST_DEBUG_FUNCPTR (gst_msdkvpp_fixate_caps);
-  trans_class->set_caps = GST_DEBUG_FUNCPTR (gst_msdkvpp_set_caps);
-  trans_class->transform = GST_DEBUG_FUNCPTR (gst_msdkvpp_transform);
-  trans_class->propose_allocation =
-      GST_DEBUG_FUNCPTR (gst_msdkvpp_propose_allocation);
-  trans_class->decide_allocation =
-      GST_DEBUG_FUNCPTR (gst_msdkvpp_decide_allocation);
-  trans_class->prepare_output_buffer =
-      GST_DEBUG_FUNCPTR (gst_msdkvpp_prepare_output_buffer);
-  trans_class->query = GST_DEBUG_FUNCPTR (gst_msdkvpp_query);
 
   obj_properties[PROP_HARDWARE] =
       g_param_spec_boolean ("hardware", "Hardware", "Enable hardware VPP",
@@ -1936,9 +1815,62 @@ gst_msdkvpp_class_init (GstMsdkVPPClass * klass)
   g_object_class_install_properties (gobject_class, PROP_N, obj_properties);
 }
 
+
 static void
-gst_msdkvpp_init (GstMsdkVPP * thiz)
+gst_msdkvpp_class_init (gpointer klass, gpointer data)
 {
+  GObjectClass *gobject_class;
+  GstElementClass *element_class;
+  GstBaseTransformClass *trans_class;
+  MsdkVPPCData *cdata = data;
+
+  parent_class = g_type_class_peek_parent (klass);
+
+  gobject_class = G_OBJECT_CLASS (klass);
+  element_class = GST_ELEMENT_CLASS (klass);
+  trans_class = GST_BASE_TRANSFORM_CLASS (klass);
+
+  gobject_class->set_property = gst_msdkvpp_set_property;
+  gobject_class->get_property = gst_msdkvpp_get_property;
+  gobject_class->dispose = gst_msdkvpp_dispose;
+
+  _msdkvpp_install_properties (gobject_class);
+
+  trans_class->start = GST_DEBUG_FUNCPTR (gst_msdkvpp_start);
+  trans_class->stop = GST_DEBUG_FUNCPTR (gst_msdkvpp_stop);
+  trans_class->transform_caps = GST_DEBUG_FUNCPTR (gst_msdkvpp_transform_caps);
+  trans_class->fixate_caps = GST_DEBUG_FUNCPTR (gst_msdkvpp_fixate_caps);
+  trans_class->set_caps = GST_DEBUG_FUNCPTR (gst_msdkvpp_set_caps);
+  trans_class->transform = GST_DEBUG_FUNCPTR (gst_msdkvpp_transform);
+  trans_class->propose_allocation =
+      GST_DEBUG_FUNCPTR (gst_msdkvpp_propose_allocation);
+  trans_class->decide_allocation =
+      GST_DEBUG_FUNCPTR (gst_msdkvpp_decide_allocation);
+  trans_class->prepare_output_buffer =
+      GST_DEBUG_FUNCPTR (gst_msdkvpp_prepare_output_buffer);
+  trans_class->query = GST_DEBUG_FUNCPTR (gst_msdkvpp_query);
+
+  element_class->set_context = gst_msdkvpp_set_context;
+
+  gst_element_class_set_static_metadata (element_class,
+      "Intel MSDK Video Postprocessor",
+      "Filter/Converter/Video;Filter/Converter/Video/Scaler;"
+      "Filter/Effect/Video;Filter/Effect/Video/Deinterlace",
+      "Video Postprocessing Filter based on " MFX_API_SDK,
+      "Sreerenj Balachandrn <sreerenj.balachandran@intel.com>");
+
+  gst_msdkcaps_pad_template_init (element_class,
+      cdata->sink_caps, cdata->src_caps, doc_sink_caps_str, doc_src_caps_str);
+
+  gst_caps_unref (cdata->sink_caps);
+  gst_caps_unref (cdata->src_caps);
+  g_free (cdata);
+}
+
+static void
+gst_msdkvpp_init (GTypeInstance * instance, gpointer g_class)
+{
+  GstMsdkVPP *thiz = GST_MSDKVPP (instance);
   thiz->initialized = FALSE;
   thiz->hardware = PROP_HARDWARE_DEFAULT;
   thiz->async_depth = PROP_ASYNC_DEPTH_DEFAULT;
@@ -1969,4 +1901,46 @@ gst_msdkvpp_init (GstMsdkVPP * thiz)
 
   gst_video_info_init (&thiz->sinkpad_info);
   gst_video_info_init (&thiz->srcpad_info);
+}
+
+gboolean
+gst_msdkvpp_register (GstPlugin * plugin,
+    GstMsdkContext * context, GstCaps * sink_caps,
+    GstCaps * src_caps, guint rank)
+{
+  GType type;
+  MsdkVPPCData *cdata;
+  gchar *type_name, *feature_name;
+  gboolean ret = FALSE;
+
+  GTypeInfo type_info = {
+    .class_size = sizeof (GstMsdkVPPClass),
+    .class_init = gst_msdkvpp_class_init,
+    .instance_size = sizeof (GstMsdkVPP),
+    .instance_init = gst_msdkvpp_init
+  };
+
+  cdata = g_new (MsdkVPPCData, 1);
+  cdata->sink_caps = gst_caps_ref (sink_caps);
+  cdata->src_caps = gst_caps_ref (src_caps);
+
+  GST_MINI_OBJECT_FLAG_SET (cdata->sink_caps,
+      GST_MINI_OBJECT_FLAG_MAY_BE_LEAKED);
+  GST_MINI_OBJECT_FLAG_SET (cdata->src_caps,
+      GST_MINI_OBJECT_FLAG_MAY_BE_LEAKED);
+
+  type_info.class_data = cdata;
+
+  type_name = g_strdup ("GstMsdkVPP");
+  feature_name = g_strdup ("msdkvpp");
+
+  type = g_type_register_static (GST_TYPE_BASE_TRANSFORM,
+      type_name, &type_info, 0);
+  if (type)
+    ret = gst_element_register (plugin, feature_name, rank, type);
+
+  g_free (type_name);
+  g_free (feature_name);
+
+  return ret;
 }

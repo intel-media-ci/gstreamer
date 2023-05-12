@@ -28,7 +28,7 @@
  *
  * In addition to the RFC, which assumes only mono and stereo payload,
  * the element supports multichannel Opus audio streams using a non-standardized
- * SDP config and "multiopus" codec developed by Google for libwebrtc. When the
+ * SDP config and "MULTIOPUS" codec developed by Google for libwebrtc. When the
  * input data have more than 2 channels, rtpopuspay will add extra fields to
  * output caps that can be used to generate SDP in the syntax understood by
  * libwebrtc. For example in the case of 5.1 audio:
@@ -83,7 +83,7 @@ GST_STATIC_PAD_TEMPLATE ("src",
         "media = (string) \"audio\", "
         "payload = (int) " GST_RTP_PAYLOAD_DYNAMIC_STRING ", "
         "clock-rate = (int) 48000, "
-        "encoding-name = (string) { \"OPUS\", \"X-GST-OPUS-DRAFT-SPITTKA-00\", \"multiopus\" }")
+        "encoding-name = (string) { \"OPUS\", \"X-GST-OPUS-DRAFT-SPITTKA-00\", \"MULTIOPUS\" }")
     );
 
 static gboolean gst_rtp_opus_pay_setcaps (GstRTPBasePayload * payload,
@@ -255,7 +255,7 @@ gst_rtp_opus_pay_setcaps (GstRTPBasePayload * payload, GstCaps * caps)
 
       /* libwebrtc only supports "multiopus" when channels > 2. Mono and stereo
        * sound must always be payloaded according to RFC 7587. */
-      encoding_name = "multiopus";
+      encoding_name = "MULTIOPUS";
 
       if (gst_structure_get_int (s, "stream-count", &stream_count)) {
         char *num_streams = g_strdup_printf ("%d", stream_count);
@@ -371,9 +371,13 @@ static GstCaps *
 gst_rtp_opus_pay_getcaps (GstRTPBasePayload * payload,
     GstPad * pad, GstCaps * filter)
 {
-  GstCaps *caps, *peercaps, *tcaps;
   GstStructure *s;
-  const gchar *stereo;
+  int channel_mapping_family = 0;
+  GstCaps *caps, *peercaps, *tcaps, *tempcaps;
+  static GstStaticCaps opus_static_caps = GST_STATIC_CAPS ("application/x-rtp, "
+      "encoding-name=(string) { \"OPUS\", \"X-GST-OPUS-DRAFT-SPITTKA-00\"}");
+  static GstStaticCaps multiopus_static_caps =
+      GST_STATIC_CAPS ("application/x-rtp, encoding-name=(string)MULTIOPUS");
 
   if (pad == GST_RTP_BASE_PAYLOAD_SRCPAD (payload))
     return
@@ -394,23 +398,59 @@ gst_rtp_opus_pay_getcaps (GstRTPBasePayload * payload,
 
   caps = gst_pad_get_pad_template_caps (GST_RTP_BASE_PAYLOAD_SINKPAD (payload));
 
-  s = gst_caps_get_structure (peercaps, 0);
-  stereo = gst_structure_get_string (s, "stereo");
-  if (stereo != NULL) {
-    caps = gst_caps_make_writable (caps);
+  tempcaps = gst_static_caps_get (&opus_static_caps);
+  if (!gst_caps_can_intersect (peercaps, tempcaps)) {
+    GstCaps *multiopuscaps = gst_caps_new_simple ("audio/x-opus",
+        "channel-mapping-family", G_TYPE_INT, 1,
+        "channels", GST_TYPE_INT_RANGE, 3, 255,
+        NULL);
+    GstCaps *intersect_caps;
 
-    if (!strcmp (stereo, "1")) {
-      GstCaps *caps2 = gst_caps_copy (caps);
+    intersect_caps = gst_caps_intersect_full (caps, multiopuscaps,
+        GST_CAPS_INTERSECT_FIRST);
+    gst_caps_unref (caps);
+    gst_caps_unref (multiopuscaps);
+    caps = intersect_caps;
+  }
+  gst_caps_unref (tempcaps);
 
-      gst_caps_set_simple (caps, "channels", G_TYPE_INT, 2, NULL);
-      gst_caps_set_simple (caps2, "channels", G_TYPE_INT, 1, NULL);
-      caps = gst_caps_merge (caps, caps2);
-    } else if (!strcmp (stereo, "0")) {
-      GstCaps *caps2 = gst_caps_copy (caps);
+  tempcaps = gst_static_caps_get (&multiopus_static_caps);
+  if (!gst_caps_can_intersect (peercaps, tempcaps)) {
+    GstCaps *opuscaps = gst_caps_new_simple ("audio/x-opus",
+        "channel-mapping-family", G_TYPE_INT, 0,
+        "channels", GST_TYPE_INT_RANGE, 1, 2,
+        NULL);
+    GstCaps *intersect_caps;
 
-      gst_caps_set_simple (caps, "channels", G_TYPE_INT, 1, NULL);
-      gst_caps_set_simple (caps2, "channels", G_TYPE_INT, 2, NULL);
-      caps = gst_caps_merge (caps, caps2);
+    intersect_caps = gst_caps_intersect_full (caps, opuscaps,
+        GST_CAPS_INTERSECT_FIRST);
+    gst_caps_unref (caps);
+    gst_caps_unref (opuscaps);
+    caps = intersect_caps;
+  }
+  gst_caps_unref (tempcaps);
+
+  s = gst_caps_get_structure (caps, 0);
+  gst_structure_get_int (s, "channel-mapping-family", &channel_mapping_family);
+  if (channel_mapping_family == 0) {
+    GstStructure *sp = gst_caps_get_structure (peercaps, 0);
+    const gchar *stereo = gst_structure_get_string (sp, "stereo");
+
+    if (stereo != NULL) {
+      guint channels = 0;
+
+      if (!strcmp (stereo, "1"))
+        channels = 2;
+      else if (!strcmp (stereo, "0"))
+        channels = 1;
+
+      if (channels) {
+        GstCaps *caps2 = gst_caps_copy_nth (caps, 0);
+
+        gst_caps_set_simple (caps2, "channels", G_TYPE_INT, channels, NULL);
+        caps = gst_caps_make_writable (caps);
+        caps = gst_caps_merge (caps2, caps);
+      }
     }
   }
   gst_caps_unref (peercaps);

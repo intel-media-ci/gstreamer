@@ -23,7 +23,7 @@
 #include "gstnvenc.h"
 
 #include <gst/video/gstvideoencoder.h>
-#include <gst/cuda/gstcudacontext.h>
+#include <gst/cuda/gstcuda.h>
 
 #define GST_TYPE_NV_BASE_ENC \
   (gst_nv_base_enc_get_type())
@@ -110,7 +110,7 @@ typedef struct {
   gboolean        i_adapt;
 
   GstCudaContext * cuda_ctx;
-  CUstream         cuda_stream;
+  GstCudaStream * stream;
   void          * encoder;
   NV_ENC_INITIALIZE_PARAMS init_params;
   NV_ENC_CONFIG            config;

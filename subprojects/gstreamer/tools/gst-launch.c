@@ -50,6 +50,10 @@
 #include <mmsystem.h>
 #endif
 
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
+
 extern volatile gboolean glib_on_error_halt;
 
 #ifdef G_OS_UNIX
@@ -1070,8 +1074,8 @@ clear_winmm_timer_resolution (guint resolution)
 }
 #endif
 
-int
-main (int argc, char *argv[])
+static int
+real_main (int argc, char *argv[])
 {
   /* options */
   gboolean verbose = FALSE;
@@ -1155,7 +1159,12 @@ main (int argc, char *argv[])
   ctx = g_option_context_new ("PIPELINE-DESCRIPTION");
   g_option_context_add_main_entries (ctx, options, GETTEXT_PACKAGE);
   g_option_context_add_group (ctx, gst_init_get_option_group ());
-  if (!g_option_context_parse (ctx, &argc, &argv, &err)) {
+#ifdef G_OS_WIN32
+  if (!g_option_context_parse_strv (ctx, &argv, &err))
+#else
+  if (!g_option_context_parse (ctx, &argc, &argv, &err))
+#endif
+  {
     if (err)
       gst_printerr ("Error initializing: %s\n", GST_STR_NULL (err->message));
     else
@@ -1167,6 +1176,10 @@ main (int argc, char *argv[])
   g_option_context_free (ctx);
 #else
   gst_init (&argc, &argv);
+#endif
+
+#ifdef G_OS_WIN32
+  argc = g_strv_length (argv);
 #endif
 
   gst_tools_print_version ();
@@ -1359,4 +1372,26 @@ main (int argc, char *argv[])
   gst_deinit ();
 
   return last_launch_code;
+}
+
+int
+main (int argc, char *argv[])
+{
+  int ret;
+
+#ifdef G_OS_WIN32
+  argv = g_win32_get_command_line ();
+#endif
+
+#if defined(__APPLE__) && TARGET_OS_MAC && !TARGET_OS_IPHONE
+  ret = gst_macos_main ((GstMainFunc) real_main, argc, argv, NULL);
+#else
+  ret = real_main (argc, argv);
+#endif
+
+#ifdef G_OS_WIN32
+  g_strfreev (argv);
+#endif
+
+  return ret;
 }

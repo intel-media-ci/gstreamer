@@ -192,7 +192,8 @@ validate_flow_structure_cleanup (const GstStructure * structure,
 }
 
 gchar *
-validate_flow_format_caps (const GstCaps * caps, gchar ** wanted_fields)
+validate_flow_format_caps (const GstCaps * caps, gchar ** wanted_fields,
+    gchar ** ignored_fields)
 {
   guint i;
   GstCaps *new_caps = gst_caps_new_empty ();
@@ -203,7 +204,7 @@ validate_flow_format_caps (const GstCaps * caps, gchar ** wanted_fields)
   for (i = 0; i < gst_caps_get_size (caps); i++) {
     GstStructure *structure =
         validate_flow_structure_cleanup (gst_caps_get_structure (caps, i),
-        wanted_fields, NULL);
+        wanted_fields, ignored_fields);
 
     gst_caps_append_structure_full (new_caps, structure,
         gst_caps_features_copy (gst_caps_get_features (caps, i)));
@@ -251,6 +252,12 @@ buffer_get_meta_string (GstBuffer * buffer)
 
   while ((meta = gst_buffer_iterate_meta (buffer, &state))) {
     const gchar *desc = g_type_name (meta->info->type);
+
+    if (meta->info->api == GST_PARENT_BUFFER_META_API_TYPE) {
+      /* The parent buffer meta is added automatically every time a buffer gets
+       * copied, it is not useful to track them. */
+      continue;
+    }
 
     if (s == NULL)
       s = g_string_new (NULL);
@@ -413,7 +420,8 @@ validate_flow_format_event (GstEvent * event,
 
     structure_string =
         validate_flow_format_caps (caps,
-        logged_fields ? logged_fields : (gchar **) caps_properties);
+        logged_fields ? logged_fields : (gchar **) caps_properties,
+        ignored_fields);
     /* FIXME: Remove spurious `;` and regenerate all the expectation files */
     event_string = g_strdup_printf ("%s: %s;", event_type, structure_string);
     goto done;

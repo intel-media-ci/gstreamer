@@ -146,7 +146,8 @@ static GstStaticPadTemplate videosink_templ =
         "video/x-prores, "
         COMMON_VIDEO_CAPS "; "
         "video/x-wmv, " "wmvversion = (int) [ 1, 3 ], " COMMON_VIDEO_CAPS "; "
-        "video/x-av1, " "alignment = (string) \"tu\", " COMMON_VIDEO_CAPS ";"
+        "video/x-av1, " "stream-format = (string) \"obu-stream\", "
+        "alignment = (string) \"tu\", " COMMON_VIDEO_CAPS ";"
         "video/x-ffv, ffversion = (int) 1, " COMMON_VIDEO_CAPS)
     );
 
@@ -179,7 +180,9 @@ static GstStaticPadTemplate audiosink_templ =
         COMMON_AUDIO_CAPS "; "
         "audio/x-flac, "
         COMMON_AUDIO_CAPS "; "
-        "audio/x-opus; "
+        "audio/x-opus, "
+        "channels = (int) [ 1, 8 ], "
+        "rate = (int) { 8000, 16000, 24000, 32000, 48000 }; "
         "audio/x-speex, "
         COMMON_AUDIO_CAPS "; "
         "audio/x-raw, "
@@ -3443,21 +3446,21 @@ static const struct
 }
 gst_matroska_tag_conv[] = {
   {
-  GST_MATROSKA_TAG_ID_TITLE, GST_TAG_TITLE}, {
-  GST_MATROSKA_TAG_ID_ARTIST, GST_TAG_ARTIST}, {
-  GST_MATROSKA_TAG_ID_ALBUM, GST_TAG_ALBUM}, {
-  GST_MATROSKA_TAG_ID_COMMENTS, GST_TAG_COMMENT}, {
-  GST_MATROSKA_TAG_ID_BITSPS, GST_TAG_BITRATE}, {
-  GST_MATROSKA_TAG_ID_BPS, GST_TAG_BITRATE}, {
-  GST_MATROSKA_TAG_ID_ENCODER, GST_TAG_ENCODER}, {
-  GST_MATROSKA_TAG_ID_DATE, GST_TAG_DATE}, {
-  GST_MATROSKA_TAG_ID_ISRC, GST_TAG_ISRC}, {
-  GST_MATROSKA_TAG_ID_COPYRIGHT, GST_TAG_COPYRIGHT}, {
-  GST_MATROSKA_TAG_ID_BPM, GST_TAG_BEATS_PER_MINUTE}, {
-  GST_MATROSKA_TAG_ID_TERMS_OF_USE, GST_TAG_LICENSE}, {
-  GST_MATROSKA_TAG_ID_COMPOSER, GST_TAG_COMPOSER}, {
-  GST_MATROSKA_TAG_ID_LEAD_PERFORMER, GST_TAG_PERFORMER}, {
-  GST_MATROSKA_TAG_ID_GENRE, GST_TAG_GENRE}
+      GST_MATROSKA_TAG_ID_TITLE, GST_TAG_TITLE}, {
+      GST_MATROSKA_TAG_ID_ARTIST, GST_TAG_ARTIST}, {
+      GST_MATROSKA_TAG_ID_ALBUM, GST_TAG_ALBUM}, {
+      GST_MATROSKA_TAG_ID_COMMENTS, GST_TAG_COMMENT}, {
+      GST_MATROSKA_TAG_ID_BITSPS, GST_TAG_BITRATE}, {
+      GST_MATROSKA_TAG_ID_BPS, GST_TAG_BITRATE}, {
+      GST_MATROSKA_TAG_ID_ENCODER, GST_TAG_ENCODER}, {
+      GST_MATROSKA_TAG_ID_DATE, GST_TAG_DATE}, {
+      GST_MATROSKA_TAG_ID_ISRC, GST_TAG_ISRC}, {
+      GST_MATROSKA_TAG_ID_COPYRIGHT, GST_TAG_COPYRIGHT}, {
+      GST_MATROSKA_TAG_ID_BPM, GST_TAG_BEATS_PER_MINUTE}, {
+      GST_MATROSKA_TAG_ID_TERMS_OF_USE, GST_TAG_LICENSE}, {
+      GST_MATROSKA_TAG_ID_COMPOSER, GST_TAG_COMPOSER}, {
+      GST_MATROSKA_TAG_ID_LEAD_PERFORMER, GST_TAG_PERFORMER}, {
+      GST_MATROSKA_TAG_ID_GENRE, GST_TAG_GENRE}
 };
 
 /* Every stagefright implementation on android up to and including 6.0.1 is using

@@ -6,6 +6,8 @@ mpegts_sources = files(
   'gst-dvb-section.c',
   'gst-atsc-section.c',
   'gst-scte-section.c',
+  'gst-mpegtspesmetadatameta.c',
+  'gst-metadata-descriptor.c'
 )
 
 mpegts_headers = files(
@@ -18,6 +20,8 @@ mpegts_headers = files(
   'gst-atsc-descriptor.h',
   'gst-dvb-descriptor.h',
   'gst-isdb-descriptor.h',
+  'gst-mpegtspesmetadatameta.h',
+  'gst-metadata-descriptor.h',
   'mpegts-prelude.h',
   'mpegts.h',
 )
@@ -72,6 +76,7 @@ if build_gir
   library_def += {'gir': [gir]}
   if not static_build
     mpegts_gir = gnome.generate_gir(gstmpegts, kwargs: gir)
+    library_def += {'gir_targets':  library_def.get('gir_targets', []) + [mpegts_gir]}
     gen_sources += mpegts_gir
   endif
 endif

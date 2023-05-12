@@ -9,7 +9,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: gst-plugins-base 1.2.1\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2021-10-25 01:01+0100\n"
+"POT-Creation-Date: 2023-02-22 11:52+0000\n"
 "PO-Revision-Date: 2014-04-20 16:15+0300\n"
 "Last-Translator: Rihards Prieditis <rprieditis@gmail.com>\n"
 "Language-Team: Latvian <translation-team-lv@lists.sourceforge.net>\n"
@@ -92,10 +92,6 @@ msgstr "Trūkst elements “%s” - pārbaudiet savu GStreamer instalāciju."
 msgid "Could not create \"uridecodebin\" element."
 msgstr "Nevarēja izveidot “uridecodebin” elementu."
 
-#, fuzzy
-msgid "Could not create \"uridecodebin3\" element."
-msgstr "Nevarēja izveidot “uridecodebin” elementu."
-
 #, c-format
 msgid "Both autovideosink and %s elements are missing."
 msgstr "Trūkst gan autovideosink, gan %s elementi."
@@ -159,7 +155,15 @@ msgstr "Šo plūsmu pagaidām nevar atskaņot."
 msgid "No URI handler implemented for \"%s\"."
 msgstr "Nav izstrādāts neviens “%s” URI apstrādātājs."
 
+#, fuzzy
+msgid "Source element can't be prepared"
+msgstr "Avota elements ir nederīgs."
+
 msgid "Source element is invalid."
+msgstr "Avota elements ir nederīgs."
+
+#, fuzzy
+msgid "Source element has no pads."
 msgstr "Avota elements ir nederīgs."
 
 #, c-format
@@ -666,16 +670,14 @@ msgstr ""
 msgid "enable/disable trick modes"
 msgstr ""
 
-#, fuzzy
-msgid "change audio track"
-msgstr "Šajā CD nav neviena audio celiņa"
-
-msgid "change video track"
+msgid "change to previous/next audio track"
 msgstr ""
 
-#, fuzzy
-msgid "change subtitle track"
-msgstr "Kate subtitru formāts"
+msgid "change to previous/next video track"
+msgstr ""
+
+msgid "change to previous/next subtitle track"
+msgstr ""
 
 msgid "seek to beginning"
 msgstr ""
@@ -684,6 +686,10 @@ msgid "show keyboard shortcuts"
 msgstr ""
 
 msgid "Interactive mode - keyboard controls:"
+msgstr ""
+
+#, c-format
+msgid "Use Windows high-resolution clock, precision: %u ms\n"
 msgstr ""
 
 msgid "Output status information and property notifications"
@@ -701,6 +707,9 @@ msgstr "Izmantojamais audio uztvērējs (pēc noklusējuma autoaudiosink)"
 msgid "Enable gapless playback"
 msgstr "Aktivēt atskaņošanu bez pauzēm"
 
+msgid "Enable instantaneous uri changes (only with playbin3)"
+msgstr ""
+
 msgid "Shuffle playlist"
 msgstr ""
 
@@ -713,6 +722,9 @@ msgstr ""
 msgid "Start position in seconds."
 msgstr ""
 
+msgid "Enable accurate seeking"
+msgstr ""
+
 msgid "Playlist file containing input media files"
 msgstr ""
 
@@ -722,15 +734,17 @@ msgstr ""
 msgid "Do not print any output (apart from errors)"
 msgstr ""
 
-msgid "Use playbin3 pipeline"
-msgstr ""
-
-msgid "(default varies depending on 'USE_PLAYBIN' env variable)"
+msgid ""
+"Use playbin3 pipeline (default varies depending on 'USE_PLAYBIN' env "
+"variable)"
 msgstr ""
 
 msgid ""
 "Keep showing the last frame on EOS until quit or playlist change command "
 "(gapless is ignored)"
+msgstr ""
+
+msgid "Do not print current position of pipeline"
 msgstr ""
 
 #, c-format

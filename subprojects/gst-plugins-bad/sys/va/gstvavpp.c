@@ -70,6 +70,7 @@
 #include "gstvacaps.h"
 #include "gstvadisplay_priv.h"
 #include "gstvafilter.h"
+#include "gstvapluginutils.h"
 
 GST_DEBUG_CATEGORY_STATIC (gst_va_vpp_debug);
 #define GST_CAT_DEFAULT gst_va_vpp_debug
@@ -78,7 +79,11 @@ GST_DEBUG_CATEGORY_STATIC (gst_va_vpp_debug);
 #define GST_VA_VPP_GET_CLASS(obj) (G_TYPE_INSTANCE_GET_CLASS ((obj), G_TYPE_FROM_INSTANCE (obj), GstVaVppClass))
 #define GST_VA_VPP_CLASS(klass)    ((GstVaVppClass *) klass)
 
-#define SWAP(a, b) do { const __typeof__ (a) t = a; a = b; b = t; } while (0)
+#define SWAP_INT(a, b) G_STMT_START { \
+  gint __tmp = a; \
+  a = b; \
+  b = __tmp; \
+} G_STMT_END
 
 typedef struct _GstVaVpp GstVaVpp;
 typedef struct _GstVaVppClass GstVaVppClass;
@@ -494,7 +499,7 @@ gst_va_vpp_set_info (GstVaBaseTransform * btrans, GstCaps * incaps,
       case GST_VIDEO_ORIENTATION_90L:
       case GST_VIDEO_ORIENTATION_UL_LR:
       case GST_VIDEO_ORIENTATION_UR_LL:
-        SWAP (from_dar_n, from_dar_d);
+        SWAP_INT (from_dar_n, from_dar_d);
         break;
       default:
         break;
@@ -1332,8 +1337,8 @@ gst_va_vpp_fixate_size (GstVaVpp * self, GstPadDirection direction,
       case GST_VIDEO_ORIENTATION_90L:
       case GST_VIDEO_ORIENTATION_UL_LR:
       case GST_VIDEO_ORIENTATION_UR_LL:
-        SWAP (from_w, from_h);
-        SWAP (from_par_n, from_par_d);
+        SWAP_INT (from_w, from_h);
+        SWAP_INT (from_par_n, from_par_d);
         break;
       default:
         break;
@@ -2110,7 +2115,7 @@ gst_va_vpp_class_init (gpointer g_class, gpointer class_data)
 
   klass = g_string_new ("Converter/Filter/Colorspace/Scaler/Video/Hardware");
 
-  display = gst_va_display_drm_new_from_path (btrans_class->render_device_path);
+  display = gst_va_display_platform_new (btrans_class->render_device_path);
   filter = gst_va_filter_new (display);
 
   if (gst_va_filter_open (filter)) {
@@ -2316,24 +2321,9 @@ gst_va_vpp_register (GstPlugin * plugin, GstVaDevice * device,
 
   type_info.class_data = cdata;
 
-  type_name = g_strdup ("GstVaPostProc");
-  feature_name = g_strdup ("vapostproc");
-
-  /* The first postprocessor to be registered should use a constant
-   * name, like vapostproc, for any additional postprocessors, we
-   * create unique names, using inserting the render device name. */
-  if (g_type_from_name (type_name)) {
-    gchar *basename = g_path_get_basename (device->render_device_path);
-    g_free (type_name);
-    g_free (feature_name);
-    type_name = g_strdup_printf ("GstVa%sPostProc", basename);
-    feature_name = g_strdup_printf ("va%spostproc", basename);
-    cdata->description = basename;
-
-    /* lower rank for non-first device */
-    if (rank > 0)
-      rank--;
-  }
+  gst_va_create_feature_name (device, "GstVaPostProc", "GstVa%sPostProc",
+      &type_name, "vapostproc", "va%spostproc", &feature_name,
+      &cdata->description, &rank);
 
   g_once (&debug_once, _register_debug_category, NULL);
 

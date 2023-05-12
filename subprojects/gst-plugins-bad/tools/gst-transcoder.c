@@ -26,6 +26,10 @@
 #include <glib-unix.h>
 #endif
 
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
+
 static const gchar *HELP_SUMMARY =
     "gst-transcoder-1.0 transcodes a stream defined by its first <input-uri>\n"
     "argument to the place defined by its second <output-uri> argument\n"
@@ -317,8 +321,8 @@ _warning_cb (GstTranscoder * transcoder, GError * error, GstStructure * details)
   warn ("Got warning: %s", error->message);
 }
 
-int
-main (int argc, char *argv[])
+static int
+real_main (int argc, char *argv[])
 {
   gint res = 0;
   GError *err = NULL;
@@ -358,12 +362,21 @@ main (int argc, char *argv[])
   g_option_context_add_main_entries (ctx, options, NULL);
   g_option_context_add_group (ctx, gst_init_get_option_group ());
 
-  if (!g_option_context_parse (ctx, &argc, &argv, &err)) {
+#ifdef G_OS_WIN32
+  if (!g_option_context_parse_strv (ctx, &argv, &err))
+#else
+  if (!g_option_context_parse (ctx, &argc, &argv, &err))
+#endif
+  {
     g_print ("Error initializing: %s\n", GST_STR_NULL (err->message));
     g_clear_error (&err);
     g_option_context_free (ctx);
     return 1;
   }
+#ifdef G_OS_WIN32
+  argc = g_strv_length (argv);
+#endif
+
   gst_pb_utils_init ();
 
   if (settings.list) {
@@ -459,4 +472,26 @@ no_extension:
   res = 1;
 
   goto done;
+}
+
+int
+main (int argc, char *argv[])
+{
+  int ret;
+
+#ifdef G_OS_WIN32
+  argv = g_win32_get_command_line ();
+#endif
+
+#if defined(__APPLE__) && TARGET_OS_MAC && !TARGET_OS_IPHONE
+  ret = gst_macos_main ((GstMainFunc) real_main, argc, argv, NULL);
+#else
+  ret = real_main (argc, argv);
+#endif
+
+#ifdef G_OS_WIN32
+  g_strfreev (argv);
+#endif
+
+  return ret;
 }

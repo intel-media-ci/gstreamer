@@ -81,6 +81,7 @@ enum
 #define DEFAULT_RTCP_DISABLE_SR_TIMESTAMP FALSE
 #define DEFAULT_FAVOR_NEW            FALSE
 #define DEFAULT_TWCC_FEEDBACK_INTERVAL GST_CLOCK_TIME_NONE
+#define DEFAULT_UPDATE_NTP64_HEADER_EXT TRUE
 
 enum
 {
@@ -108,6 +109,7 @@ enum
   PROP_RTCP_REDUCED_SIZE,
   PROP_RTCP_DISABLE_SR_TIMESTAMP,
   PROP_TWCC_FEEDBACK_INTERVAL,
+  PROP_UPDATE_NTP64_HEADER_EXT,
   PROP_LAST,
 };
 
@@ -643,6 +645,21 @@ rtp_session_class_init (RTPSessionClass * klass)
       0, G_MAXUINT64, DEFAULT_TWCC_FEEDBACK_INTERVAL,
       G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
 
+  /**
+   * RTPSession:update-ntp64-header-ext:
+   *
+   * Whether RTP NTP header extension should be updated with actual
+   * NTP time. If not, use the NTP time from buffer timestamp metadata
+   *
+   * Since: 1.22
+   */
+  properties[PROP_UPDATE_NTP64_HEADER_EXT] =
+      g_param_spec_boolean ("update-ntp64-header-ext",
+      "Update NTP-64 RTP Header Extension",
+      "Whether RTP NTP header extension should be updated with actual NTP time",
+      DEFAULT_UPDATE_NTP64_HEADER_EXT,
+      G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
+
   g_object_class_install_properties (gobject_class, PROP_LAST, properties);
 
   klass->get_source_by_ssrc =
@@ -687,6 +704,8 @@ rtp_session_init (RTPSession * sess)
   /* default UDP header length */
   sess->header_len = UDP_IP_HEADER_OVERHEAD;
   sess->mtu = DEFAULT_RTCP_MTU;
+
+  sess->update_ntp64_header_ext = DEFAULT_UPDATE_NTP64_HEADER_EXT;
 
   sess->probation = DEFAULT_PROBATION;
   sess->max_dropout_time = DEFAULT_MAX_DROPOUT_TIME;
@@ -928,6 +947,9 @@ rtp_session_set_property (GObject * object, guint prop_id,
       rtp_twcc_manager_set_feedback_interval (sess->twcc,
           g_value_get_uint64 (value));
       break;
+    case PROP_UPDATE_NTP64_HEADER_EXT:
+      sess->update_ntp64_header_ext = g_value_get_boolean (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -1013,6 +1035,9 @@ rtp_session_get_property (GObject * object, guint prop_id,
     case PROP_TWCC_FEEDBACK_INTERVAL:
       g_value_set_uint64 (value,
           rtp_twcc_manager_get_feedback_interval (sess->twcc));
+      break;
+    case PROP_UPDATE_NTP64_HEADER_EXT:
+      g_value_set_boolean (value, sess->update_ntp64_header_ext);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -1164,6 +1189,7 @@ rtp_session_reset (RTPSession * sess)
 {
   g_return_if_fail (RTP_IS_SESSION (sess));
 
+  RTP_SESSION_LOCK (sess);
   /* remove all sources */
   g_hash_table_remove_all (sess->ssrcs[sess->mask_idx]);
   sess->total_sources = 0;
@@ -1192,6 +1218,7 @@ rtp_session_reset (RTPSession * sess)
   g_list_free_full (sess->conflicting_addresses,
       (GDestroyNotify) rtp_conflicting_address_free);
   sess->conflicting_addresses = NULL;
+  RTP_SESSION_UNLOCK (sess);
 }
 
 /**
@@ -2742,9 +2769,13 @@ rtp_session_process_app (RTPSession * sess, GstRTCPPacket * packet,
 
 static gboolean
 rtp_session_request_local_key_unit (RTPSession * sess, RTPSource * src,
-    guint32 media_ssrc, gboolean fir, GstClockTime current_time)
+    const guint32 * ssrcs, guint num_ssrcs, gboolean fir,
+    GstClockTime current_time)
 {
   guint32 round_trip = 0;
+  gint i;
+
+  g_return_val_if_fail (ssrcs != NULL && num_ssrcs > 0, FALSE);
 
   rtp_source_get_last_rb (src, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
       &round_trip);
@@ -2770,14 +2801,17 @@ rtp_session_request_local_key_unit (RTPSession * sess, RTPSource * src,
 
   src->last_keyframe_request = current_time;
 
-  GST_LOG ("received %s request from %X about %X %p(%p)", fir ? "FIR" : "PLI",
-      rtp_source_get_ssrc (src), media_ssrc, sess->callbacks.process_rtp,
-      sess->callbacks.request_key_unit);
+  for (i = 0; i < num_ssrcs; ++i) {
+    GST_LOG ("received %s request from %X about %X %p(%p)",
+        fir ? "FIR" : "PLI",
+        rtp_source_get_ssrc (src), ssrcs[i], sess->callbacks.process_rtp,
+        sess->callbacks.request_key_unit);
 
-  RTP_SESSION_UNLOCK (sess);
-  sess->callbacks.request_key_unit (sess, media_ssrc, fir,
-      sess->request_key_unit_user_data);
-  RTP_SESSION_LOCK (sess);
+    RTP_SESSION_UNLOCK (sess);
+    sess->callbacks.request_key_unit (sess, ssrcs[i], fir,
+        sess->request_key_unit_user_data);
+    RTP_SESSION_LOCK (sess);
+  }
 
   return TRUE;
 }
@@ -2799,19 +2833,19 @@ rtp_session_process_pli (RTPSession * sess, guint32 sender_ssrc,
       return;
   }
 
-  rtp_session_request_local_key_unit (sess, src, media_ssrc, FALSE,
+  rtp_session_request_local_key_unit (sess, src, &media_ssrc, 1, FALSE,
       current_time);
 }
 
 static void
 rtp_session_process_fir (RTPSession * sess, guint32 sender_ssrc,
-    guint32 media_ssrc, guint8 * fci_data, guint fci_length,
-    GstClockTime current_time)
+    guint8 * fci_data, guint fci_length, GstClockTime current_time)
 {
   RTPSource *src;
   guint32 ssrc;
   guint position = 0;
-  gboolean our_request = FALSE;
+  guint32 ssrcs[32];
+  guint num_ssrcs = 0;
 
   if (!sess->callbacks.request_key_unit)
     return;
@@ -2849,15 +2883,14 @@ rtp_session_process_fir (RTPSession * sess, guint32 sender_ssrc,
     if (own == NULL)
       continue;
 
-    if (own->internal) {
-      our_request = TRUE;
-      break;
+    if (own->internal && num_ssrcs < 32) {
+      ssrcs[num_ssrcs++] = ssrc;
     }
   }
-  if (!our_request)
+  if (num_ssrcs == 0)
     return;
 
-  rtp_session_request_local_key_unit (sess, src, media_ssrc, TRUE,
+  rtp_session_request_local_key_unit (sess, src, ssrcs, num_ssrcs, TRUE,
       current_time);
 }
 
@@ -3022,8 +3055,8 @@ rtp_session_process_feedback (RTPSession * sess, GstRTCPPacket * packet,
           case GST_RTCP_PSFB_TYPE_FIR:
             if (src)
               src->stats.recv_fir_count++;
-            rtp_session_process_fir (sess, sender_ssrc, media_ssrc, fci_data,
-                fci_length, current_time);
+            rtp_session_process_fir (sess, sender_ssrc, fci_data, fci_length,
+                current_time);
             break;
           default:
             break;
@@ -3416,7 +3449,9 @@ rtp_session_send_rtp (RTPSession * sess, gpointer data, gboolean is_list,
     goto invalid_packet;
 
   /* Update any 64-bit NTP header extensions with the actual NTP time here */
-  update_ntp64_header_ext (&pinfo);
+  if (sess->update_ntp64_header_ext)
+    update_ntp64_header_ext (&pinfo);
+
   rtp_twcc_manager_send_packet (sess->twcc, &pinfo);
 
   source = obtain_internal_source (sess, pinfo.ssrc, &created, current_time);
@@ -4449,7 +4484,7 @@ generate_twcc (const gchar * key, RTPSource * source, ReportData * data)
   GST_DEBUG ("generating TWCC feedback for source %08x", source->ssrc);
 
   while ((buf = rtp_twcc_manager_get_feedback (sess->twcc, source->ssrc))) {
-    ReportOutput *output = g_slice_new (ReportOutput);
+    ReportOutput *output = g_new (ReportOutput, 1);
     output->source = g_object_ref (source);
     output->is_bye = FALSE;
     output->buffer = buf;
@@ -4513,7 +4548,7 @@ generate_rtcp (const gchar * key, RTPSource * source, ReportData * data)
 
   gst_rtcp_buffer_unmap (&data->rtcpbuf);
 
-  output = g_slice_new (ReportOutput);
+  output = g_new (ReportOutput, 1);
   output->source = g_object_ref (source);
   output->is_bye = is_bye;
   output->buffer = data->rtcp;
@@ -4677,20 +4712,27 @@ rtp_session_on_timeout (RTPSession * sess, GstClockTime current_time,
   /* check if all the buffers are empty after generation */
   all_empty = TRUE;
 
+  /* Make a local copy of the hashtable. We need to do this because the
+   * generate_rtcp stage below releases the session lock. */
+  table_copy = g_hash_table_new_full (NULL, NULL, NULL,
+      (GDestroyNotify) g_object_unref);
+  g_hash_table_foreach (sess->ssrcs[sess->mask_idx],
+      (GHFunc) clone_ssrcs_hashtable, table_copy);
+
   GST_DEBUG
       ("doing RTCP generation %u for %u sources, early %d, may suppress %d",
       sess->generation, data.num_to_report, data.is_early, data.may_suppress);
 
-  /* generate RTCP for all internal sources */
-  g_hash_table_foreach (sess->ssrcs[sess->mask_idx],
-      (GHFunc) generate_rtcp, &data);
+  /* generate RTCP for all internal sources, this might release the
+   * session lock. */
+  g_hash_table_foreach (table_copy, (GHFunc) generate_rtcp, &data);
 
-  g_hash_table_foreach (sess->ssrcs[sess->mask_idx],
-      (GHFunc) generate_twcc, &data);
+  g_hash_table_foreach (table_copy, (GHFunc) generate_twcc, &data);
 
   /* update the generation for all the sources that have been reported */
-  g_hash_table_foreach (sess->ssrcs[sess->mask_idx],
-      (GHFunc) update_generation, &data);
+  g_hash_table_foreach (table_copy, (GHFunc) update_generation, &data);
+
+  g_hash_table_destroy (table_copy);
 
   /* we keep track of the last report time in order to timeout inactive
    * receivers or senders */
@@ -4763,7 +4805,7 @@ done:
       gst_buffer_unref (buffer);
     }
     g_object_unref (source);
-    g_slice_free (ReportOutput, output);
+    g_free (output);
   }
 
   if (all_empty)

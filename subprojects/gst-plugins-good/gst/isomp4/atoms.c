@@ -3948,7 +3948,11 @@ atom_trak_add_audio_entry (AtomTRAK * trak, AtomsContext * context,
   return mp4a;
 }
 
-/* return number of centiframes per second */
+/* Compute a timescale, rounding framerates when the denominator is not
+ * well-known (1001, 1).
+ *
+ * Returns 10000 for variable framerates.
+ */
 guint
 atom_framerate_to_timescale (gint n, gint d)
 {
@@ -3962,7 +3966,11 @@ atom_framerate_to_timescale (gint n, gint d)
         &d);
   }
 
-  return gst_util_uint64_scale (n, 100, d);
+  if (d == 1001) {
+    return n;
+  } else {
+    return gst_util_uint64_scale (n, 100, d);
+  }
 }
 
 static SampleTableEntryTMCD *
@@ -4825,30 +4833,23 @@ atom_trun_set_offset (AtomTRUN * trun, gint32 offset)
 }
 
 static gboolean
-atom_trun_can_append_samples_to_entry (AtomTRUN * trun,
-    TRUNSampleEntry * nentry, guint32 nsamples, guint32 delta, guint32 size,
-    guint32 flags, gint32 data_offset, gint64 pts_offset)
+atom_trun_can_append (AtomTRUN * trun, gint32 data_offset)
 {
-  if (pts_offset != 0)
-    return FALSE;
-  if (nentry->sample_flags != flags)
-    return FALSE;
-  if (trun->data_offset + nentry->sample_size != data_offset)
-    return FALSE;
-  if (nentry->sample_size != size)
-    return FALSE;
-  if (nentry->sample_duration != delta)
+  gsize trun_data_offset_end = trun->data_offset;
+  int i, n;
+
+  if (data_offset == 0)
+    return TRUE;
+
+  n = atom_array_get_len (&trun->entries);
+  for (i = 0; i < n; i++) {
+    TRUNSampleEntry *entry = &atom_array_index (&trun->entries, i);
+    trun_data_offset_end += entry->sample_size;
+  }
+  if (trun_data_offset_end != data_offset)
     return FALSE;
 
-  /* FIXME: this should be TRUE but currently fails on demuxing */
-  return FALSE;
-}
-
-static void
-atom_trun_append_samples (AtomTRUN * trun, TRUNSampleEntry * nentry,
-    guint32 nsamples, guint32 delta, guint32 size)
-{
-  trun->sample_count += nsamples;
+  return TRUE;
 }
 
 static void
@@ -4919,7 +4920,6 @@ atom_traf_add_samples (AtomTRAF * traf, guint32 nsamples,
 {
   GList *l = NULL;
   AtomTRUN *prev_trun, *trun = NULL;
-  TRUNSampleEntry *nentry = NULL;
   guint32 flags;
 
   /* 0x10000 is sample-is-difference-sample flag
@@ -4928,16 +4928,9 @@ atom_traf_add_samples (AtomTRAF * traf, guint32 nsamples,
 
   if (traf->truns) {
     trun = g_list_last (traf->truns)->data;
-    nentry =
-        &atom_array_index (&trun->entries,
-        atom_array_get_len (&trun->entries) - 1);
 
-    if (!atom_trun_can_append_samples_to_entry (trun, nentry, nsamples, delta,
-            size, flags, data_offset, pts_offset)) {
-      /* if we can't add to the previous trun, write a new one */
+    if (!atom_trun_can_append (trun, data_offset))
       trun = NULL;
-      nentry = NULL;
-    }
   }
   prev_trun = trun;
 
@@ -4986,11 +4979,7 @@ atom_traf_add_samples (AtomTRAF * traf, guint32 nsamples,
     }
   }
 
-  if (prev_trun == trun) {
-    atom_trun_append_samples (trun, nentry, nsamples, delta, size);
-  } else {
-    atom_trun_add_samples (trun, nsamples, delta, size, flags, pts_offset);
-  }
+  atom_trun_add_samples (trun, nsamples, delta, size, flags, pts_offset);
 
   if (traf->sdtps)
     atom_sdtp_add_samples (traf->sdtps->data, 0x10 | ((flags & 0xff) >> 4));

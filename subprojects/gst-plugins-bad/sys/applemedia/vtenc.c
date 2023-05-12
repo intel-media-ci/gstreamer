@@ -69,7 +69,9 @@
 #include "coremediabuffer.h"
 #include "corevideobuffer.h"
 #include "vtutil.h"
+#include "helpers.h"
 #include <gst/pbutils/codec-utils.h>
+#include <sys/sysctl.h>
 
 #define VTENC_DEFAULT_BITRATE     0
 #define VTENC_DEFAULT_FRAME_REORDERING TRUE
@@ -106,7 +108,7 @@ const CFStringRef kVTCompressionPropertyKey_Quality = CFSTR ("Quality");
 #ifdef HAVE_VIDEOTOOLBOX_10_9_6
 extern OSStatus
 VTCompressionSessionPrepareToEncodeFrames (VTCompressionSessionRef session)
-    __attribute__ ((weak_import));
+    __attribute__((weak_import));
 #endif
 
 /* This property key is currently completely undocumented. The only way you can
@@ -201,8 +203,7 @@ static GstStaticCaps sink_caps =
 GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE ("{ NV12, I420 }"));
 #else
 static GstStaticCaps sink_caps =
-GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE
-    ("{ AYUV64, UYVY, NV12, I420, ARGB64_BE }"));
+GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE ("{ AYUV64, UYVY, NV12, I420 }"));
 #endif
 
 
@@ -231,9 +232,37 @@ gst_vtenc_base_init (GstVTEncClass * klass)
 
   {
     GstCaps *caps = gst_static_caps_get (&sink_caps);
-    /* RGBA64_LE is kCVPixelFormatType_64RGBALE, only available on macOS 11.3+ */
-    if (GST_VTUTIL_HAVE_64ARGBALE)
-      caps = gst_vtutil_caps_append_video_format (caps, "RGBA64_LE");
+#ifndef HAVE_IOS
+    gboolean enable_argb = TRUE;
+    int retval;
+    char cpu_name[30];
+    size_t cpu_len = 30;
+
+    if (__builtin_available (macOS 13.0, *)) {
+      /* Can't negate a __builtin_available check */
+    } else {
+      /* Disable ARGB64/RGBA64 if we're on M1 Pro/Max and macOS < 13.0 
+       * due to a bug within VideoToolbox which causes encoding to fail. */
+      retval = sysctlbyname ("machdep.cpu.brand_string", &cpu_name, &cpu_len,
+          NULL, 0);
+
+      if (retval == 0 &&
+          (strstr (cpu_name, "M1 Pro") != NULL ||
+              strstr (cpu_name, "M1 Max") != NULL)) {
+        GST_WARNING
+            ("Disabling ARGB64/RGBA64 caps due to a bug in VideoToolbox "
+            "on M1 Pro/Max running macOS < 13.0.");
+        enable_argb = FALSE;
+      }
+    }
+
+    if (enable_argb) {
+      caps = gst_vtutil_caps_append_video_format (caps, "ARGB64_BE");
+      /* RGBA64_LE is kCVPixelFormatType_64RGBALE, only available on macOS 11.3+ */
+      if (GST_APPLEMEDIA_HAVE_64RGBALE)
+        caps = gst_vtutil_caps_append_video_format (caps, "RGBA64_LE");
+    }
+#endif
     gst_element_class_add_pad_template (element_class,
         gst_pad_template_new ("sink", GST_PAD_SINK, GST_PAD_ALWAYS, caps));
   }
@@ -1208,11 +1237,22 @@ gst_vtenc_create_session (GstVTEnc * self)
   const GstVTEncoderDetails *codec_details =
       GST_VTENC_CLASS_GET_CODEC_DETAILS (G_OBJECT_GET_CLASS (self));
 
+  /* Apple's M1 hardware encoding fails when provided with an interlaced ProRes source.
+   * It's most likely a bug in VideoToolbox, as no such limitation has been officially mentioned anywhere.
+   * For now let's disable HW encoding entirely when such case occurs. */
+  gboolean enable_hw = !(GST_VIDEO_INFO_IS_INTERLACED (&self->video_info)
+      && codec_details->format_id == GST_kCMVideoCodecType_Some_AppleProRes);
+
+  if (!enable_hw)
+    GST_WARNING_OBJECT (self,
+        "Interlaced content detected, disabling HW-accelerated encoding due to https://gitlab.freedesktop.org/gstreamer/gstreamer/-/issues/1429");
+
   encoder_spec =
       CFDictionaryCreateMutable (NULL, 0, &kCFTypeDictionaryKeyCallBacks,
       &kCFTypeDictionaryValueCallBacks);
   gst_vtutil_dict_set_boolean (encoder_spec,
-      kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder, true);
+      kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder,
+      enable_hw);
   if (codec_details->require_hardware)
     gst_vtutil_dict_set_boolean (encoder_spec,
         kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder,
@@ -1605,25 +1645,15 @@ gst_vtenc_encode_frame (GstVTEnc * self, GstVideoCodecFrame * frame)
   if (pbuf == NULL) {
     GstVideoFrame inframe, outframe;
     GstBuffer *outbuf;
-    OSType pixel_format_type;
     CVReturn cv_ret;
+    OSType pixel_format_type =
+        gst_video_format_to_cvpixelformat (GST_VIDEO_INFO_FORMAT
+        (&self->video_info));
 
     /* FIXME: iOS has special stride requirements that we don't know yet.
      * Copy into a newly allocated pixelbuffer for now. Probably makes
      * sense to create a buffer pool around these at some point.
      */
-
-    switch (GST_VIDEO_INFO_FORMAT (&self->video_info)) {
-      case GST_VIDEO_FORMAT_I420:
-        pixel_format_type = kCVPixelFormatType_420YpCbCr8Planar;
-        break;
-      case GST_VIDEO_FORMAT_NV12:
-        pixel_format_type = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
-        break;
-      default:
-        g_assert_not_reached ();
-    }
-
     if (!gst_video_frame_map (&inframe, &self->video_info, frame->input_buffer,
             GST_MAP_READ)) {
       GST_ERROR_OBJECT (self, "failed to map input buffer");
@@ -1675,12 +1705,14 @@ gst_vtenc_encode_frame (GstVTEnc * self, GstVideoCodecFrame * frame)
     }
 
     {
+      OSType pixel_format_type =
+          gst_video_format_to_cvpixelformat (GST_VIDEO_INFO_FORMAT
+          (&self->video_info));
       const size_t num_planes = GST_VIDEO_FRAME_N_PLANES (&vframe->videoframe);
       void *plane_base_addresses[GST_VIDEO_MAX_PLANES];
       size_t plane_widths[GST_VIDEO_MAX_PLANES];
       size_t plane_heights[GST_VIDEO_MAX_PLANES];
       size_t plane_bytes_per_row[GST_VIDEO_MAX_PLANES];
-      OSType pixel_format_type;
       size_t i;
 
       for (i = 0; i < num_planes; i++) {
@@ -1692,37 +1724,6 @@ gst_vtenc_encode_frame (GstVTEnc * self, GstVideoCodecFrame * frame)
             GST_VIDEO_FRAME_COMP_STRIDE (&vframe->videoframe, i);
         plane_bytes_per_row[i] =
             GST_VIDEO_FRAME_COMP_STRIDE (&vframe->videoframe, i);
-      }
-
-      switch (GST_VIDEO_INFO_FORMAT (&self->video_info)) {
-        case GST_VIDEO_FORMAT_ARGB64_BE:
-          pixel_format_type = kCVPixelFormatType_64ARGB;
-          break;
-        case GST_VIDEO_FORMAT_AYUV64:
-/* This is fine for now because Apple only ships LE devices */
-#if G_BYTE_ORDER != G_LITTLE_ENDIAN
-#error "AYUV64 is NE but kCVPixelFormatType_4444AYpCbCr16 is LE"
-#endif
-          pixel_format_type = kCVPixelFormatType_4444AYpCbCr16;
-          break;
-        case GST_VIDEO_FORMAT_RGBA64_LE:
-          if (GST_VTUTIL_HAVE_64ARGBALE)
-            pixel_format_type = kCVPixelFormatType_64RGBALE;
-          else
-            /* Codepath will never be hit on macOS older than Big Sur (11.3) */
-            g_assert_not_reached ();
-          break;
-        case GST_VIDEO_FORMAT_I420:
-          pixel_format_type = kCVPixelFormatType_420YpCbCr8Planar;
-          break;
-        case GST_VIDEO_FORMAT_NV12:
-          pixel_format_type = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
-          break;
-        case GST_VIDEO_FORMAT_UYVY:
-          pixel_format_type = kCVPixelFormatType_422YpCbCr8;
-          break;
-        default:
-          g_assert_not_reached ();
       }
 
       cv_ret = CVPixelBufferCreateWithPlanarBytes (NULL,

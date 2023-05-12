@@ -42,6 +42,7 @@
 #include <components/Component.h>
 #include <components/VideoEncoderHEVC.h>
 #include <core/Factory.h>
+#include <set>
 #include <string>
 #include <vector>
 #include <string.h>
@@ -74,6 +75,9 @@ typedef struct
   amf_int64 max_gop_size;
   amf_int64 default_gop_size;
   guint valign;
+  gboolean pre_encode_supported;
+  gboolean smart_access_supported;
+  GstAmfEncoderPASupportedOptions pa_supported;
 } GstAmfH265EncDeviceCaps;
 
 /**
@@ -272,6 +276,23 @@ enum
   PROP_QP_P,
   PROP_REF_FRAMES,
   PROP_AUD,
+  PROP_SMART_ACCESS,
+  PROP_PRE_ENCODE,
+  PROP_PRE_ANALYSIS,
+  PROP_PA_ACTIVITY_TYPE,
+  PROP_PA_SCENE_CHANGE_DETECTION,
+  PROP_PA_SCENE_CHANGE_DETECTION_SENSITIVITY,
+  PROP_PA_STATIC_SCENE_DETECTION,
+  PROP_PA_STATIC_SCENE_DETECTION_SENSITIVITY,
+  PROP_PA_INITIAL_QP,
+  PROP_PA_MAX_QP,
+  PROP_PA_CAQ_STRENGTH,
+  PROP_PA_FRAME_SAD,
+  PROP_PA_LTR,
+  PROP_PA_LOOKAHEAD_BUFFER_DEPTH,
+  PROP_PA_PAQ_MODE,
+  PROP_PA_TAQ_MODE,
+  PROP_PA_HQMB_MODE,
 };
 
 #define DEFAULT_USAGE AMF_VIDEO_ENCODER_HEVC_USAGE_TRANSCODING
@@ -281,9 +302,11 @@ enum
 #define DEFAULT_MAX_BITRATE 0
 #define DEFAULT_MIN_MAX_QP -1
 #define DEFAULT_AUD TRUE
+#define DEFAULT_SMART_ACCESS FALSE
+#define DEFAULT_PRE_ENCODE FALSE
 
 #define DOC_SINK_CAPS_COMM \
-    "format = (string) NV12, " \
+    "format = (string) {NV12, P010_10LE}, " \
     "width = (int) [ 128, 4096 ], height = (int) [ 128, 4096 ]"
 
 #define DOC_SINK_CAPS \
@@ -292,7 +315,7 @@ enum
 
 #define DOC_SRC_CAPS \
     "video/x-h265, width = (int) [ 128, 4096 ], height = (int) [ 128, 4096 ], " \
-    "profile = (string) main, stream-format = (string) byte-stream, " \
+    "profile = (string) {main, main-10}, stream-format = (string) byte-stream, " \
     "alignment = (string) au"
 
 typedef struct _GstAmfH265Enc
@@ -317,6 +340,9 @@ typedef struct _GstAmfH265Enc
   guint ref_frames;
 
   gboolean aud;
+  gboolean smart_access;
+  gboolean pre_encode;
+  GstAmfEncoderPreAnalysis pa;
 } GstAmfH265Enc;
 
 typedef struct _GstAmfH265EncClass
@@ -336,8 +362,10 @@ static void gst_amf_h265_enc_set_property (GObject * object, guint prop_id,
     const GValue * value, GParamSpec * pspec);
 static void gst_amf_h265_enc_get_property (GObject * object, guint prop_id,
     GValue * value, GParamSpec * pspec);
+static GstCaps *gst_amf_h265_enc_getcaps (GstVideoEncoder * encoder,
+    GstCaps * filter);
 static gboolean gst_amf_h265_enc_set_format (GstAmfEncoder * encoder,
-    GstVideoCodecState * state, gpointer component);
+    GstVideoCodecState * state, gpointer component, guint * num_reorder_frames);
 static gboolean gst_amf_h265_enc_set_output_state (GstAmfEncoder * encoder,
     GstVideoCodecState * state, gpointer component);
 static gboolean gst_amf_h265_enc_set_surface_prop (GstAmfEncoder * encoder,
@@ -351,11 +379,15 @@ gst_amf_h265_enc_class_init (GstAmfH265EncClass * klass, gpointer data)
 {
   GObjectClass *object_class = G_OBJECT_CLASS (klass);
   GstElementClass *element_class = GST_ELEMENT_CLASS (klass);
+  GstVideoEncoderClass *videoenc_class = GST_VIDEO_ENCODER_CLASS (klass);
   GstAmfEncoderClass *amf_class = GST_AMF_ENCODER_CLASS (klass);
   GstAmfH265EncClassData *cdata = (GstAmfH265EncClassData *) data;
   GstAmfH265EncDeviceCaps *dev_caps = &cdata->dev_caps;
+  GstAmfEncoderPASupportedOptions *pa_supported = &dev_caps->pa_supported;
   GParamFlags param_flags = (GParamFlags) (G_PARAM_READWRITE |
       GST_PARAM_MUTABLE_PLAYING | G_PARAM_STATIC_STRINGS);
+  GParamFlags pa_param_flags = (GParamFlags) (G_PARAM_READWRITE |
+      G_PARAM_STATIC_STRINGS | GST_PARAM_CONDITIONALLY_AVAILABLE);
   GstPadTemplate *pad_templ;
   GstCaps *doc_caps;
 
@@ -426,6 +458,129 @@ gst_amf_h265_enc_class_init (GstAmfH265EncClass * klass, gpointer data)
   g_object_class_install_property (object_class, PROP_AUD,
       g_param_spec_boolean ("aud", "AUD",
           "Use AU (Access Unit) delimiter", DEFAULT_AUD, param_flags));
+  if (cdata->dev_caps.pre_encode_supported) {
+    g_object_class_install_property (object_class, PROP_PRE_ENCODE,
+        g_param_spec_boolean ("pre-encode", "Pre-encode",
+            "Enable pre-encode", DEFAULT_PRE_ENCODE,
+            (GParamFlags) (param_flags | GST_PARAM_CONDITIONALLY_AVAILABLE)));
+  }
+
+  if (cdata->dev_caps.smart_access_supported) {
+    g_object_class_install_property (object_class, PROP_SMART_ACCESS,
+        g_param_spec_boolean ("smart-access-video", "Smart Access Video",
+            "Enable AMF SmartAccess Video feature for optimal distribution"
+            " between multiple AMD hardware instances", DEFAULT_SMART_ACCESS,
+            (GParamFlags) (G_PARAM_READWRITE |
+                GST_PARAM_CONDITIONALLY_AVAILABLE |
+                GST_PARAM_MUTABLE_PLAYING | G_PARAM_STATIC_STRINGS)));
+  }
+
+  if (dev_caps->pre_analysis) {
+    g_object_class_install_property (object_class, PROP_PRE_ANALYSIS,
+        g_param_spec_boolean ("pre-analysis", "Pre-analysis",
+            "Enable pre-analysis", DEFAULT_PRE_ANALYSIS, param_flags));
+    if (pa_supported->activity_type) {
+      g_object_class_install_property (object_class, PROP_PA_ACTIVITY_TYPE,
+          g_param_spec_enum ("pa-activity-type", "Pre-analysis activity type",
+              "Set the type of activity analysis for pre-analysis",
+              GST_TYPE_AMF_ENC_PA_ACTIVITY_TYPE, DEFAULT_PA_ACTIVITY_TYPE,
+              pa_param_flags));
+    }
+    if (pa_supported->scene_change_detection) {
+      g_object_class_install_property (object_class,
+          PROP_PA_SCENE_CHANGE_DETECTION,
+          g_param_spec_boolean ("pa-scene-change-detection",
+              "Pre-analysis scene change detection",
+              "Enable scene change detection for pre-analysis",
+              DEFAULT_PA_SCENE_CHANGE_DETECTION, pa_param_flags));
+    }
+    if (pa_supported->scene_change_detection_sensitivity) {
+      g_object_class_install_property (object_class,
+          PROP_PA_SCENE_CHANGE_DETECTION_SENSITIVITY,
+          g_param_spec_enum ("pa-scene-change-detection-sensitivity",
+              "Pre-analysis scene change detection sensitivity",
+              "Set the sensitivity of scene change detection for pre-analysis",
+              GST_TYPE_AMF_ENC_PA_SCENE_CHANGE_DETECTION_SENSITIVITY,
+              DEFAULT_PA_SCENE_CHANGE_DETECTION_SENSITIVITY, pa_param_flags));
+    }
+    if (pa_supported->static_scene_detection) {
+      g_object_class_install_property (object_class,
+          PROP_PA_STATIC_SCENE_DETECTION,
+          g_param_spec_boolean ("pa-static-scene-detection",
+              "Pre-analysis static scene detection",
+              "Enable static scene detection for pre-analysis",
+              DEFAULT_PA_STATIC_SCENE_DETECTION, pa_param_flags));
+    }
+    if (pa_supported->static_scene_detection_sensitivity) {
+      g_object_class_install_property (object_class,
+          PROP_PA_STATIC_SCENE_DETECTION_SENSITIVITY,
+          g_param_spec_enum ("pa-static-scene-detection-sensitivity",
+              "Pre-analysis static scene detection sensitivity",
+              "Set the sensitivity of static scene detection for pre-analysis",
+              GST_TYPE_AMF_ENC_PA_STATIC_SCENE_DETECTION_SENSITIVITY,
+              DEFAULT_PA_STATIC_SCENE_DETECTION_SENSITIVITY, pa_param_flags));
+    }
+    if (pa_supported->initial_qp) {
+      g_object_class_install_property (object_class, PROP_PA_INITIAL_QP,
+          g_param_spec_uint ("pa-initial-qp", "Pre-analysis initial QP",
+              "The QP value that is used immediately after a scene change", 0,
+              51, DEFAULT_PA_INITIAL_QP, pa_param_flags));
+    }
+    if (pa_supported->max_qp) {
+      g_object_class_install_property (object_class, PROP_PA_MAX_QP,
+          g_param_spec_uint ("pa-max-qp", "Pre-analysis max QP",
+              "The QP threshold to allow a skip frame", 0, 51,
+              DEFAULT_PA_MAX_QP, pa_param_flags));
+    }
+    if (pa_supported->caq_strength) {
+      g_object_class_install_property (object_class, PROP_PA_CAQ_STRENGTH,
+          g_param_spec_enum ("pa-caq-strength", "Pre-analysis CAQ strength",
+              "Content Adaptive Quantization strength for pre-analysis",
+              GST_TYPE_AMF_ENC_PA_CAQ_STRENGTH, DEFAULT_PA_CAQ_STRENGTH,
+              pa_param_flags));
+    }
+    if (pa_supported->frame_sad) {
+      g_object_class_install_property (object_class, PROP_PA_FRAME_SAD,
+          g_param_spec_boolean ("pa-frame-sad", "Pre-analysis SAD algorithm",
+              "Enable Frame SAD algorithm", DEFAULT_PA_FRAME_SAD,
+              pa_param_flags));
+    }
+    if (pa_supported->ltr) {
+      g_object_class_install_property (object_class, PROP_PA_LTR,
+          g_param_spec_boolean ("pa-ltr", "Pre-analysis LTR",
+              "Enable long term reference frame management", DEFAULT_PA_LTR,
+              pa_param_flags));
+    }
+    if (pa_supported->lookahead_buffer_depth) {
+      g_object_class_install_property (object_class,
+          PROP_PA_LOOKAHEAD_BUFFER_DEPTH,
+          g_param_spec_uint ("pa-lookahead-buffer-depth",
+              "Pre-analysis lookahead buffer depth",
+              "Set the PA lookahead buffer size", 0, 41,
+              DEFAULT_PA_LOOKAHEAD_BUFFER_DEPTH, pa_param_flags));
+    }
+    if (pa_supported->paq_mode) {
+      g_object_class_install_property (object_class, PROP_PA_PAQ_MODE,
+          g_param_spec_enum ("pa-paq-mode", "Pre-analysis PAQ mode",
+              "Set the perceptual adaptive quantization mode",
+              GST_TYPE_AMF_ENC_PA_PAQ_MODE, DEFAULT_PA_PAQ_MODE,
+              pa_param_flags));
+    }
+    if (pa_supported->taq_mode) {
+      g_object_class_install_property (object_class, PROP_PA_TAQ_MODE,
+          g_param_spec_enum ("pa-taq-mode", "Pre-analysis TAQ mode",
+              "Set the temporal adaptive quantization mode",
+              GST_TYPE_AMF_ENC_PA_TAQ_MODE, DEFAULT_PA_TAQ_MODE,
+              pa_param_flags));
+    }
+    if (pa_supported->hmqb_mode) {
+      g_object_class_install_property (object_class, PROP_PA_HQMB_MODE,
+          g_param_spec_enum ("pa-hqmb-mode", "Pre-analysis HQMB mode",
+              "Set the PA high motion quality boost mode",
+              GST_TYPE_AMF_ENC_PA_HQMB_MODE, DEFAULT_PA_HQMB_MODE,
+              pa_param_flags));
+    }
+  }
 
   gst_element_class_set_metadata (element_class,
       "AMD AMF H.265 Video Encoder",
@@ -446,6 +601,8 @@ gst_amf_h265_enc_class_init (GstAmfH265EncClass * klass, gpointer data)
   gst_pad_template_set_documentation_caps (pad_templ, doc_caps);
   gst_caps_unref (doc_caps);
   gst_element_class_add_pad_template (element_class, pad_templ);
+
+  videoenc_class->getcaps = GST_DEBUG_FUNCPTR (gst_amf_h265_enc_getcaps);
 
   amf_class->set_format = GST_DEBUG_FUNCPTR (gst_amf_h265_enc_set_format);
   amf_class->set_output_state =
@@ -497,6 +654,26 @@ gst_amf_h265_enc_init (GstAmfH265Enc * self)
   self->qp_p = (guint) dev_caps->default_qp_p;
   self->ref_frames = (guint) dev_caps->min_ref_frames;
   self->aud = DEFAULT_AUD;
+  self->smart_access = DEFAULT_SMART_ACCESS;
+  self->pre_encode = DEFAULT_PRE_ENCODE;
+  // Init pre-analysis options
+  self->pa.pre_analysis = DEFAULT_PRE_ANALYSIS;
+  self->pa.activity_type = DEFAULT_PA_ACTIVITY_TYPE;
+  self->pa.scene_change_detection = DEFAULT_PA_SCENE_CHANGE_DETECTION;
+  self->pa.scene_change_detection_sensitivity =
+      DEFAULT_PA_SCENE_CHANGE_DETECTION_SENSITIVITY;
+  self->pa.static_scene_detection = DEFAULT_PA_STATIC_SCENE_DETECTION;
+  self->pa.static_scene_detection_sensitivity =
+      DEFAULT_PA_STATIC_SCENE_DETECTION_SENSITIVITY;
+  self->pa.initial_qp = DEFAULT_PA_INITIAL_QP;
+  self->pa.max_qp = DEFAULT_PA_MAX_QP;
+  self->pa.caq_strength = DEFAULT_PA_CAQ_STRENGTH;
+  self->pa.frame_sad = DEFAULT_PA_FRAME_SAD;
+  self->pa.ltr = DEFAULT_PA_LTR;
+  self->pa.lookahead_buffer_depth = DEFAULT_PA_LOOKAHEAD_BUFFER_DEPTH;
+  self->pa.paq_mode = DEFAULT_PA_PAQ_MODE;
+  self->pa.taq_mode = DEFAULT_PA_TAQ_MODE;
+  self->pa.hmqb_mode = DEFAULT_PA_HQMB_MODE;
 }
 
 static void
@@ -537,6 +714,18 @@ static void
 update_enum (GstAmfH265Enc * self, gint * old_val, const GValue * new_val)
 {
   gint val = g_value_get_enum (new_val);
+
+  if (*old_val == val)
+    return;
+
+  *old_val = val;
+  self->property_updated = TRUE;
+}
+
+static void
+update_bool (GstAmfH265Enc * self, gboolean * old_val, const GValue * new_val)
+{
+  gboolean val = g_value_get_boolean (new_val);
 
   if (*old_val == val)
     return;
@@ -595,6 +784,56 @@ gst_amf_h265_enc_set_property (GObject * object, guint prop_id,
     case PROP_AUD:
       /* This is per frame property, don't need to reset encoder */
       self->aud = g_value_get_boolean (value);
+      break;
+    case PROP_SMART_ACCESS:
+      update_bool (self, &self->smart_access, value);
+      break;
+    case PROP_PRE_ENCODE:
+      update_bool (self, &self->pre_encode, value);
+      break;
+    case PROP_PRE_ANALYSIS:
+      update_bool (self, &self->pa.pre_analysis, value);
+      break;
+    case PROP_PA_ACTIVITY_TYPE:
+      update_enum (self, &self->pa.activity_type, value);
+      break;
+    case PROP_PA_SCENE_CHANGE_DETECTION:
+      update_bool (self, &self->pa.scene_change_detection, value);
+      break;
+    case PROP_PA_SCENE_CHANGE_DETECTION_SENSITIVITY:
+      update_enum (self, &self->pa.scene_change_detection_sensitivity, value);
+      break;
+    case PROP_PA_STATIC_SCENE_DETECTION:
+      update_bool (self, &self->pa.static_scene_detection, value);
+      break;
+    case PROP_PA_STATIC_SCENE_DETECTION_SENSITIVITY:
+      update_enum (self, &self->pa.static_scene_detection_sensitivity, value);
+      break;
+    case PROP_PA_INITIAL_QP:
+      update_uint (self, &self->pa.initial_qp, value);
+      break;
+    case PROP_PA_MAX_QP:
+      update_uint (self, &self->pa.max_qp, value);
+      break;
+    case PROP_PA_CAQ_STRENGTH:
+      update_enum (self, &self->pa.caq_strength, value);
+      break;
+    case PROP_PA_FRAME_SAD:
+      update_bool (self, &self->pa.frame_sad, value);
+    case PROP_PA_LTR:
+      update_bool (self, &self->pa.ltr, value);
+      break;
+    case PROP_PA_LOOKAHEAD_BUFFER_DEPTH:
+      update_uint (self, &self->pa.lookahead_buffer_depth, value);
+      break;
+    case PROP_PA_PAQ_MODE:
+      update_enum (self, &self->pa.paq_mode, value);
+      break;
+    case PROP_PA_TAQ_MODE:
+      update_enum (self, &self->pa.taq_mode, value);
+      break;
+    case PROP_PA_HQMB_MODE:
+      update_enum (self, &self->pa.hmqb_mode, value);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -656,23 +895,183 @@ gst_amf_h265_enc_get_property (GObject * object, guint prop_id,
     case PROP_AUD:
       g_value_set_boolean (value, self->aud);
       break;
+    case PROP_SMART_ACCESS:
+      g_value_set_boolean (value, self->smart_access);
+      break;
+    case PROP_PRE_ENCODE:
+      g_value_set_boolean (value, self->pre_encode);
+      break;
+    case PROP_PRE_ANALYSIS:
+      g_value_set_boolean (value, self->pa.pre_analysis);
+      break;
+    case PROP_PA_ACTIVITY_TYPE:
+      g_value_set_enum (value, self->pa.activity_type);
+      break;
+    case PROP_PA_SCENE_CHANGE_DETECTION:
+      g_value_set_boolean (value, self->pa.scene_change_detection);
+      break;
+    case PROP_PA_SCENE_CHANGE_DETECTION_SENSITIVITY:
+      g_value_set_enum (value, self->pa.scene_change_detection_sensitivity);
+      break;
+    case PROP_PA_STATIC_SCENE_DETECTION:
+      g_value_set_boolean (value, self->pa.static_scene_detection);
+      break;
+    case PROP_PA_STATIC_SCENE_DETECTION_SENSITIVITY:
+      g_value_set_enum (value, self->pa.static_scene_detection_sensitivity);
+      break;
+    case PROP_PA_INITIAL_QP:
+      g_value_set_uint (value, self->pa.initial_qp);
+      break;
+    case PROP_PA_MAX_QP:
+      g_value_set_uint (value, self->pa.max_qp);
+      break;
+    case PROP_PA_CAQ_STRENGTH:
+      g_value_set_enum (value, self->pa.caq_strength);
+      break;
+    case PROP_PA_FRAME_SAD:
+      g_value_set_boolean (value, self->pa.frame_sad);
+      break;
+    case PROP_PA_LTR:
+      g_value_set_boolean (value, self->pa.ltr);
+      break;
+    case PROP_PA_LOOKAHEAD_BUFFER_DEPTH:
+      g_value_set_uint (value, self->pa.lookahead_buffer_depth);
+      break;
+    case PROP_PA_PAQ_MODE:
+      g_value_set_enum (value, self->pa.paq_mode);
+      break;
+    case PROP_PA_TAQ_MODE:
+      g_value_set_enum (value, self->pa.taq_mode);
+      break;
+    case PROP_PA_HQMB_MODE:
+      g_value_set_enum (value, self->pa.hmqb_mode);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
   }
 }
 
-static gboolean
-gst_amf_h265_enc_set_format (GstAmfEncoder * encoder,
-    GstVideoCodecState * state, gpointer component)
+static void
+gst_amf_h265_enc_get_downstream_profiles (GstAmfH265Enc * self,
+    std::set < std::string > &downstream_profiles)
+{
+  GstCaps *allowed_caps;
+  GstStructure *s;
+
+  allowed_caps = gst_pad_get_allowed_caps (GST_VIDEO_ENCODER_SRC_PAD (self));
+
+  if (!allowed_caps || gst_caps_is_empty (allowed_caps) ||
+      gst_caps_is_any (allowed_caps)) {
+    gst_clear_caps (&allowed_caps);
+
+    return;
+  }
+
+  for (guint i = 0; i < gst_caps_get_size (allowed_caps); i++) {
+    const GValue *profile_value;
+    const gchar *profile;
+
+    s = gst_caps_get_structure (allowed_caps, i);
+    profile_value = gst_structure_get_value (s, "profile");
+    if (!profile_value)
+      continue;
+
+    if (GST_VALUE_HOLDS_LIST (profile_value)) {
+      for (guint j = 0; j < gst_value_list_get_size (profile_value); j++) {
+        const GValue *p = gst_value_list_get_value (profile_value, j);
+
+        if (!G_VALUE_HOLDS_STRING (p))
+          continue;
+
+        profile = g_value_get_string (p);
+        if (profile)
+          downstream_profiles.insert (profile);
+      }
+    } else if (G_VALUE_HOLDS_STRING (profile_value)) {
+      profile = g_value_get_string (profile_value);
+      if (profile)
+        downstream_profiles.insert (profile);
+    }
+  }
+
+  gst_clear_caps (&allowed_caps);
+}
+
+static GstCaps *
+gst_amf_h265_enc_getcaps (GstVideoEncoder * encoder, GstCaps * filter)
 {
   GstAmfH265Enc *self = GST_AMF_H265_ENC (encoder);
+  GstCaps *template_caps;
+  GstCaps *supported_caps;
+  std::set < std::string > downstream_profiles;
+  std::set < std::string > allowed_formats;
+
+  gst_amf_h265_enc_get_downstream_profiles (self, downstream_profiles);
+
+  GST_DEBUG_OBJECT (self, "Downstream specified %" G_GSIZE_FORMAT " profiles",
+      downstream_profiles.size ());
+
+  if (downstream_profiles.size () == 0)
+    return gst_video_encoder_proxy_getcaps (encoder, NULL, filter);
+
+  /* *INDENT-OFF* */
+  for (const auto &iter : downstream_profiles) {
+    if (iter == "main") {
+      allowed_formats.insert("NV12");
+    } else if (iter == "main-10") {
+      allowed_formats.insert("P010_10LE");
+    }
+  }
+  /* *INDENT-ON* */
+  template_caps = gst_pad_get_pad_template_caps (encoder->sinkpad);
+  template_caps = gst_caps_make_writable (template_caps);
+
+  GValue formats = G_VALUE_INIT;
+
+  g_value_init (&formats, GST_TYPE_LIST);
+
+  /* *INDENT-OFF* */
+  for (const auto &iter: allowed_formats) {
+    GValue val = G_VALUE_INIT;
+    g_value_init (&val, G_TYPE_STRING);
+
+    g_value_set_string (&val, iter.c_str());
+    gst_value_list_append_and_take_value (&formats, &val);
+  }
+  /* *INDENT-ON* */
+
+  gst_caps_set_value (template_caps, "format", &formats);
+  g_value_unset (&formats);
+  supported_caps = gst_video_encoder_proxy_getcaps (encoder,
+      template_caps, filter);
+  gst_caps_unref (template_caps);
+
+  GST_DEBUG_OBJECT (self, "Returning %" GST_PTR_FORMAT, supported_caps);
+
+  return supported_caps;
+}
+
+static gboolean
+gst_amf_h265_enc_set_format (GstAmfEncoder * encoder,
+    GstVideoCodecState * state, gpointer component, guint * num_reorder_frames)
+{
+  GstAmfH265Enc *self = GST_AMF_H265_ENC (encoder);
+  GstAmfH265EncClass *klass = GST_AMF_H265_ENC_GET_CLASS (self);
+  GstAmfH265EncDeviceCaps *dev_caps = &klass->dev_caps;
   AMFComponent *comp = (AMFComponent *) component;
   GstVideoInfo *info = &state->info;
+  const GstVideoColorimetry *cinfo = &info->colorimetry;
+  amf_int64 color_profile;
   AMF_RESULT result;
   AMFRate framerate;
   AMFRatio aspect_ratio;
   amf_int64 int64_val;
+  amf_int64 profile = AMF_VIDEO_ENCODER_HEVC_PROFILE_MAIN;
+  amf_int64 color_depth;
+  AMF_SURFACE_FORMAT surface_format;
+  std::set < std::string > downstream_profiles;
+
   AMF_VIDEO_ENCODER_HEVC_RATE_CONTROL_METHOD_ENUM rc_mode;
 
   g_mutex_lock (&self->prop_lock);
@@ -702,10 +1101,50 @@ gst_amf_h265_enc_set_format (GstAmfEncoder * encoder,
     }
   }
 
+  gst_amf_h265_enc_get_downstream_profiles (self, downstream_profiles);
+
+  if (downstream_profiles.empty ()) {
+    GST_ERROR_OBJECT (self, "Unable to get downstream profile");
+    goto error;
+  }
+
+  if (GST_VIDEO_INFO_FORMAT (info) == GST_VIDEO_FORMAT_P010_10LE) {
+    if (downstream_profiles.find ("main-10") == downstream_profiles.end ()) {
+      GST_ERROR_OBJECT (self, "Downstream does not support main-10 profile");
+      goto error;
+    } else {
+      color_depth = AMF_COLOR_BIT_DEPTH_10;
+      surface_format = AMF_SURFACE_P010;
+      profile = AMF_VIDEO_ENCODER_HEVC_PROFILE_MAIN_10;
+    }
+  } else if (GST_VIDEO_INFO_FORMAT (info) == GST_VIDEO_FORMAT_NV12) {
+    if (downstream_profiles.find ("main") == downstream_profiles.end ()) {
+      GST_ERROR_OBJECT (self, "Downstream does not support main profile");
+      goto error;
+    } else {
+      color_depth = AMF_COLOR_BIT_DEPTH_8;
+      surface_format = AMF_SURFACE_NV12;
+      profile = AMF_VIDEO_ENCODER_HEVC_PROFILE_MAIN;
+    }
+  } else {
+    GST_ERROR_OBJECT (self, "Unexpected format %s",
+        gst_video_format_to_string (GST_VIDEO_INFO_FORMAT (info)));
+    g_assert_not_reached ();
+    goto error;
+  }
+
   result = comp->SetProperty (AMF_VIDEO_ENCODER_HEVC_PROFILE,
-      (amf_int64) AMF_VIDEO_ENCODER_HEVC_PROFILE_MAIN);
+      (amf_int64) profile);
   if (result != AMF_OK) {
     GST_ERROR_OBJECT (self, "Failed to set profile, result %"
+        GST_AMF_RESULT_FORMAT, GST_AMF_RESULT_ARGS (result));
+    goto error;
+  }
+
+  result =
+      comp->SetProperty (AMF_VIDEO_ENCODER_HEVC_COLOR_BIT_DEPTH, color_depth);
+  if (result != AMF_OK) {
+    GST_ERROR_OBJECT (self, "Failed to set bit depth, result %"
         GST_AMF_RESULT_FORMAT, GST_AMF_RESULT_ARGS (result));
     goto error;
   }
@@ -728,7 +1167,7 @@ gst_amf_h265_enc_set_format (GstAmfEncoder * encoder,
     goto error;
   }
 
-  if (info->colorimetry.range == GST_VIDEO_COLOR_RANGE_0_255)
+  if (cinfo->range == GST_VIDEO_COLOR_RANGE_0_255)
     int64_val = AMF_VIDEO_ENCODER_HEVC_NOMINAL_RANGE_FULL;
   else
     int64_val = AMF_VIDEO_ENCODER_HEVC_NOMINAL_RANGE_STUDIO;
@@ -740,7 +1179,144 @@ gst_amf_h265_enc_set_format (GstAmfEncoder * encoder,
     goto error;
   }
 
-  result = comp->Init (AMF_SURFACE_NV12, info->width, info->height);
+  if (dev_caps->smart_access_supported) {
+    result =
+        comp->SetProperty (AMF_VIDEO_ENCODER_HEVC_ENABLE_SMART_ACCESS_VIDEO,
+        (amf_bool) self->smart_access);
+    if (result != AMF_OK) {
+      GST_WARNING_OBJECT (self, "Failed to set smart access video, result %"
+          GST_AMF_RESULT_FORMAT, GST_AMF_RESULT_ARGS (result));
+    }
+  }
+  color_profile = AMF_VIDEO_CONVERTER_COLOR_PROFILE_UNKNOWN;
+  switch (cinfo->matrix) {
+    case GST_VIDEO_COLOR_MATRIX_BT601:
+      if (cinfo->range == GST_VIDEO_COLOR_RANGE_0_255) {
+        color_profile = AMF_VIDEO_CONVERTER_COLOR_PROFILE_FULL_601;
+      } else {
+        color_profile = AMF_VIDEO_CONVERTER_COLOR_PROFILE_601;
+      }
+      break;
+    case GST_VIDEO_COLOR_MATRIX_BT709:
+      if (cinfo->range == GST_VIDEO_COLOR_RANGE_0_255) {
+        color_profile = AMF_VIDEO_CONVERTER_COLOR_PROFILE_FULL_709;
+      } else {
+        color_profile = AMF_VIDEO_CONVERTER_COLOR_PROFILE_709;
+      }
+      break;
+    case GST_VIDEO_COLOR_MATRIX_BT2020:
+      if (cinfo->range == GST_VIDEO_COLOR_RANGE_0_255) {
+        color_profile = AMF_VIDEO_CONVERTER_COLOR_PROFILE_FULL_2020;
+      } else {
+        color_profile = AMF_VIDEO_CONVERTER_COLOR_PROFILE_2020;
+      }
+      break;
+    default:
+      break;
+  }
+
+  result =
+      comp->SetProperty (AMF_VIDEO_ENCODER_HEVC_OUTPUT_COLOR_PROFILE,
+      color_profile);
+  if (result != AMF_OK) {
+    GST_ERROR_OBJECT (self, "Failed to set output color profile, result %"
+        GST_AMF_RESULT_FORMAT, GST_AMF_RESULT_ARGS (result));
+    goto error;
+  }
+
+  result =
+      comp->SetProperty (AMF_VIDEO_ENCODER_HEVC_OUTPUT_TRANSFER_CHARACTERISTIC,
+      gst_video_transfer_function_to_iso (cinfo->transfer));
+  if (result != AMF_OK) {
+    GST_ERROR_OBJECT (self,
+        "Failed to set output transfer characteristic, result %"
+        GST_AMF_RESULT_FORMAT, GST_AMF_RESULT_ARGS (result));
+    goto error;
+  }
+
+  result = comp->SetProperty (AMF_VIDEO_ENCODER_HEVC_OUTPUT_COLOR_PRIMARIES,
+      gst_video_color_primaries_to_iso (cinfo->primaries));
+  if (result != AMF_OK) {
+    GST_ERROR_OBJECT (self, "Failed to set output color primaries, result %"
+        GST_AMF_RESULT_FORMAT, GST_AMF_RESULT_ARGS (result));
+    goto error;
+  }
+
+  if (cinfo->transfer == GST_VIDEO_TRANSFER_SMPTE2084 &&
+      state->mastering_display_info && state->content_light_level) {
+    AMFBuffer *hdrmeta_buffer = NULL;
+    result =
+        comp->GetContext ()->AllocBuffer (AMF_MEMORY_HOST,
+        sizeof (AMFHDRMetadata), &hdrmeta_buffer);
+    if (result != AMF_OK) {
+      GST_ERROR_OBJECT (self, "Failed to allocate HDR metadata buffer, result %"
+          GST_AMF_RESULT_FORMAT, GST_AMF_RESULT_ARGS (result));
+      goto error;
+    }
+    AMFHDRMetadata *hdrmeta = (AMFHDRMetadata *) hdrmeta_buffer->GetNative ();
+    GstVideoMasteringDisplayInfo *minfo = state->mastering_display_info;
+    GstVideoContentLightLevel *cllinfo = state->content_light_level;
+    hdrmeta->maxMasteringLuminance =
+        (amf_uint32) minfo->max_display_mastering_luminance;
+    hdrmeta->minMasteringLuminance =
+        (amf_uint32) minfo->min_display_mastering_luminance;
+
+    hdrmeta->redPrimary[0] = minfo->display_primaries[0].x;
+    hdrmeta->redPrimary[1] = minfo->display_primaries[0].y;
+
+    hdrmeta->greenPrimary[0] = minfo->display_primaries[1].x;
+    hdrmeta->greenPrimary[1] = minfo->display_primaries[1].y;
+
+    hdrmeta->bluePrimary[0] = minfo->display_primaries[2].x;
+    hdrmeta->bluePrimary[1] = minfo->display_primaries[2].y;
+
+    hdrmeta->whitePoint[0] = minfo->white_point.x;
+    hdrmeta->whitePoint[1] = minfo->white_point.y;
+    hdrmeta->maxContentLightLevel =
+        (amf_uint16) cllinfo->max_content_light_level;
+    hdrmeta->maxFrameAverageLightLevel =
+        (amf_uint16) cllinfo->max_frame_average_light_level;
+
+    result =
+        comp->SetProperty (AMF_VIDEO_ENCODER_HEVC_INPUT_HDR_METADATA,
+        hdrmeta_buffer);
+
+    hdrmeta_buffer->Release ();
+    if (result != AMF_OK) {
+      GST_ERROR_OBJECT (self, "Failed to set HDR metadata, result %"
+          GST_AMF_RESULT_FORMAT, GST_AMF_RESULT_ARGS (result));
+      goto error;
+    }
+  }
+
+  if (dev_caps->pre_encode_supported) {
+    result = comp->SetProperty (AMF_VIDEO_ENCODER_HEVC_PREENCODE_ENABLE,
+        (amf_bool) self->pre_encode);
+    if (result != AMF_OK) {
+      GST_ERROR_OBJECT (self, "Failed to set pre-encode, result %"
+          GST_AMF_RESULT_FORMAT, GST_AMF_RESULT_ARGS (result));
+      goto error;
+    }
+  }
+
+  if (dev_caps->pre_analysis) {
+    result = comp->SetProperty (AMF_VIDEO_ENCODER_HEVC_PRE_ANALYSIS_ENABLE,
+        (amf_bool) self->pa.pre_analysis);
+    if (result != AMF_OK) {
+      GST_ERROR_OBJECT (self, "Failed to set pre-analysis, result %"
+          GST_AMF_RESULT_FORMAT, GST_AMF_RESULT_ARGS (result));
+      goto error;
+    }
+    if (self->pa.pre_analysis) {
+      result =
+          gst_amf_encoder_set_pre_analysis_options (encoder, comp, &self->pa,
+          &dev_caps->pa_supported);
+      if (result != AMF_OK)
+        goto error;
+    }
+  }
+
+  result = comp->Init (surface_format, info->width, info->height);
   if (result != AMF_OK) {
     GST_ERROR_OBJECT (self, "Failed to init component, result %"
         GST_AMF_RESULT_FORMAT, GST_AMF_RESULT_ARGS (result));
@@ -857,12 +1433,19 @@ gst_amf_h265_enc_set_output_state (GstAmfEncoder * encoder,
     GstVideoCodecState * state, gpointer component)
 {
   GstAmfH265Enc *self = GST_AMF_H265_ENC (encoder);
+  GstVideoInfo *info = &state->info;
   GstVideoCodecState *output_state;
   GstCaps *caps;
   GstTagList *tags;
+  std::string caps_str = "video/x-h265, alignment = (string) au"
+      ", stream-format = (string) byte-stream, profile = (string) ";
 
-  caps = gst_caps_from_string ("video/x-h265, alignment = (string) au"
-      ", stream-format = (string) byte-stream, profile = (string) main");
+  if (GST_VIDEO_INFO_FORMAT (info) == GST_VIDEO_FORMAT_P010_10LE) {
+    caps_str += "main-10";
+  } else {
+    caps_str += "main";
+  }
+  caps = gst_caps_from_string (caps_str.c_str ());
   output_state = gst_video_encoder_set_output_state (GST_VIDEO_ENCODER (self),
       caps, state);
 
@@ -961,7 +1544,8 @@ gst_amf_h265_enc_create_class_data (GstD3D11Device * device,
   GstAmfH265EncDeviceCaps dev_caps = { 0, };
   std::string sink_caps_str;
   std::string src_caps_str;
-  std::vector < std::string > profiles;
+  std::set < std::string > profiles;
+  std::string profile_str;
   std::string resolution_str;
   GstAmfH265EncClassData *cdata;
   AMFCapsPtr amf_caps;
@@ -971,8 +1555,13 @@ gst_amf_h265_enc_create_class_data (GstD3D11Device * device,
   amf_int32 in_min_height = 0, in_max_height = 0;
   amf_int32 out_min_width = 0, out_max_width = 0;
   amf_int32 out_min_height = 0, out_max_height = 0;
+  amf_bool pre_encode_supported;
+  amf_bool smart_access_supported;
   amf_int32 num_val;
+  std::set < std::string > formats;
+  std::string format_str;
   gboolean have_nv12 = FALSE;
+  gboolean have_p010 = FALSE;
   gboolean d3d11_supported = FALSE;
   gint min_width, max_width, min_height, max_height;
   GstCaps *sink_caps;
@@ -1002,15 +1591,24 @@ gst_amf_h265_enc_create_class_data (GstD3D11Device * device,
   GST_LOG_OBJECT (device, "Input format count: %d", num_val);
   for (amf_int32 i = 0; i < num_val; i++) {
     AMF_SURFACE_FORMAT format;
-    amf_bool native;
+    amf_bool native = false;
 
     result = in_iocaps->GetFormatAt (i, &format, &native);
     if (result != AMF_OK)
       continue;
 
     GST_INFO_OBJECT (device, "Format %d supported, native %d", format, native);
-    if (format == AMF_SURFACE_NV12)
+    if (format == AMF_SURFACE_NV12) {
       have_nv12 = TRUE;
+      formats.insert ("NV12");
+    }
+    if (format == AMF_SURFACE_P010 && native) {
+      have_p010 = TRUE;
+    }
+  }
+  if (formats.empty ()) {
+    GST_WARNING_OBJECT (device, "Empty supported input formats");
+    return nullptr;
   }
 
   if (!have_nv12) {
@@ -1096,6 +1694,41 @@ gst_amf_h265_enc_create_class_data (GstD3D11Device * device,
   QUERY_DEFAULT_PROP (AMF_VIDEO_ENCODER_HEVC_QP_P, default_qp_p, 26);
 #undef QUERY_DEFAULT_PROP
 
+  result = comp->GetProperty (AMF_VIDEO_ENCODER_HEVC_PREENCODE_ENABLE,
+      &pre_encode_supported);
+  if (result == AMF_OK)
+    dev_caps.pre_encode_supported = TRUE;
+
+  result = comp->GetProperty (AMF_VIDEO_ENCODER_HEVC_ENABLE_SMART_ACCESS_VIDEO,
+      &smart_access_supported);
+  if (result == AMF_OK)
+    dev_caps.smart_access_supported = TRUE;
+
+  if (dev_caps.pre_analysis) {
+    amf_bool pre_analysis = FALSE;
+    // Store initial pre-analysis value
+    result =
+        comp->GetProperty (AMF_VIDEO_ENCODER_HEVC_PRE_ANALYSIS_ENABLE,
+        &pre_analysis);
+    if (result != AMF_OK) {
+      GST_WARNING_OBJECT (device, "Failed to get pre-analysis option");
+    }
+    // We need to enable pre-analysis for checking options availability
+    result =
+        comp->SetProperty (AMF_VIDEO_ENCODER_HEVC_PRE_ANALYSIS_ENABLE,
+        (amf_bool) TRUE);
+    if (result != AMF_OK) {
+      GST_WARNING_OBJECT (device, "Failed to set pre-analysis option");
+    }
+    gst_amf_encoder_check_pa_supported_options (&dev_caps.pa_supported, comp);
+    result =
+        comp->SetProperty (AMF_VIDEO_ENCODER_HEVC_PRE_ANALYSIS_ENABLE,
+        pre_analysis);
+    if (result != AMF_OK) {
+      GST_WARNING_OBJECT (device, "Failed to set pre-analysis option");
+    }
+  }
+
   {
     const AMFPropertyInfo *pinfo = nullptr;
     result = comp->GetPropertyInfo (AMF_VIDEO_ENCODER_HEVC_GOP_SIZE, &pinfo);
@@ -1112,6 +1745,50 @@ gst_amf_h265_enc_create_class_data (GstD3D11Device * device,
       dev_caps.max_gop_size = G_MAXINT;
     }
   }
+
+  if (formats.find ("NV12") != formats.end ())
+    profiles.insert ("main");
+
+  if (dev_caps.max_profile >= (amf_int64) AMF_VIDEO_ENCODER_HEVC_PROFILE_MAIN_10
+      && have_p010) {
+    formats.insert ("P010_10LE");
+    profiles.insert ("main-10");
+  }
+
+  if (profiles.empty ()) {
+    GST_WARNING_OBJECT (device, "Failed to determine profile support");
+    return nullptr;
+  }
+#define APPEND_STRING(dst,set,str) G_STMT_START { \
+  if (set.find(str) != set.end()) { \
+    if (!first) \
+      dst += ", "; \
+    dst += str; \
+    first = FALSE; \
+  } \
+} G_STMT_END
+
+  if (formats.size () == 1) {
+    format_str = "format = (string) " + *(formats.begin ());
+  } else {
+    gboolean first = TRUE;
+    format_str = "format = (string) { ";
+    APPEND_STRING (format_str, formats, "NV12");
+    APPEND_STRING (format_str, formats, "P010_10LE");
+    format_str += " } ";
+  }
+  if (profiles.size () == 1) {
+    profile_str = "profile = (string) " + *(profiles.begin ());
+  } else {
+    gboolean first = TRUE;
+
+    profile_str = "profile = (string) { ";
+    APPEND_STRING (profile_str, profiles, "main");
+    APPEND_STRING (profile_str, profiles, "main-10");
+    profile_str += " } ";
+  }
+
+#undef APPEND_STRING
 
   min_width = MAX (in_min_width, 1);
   max_width = in_max_width;
@@ -1132,9 +1809,12 @@ gst_amf_h265_enc_create_class_data (GstD3D11Device * device,
   resolution_str += ", height = (int) [ " + std::to_string (min_height)
       + ", " + std::to_string (max_height) + " ]";
 
-  sink_caps_str = "video/x-raw, format = (string) NV12, " + resolution_str +
+  sink_caps_str =
+      "video/x-raw, " + format_str + ", " + resolution_str +
       ", interlace-mode = (string) progressive";
-  src_caps_str = "video/x-h265, " + resolution_str + ", profile = (string) main"
+  src_caps_str =
+      "video/x-h265, " + resolution_str +
+      ", " + profile_str +
       ", stream-format = (string) byte-stream, alignment = (string) au";
 
   system_caps = gst_caps_from_string (sink_caps_str.c_str ());

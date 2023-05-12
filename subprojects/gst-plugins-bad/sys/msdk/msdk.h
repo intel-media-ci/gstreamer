@@ -103,10 +103,10 @@ void GstMFXUnload (mfxLoader loader);
 #endif
 
 typedef struct _MsdkSession MsdkSession;
-typedef struct _GstMsdkSurface GstMsdkSurface;
 
 struct _MsdkSession
 {
+  mfxU32 impl_idx;
   mfxSession session;
   mfxLoader loader;
 };
@@ -114,8 +114,6 @@ struct _MsdkSession
 MsdkSession msdk_open_session (mfxIMPL impl);
 void msdk_close_mfx_session (mfxSession session);
 void msdk_close_session (MsdkSession * session);
-
-gboolean msdk_is_available (void);
 
 mfxFrameSurface1 *msdk_get_free_surface (mfxFrameSurface1 * surfaces,
     guint size);
@@ -130,19 +128,16 @@ void gst_msdk_set_video_alignment (GstVideoInfo * info, guint alloc_w, guint all
 gint gst_msdk_get_mfx_chroma_from_format (GstVideoFormat format);
 gint gst_msdk_get_mfx_fourcc_from_format (GstVideoFormat format);
 void gst_msdk_set_mfx_frame_info_from_video_info (mfxFrameInfo * mfx_info,
-    GstVideoInfo * info);
-
-gboolean
-gst_msdk_is_msdk_buffer (GstBuffer * buf);
+    const GstVideoInfo * info);
 
 gboolean
 gst_msdk_is_va_mem (GstMemory * mem);
 
-mfxFrameSurface1 *
-gst_msdk_get_surface_from_buffer (GstBuffer * buf);
-
 GstVideoFormat
 gst_msdk_get_video_format_from_mfx_fourcc (mfxU32 fourcc);
+
+void
+gst_msdk_get_video_format_list (GValue * formats);
 
 void
 gst_msdk_update_mfx_frame_info_from_mfx_video_param (mfxFrameInfo * mfx_info,
@@ -162,6 +157,11 @@ msdk_get_platform_codename (mfxSession session);
 mfxStatus
 msdk_init_msdk_session (mfxIMPL impl, mfxVersion * pver,
     MsdkSession * msdk_session);
+
+gpointer
+msdk_get_impl_description (const mfxLoader * loader, mfxU32 impl_idx);
+gboolean
+msdk_release_impl_description (const mfxLoader * loader, gpointer impl_desc);
 
 G_END_DECLS
 

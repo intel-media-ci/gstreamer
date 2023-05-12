@@ -37,9 +37,6 @@
  * it doesn't connect decoder elements. The output pads
  * produce packetised encoded data with timestamps where possible,
  * or send missing-element messages where not.
- *
- * > parsebin is still experimental API and a technology preview.
- * > Its behaviour and exposed API is subject to change.
  */
 
 /* Implementation notes:
@@ -1275,7 +1272,7 @@ analyze_new_pad (GstParseBin * parsebin, GstElement * src, GstPad * pad,
 {
   gboolean apcontinue = TRUE;
   GValueArray *factories = NULL, *result = NULL;
-  GstParsePad *parsepad;
+  GstParsePad *parsepad = NULL;
   GstElementFactory *factory;
   const gchar *classification;
   gboolean is_parser_converter = FALSE;
@@ -1421,7 +1418,6 @@ analyze_new_pad (GstParseBin * parsebin, GstElement * src, GstPad * pad,
       goto expose_pad;
     }
     /* Else we will bail out */
-    gst_object_unref (parsepad);
     goto unknown_type;
   }
 
@@ -1516,12 +1512,24 @@ analyze_new_pad (GstParseBin * parsebin, GstElement * src, GstPad * pad,
   if (is_parser_converter)
     gst_object_unref (pad);
 
-  gst_object_unref (parsepad);
   g_value_array_free (factories);
 
-  if (!res)
+  if (!res) {
+    if (deadend_details == NULL) {
+      /* connect_pad() only failed because no element was compatible
+       * (i.e. deadend_details is NULL). If this stream is an elementary stream,
+       * we can expose it since this is non-fatal */
+      GstPbUtilsCapsDescriptionFlags caps_flags =
+          gst_pb_utils_get_caps_description_flags (caps);
+      if (caps_flags
+          && !(caps_flags & GST_PBUTILS_CAPS_DESCRIPTION_FLAG_CONTAINER)) {
+        goto expose_pad;
+      }
+    }
     goto unknown_type;
+  }
 
+  gst_object_unref (parsepad);
   gst_caps_unref (caps);
 
   return;
@@ -1538,6 +1546,8 @@ expose_pad:
 unknown_type:
   {
     GST_LOG_OBJECT (pad, "Unknown type, posting message and firing signal");
+    if (parsepad)
+      gst_object_unref (parsepad);
 
     chain->deadend_details = deadend_details;
     chain->deadend = TRUE;
@@ -1589,7 +1599,7 @@ setup_caps_delay:
     CHAIN_MUTEX_LOCK (chain);
     GST_LOG_OBJECT (parsebin, "Chain %p has now %d dynamic pads", chain,
         g_list_length (chain->pending_pads));
-    ppad = g_slice_new0 (GstPendingPad);
+    ppad = g_new0 (GstPendingPad, 1);
     ppad->pad = gst_object_ref (pad);
     ppad->chain = chain;
     ppad->event_probe_id =
@@ -2025,7 +2035,7 @@ connect_pad (GstParseBin * parsebin, GstElement * src, GstParsePad * parsepad,
     GST_LOG_OBJECT (parsebin, "linked on pad %s:%s", GST_DEBUG_PAD_NAME (pad));
 
     CHAIN_MUTEX_LOCK (chain);
-    pelem = g_slice_new0 (GstParseElement);
+    pelem = g_new0 (GstParseElement, 1);
     pelem->element = gst_object_ref (element);
     pelem->capsfilter = NULL;
     chain->elements = g_list_prepend (chain->elements, pelem);
@@ -2194,7 +2204,7 @@ connect_pad (GstParseBin * parsebin, GstElement * src, GstParsePad * parsepad,
         gst_element_set_state (tmp, GST_STATE_NULL);
 
         gst_object_unref (tmp);
-        g_slice_free (GstParseElement, dtmp);
+        g_free (dtmp);
 
         chain->elements = g_list_delete_link (chain->elements, chain->elements);
       } while (tmp != element);
@@ -2774,7 +2784,7 @@ gst_parse_chain_free_internal (GstParseChain * chain, gboolean hide)
       gst_object_unref (element);
       l->data = NULL;
 
-      g_slice_free (GstParseElement, pelem);
+      g_free (pelem);
     }
   }
   if (!hide) {
@@ -2833,7 +2843,7 @@ gst_parse_chain_free_internal (GstParseChain * chain, gboolean hide)
 
   if (!hide) {
     g_mutex_clear (&chain->lock);
-    g_slice_free (GstParseChain, chain);
+    g_free (chain);
   }
 }
 
@@ -2862,7 +2872,7 @@ static GstParseChain *
 gst_parse_chain_new (GstParseBin * parsebin, GstParseGroup * parent,
     GstPad * pad, GstCaps * start_caps)
 {
-  GstParseChain *chain = g_slice_new0 (GstParseChain);
+  GstParseChain *chain = g_new0 (GstParseChain, 1);
 
   GST_DEBUG_OBJECT (parsebin, "Creating new chain %p with parent group %p",
       chain, parent);
@@ -2903,7 +2913,7 @@ gst_parse_group_free_internal (GstParseGroup * group, gboolean hide)
   GST_DEBUG_OBJECT (group->parsebin, "%s group %p", (hide ? "Hid" : "Freed"),
       group);
   if (!hide)
-    g_slice_free (GstParseGroup, group);
+    g_free (group);
 }
 
 /* gst_parse_group_free:
@@ -3012,7 +3022,7 @@ gst_parse_chain_start_free_hidden_groups_thread (GstParseChain * chain)
 static GstParseGroup *
 gst_parse_group_new (GstParseBin * parsebin, GstParseChain * parent)
 {
-  GstParseGroup *group = g_slice_new0 (GstParseGroup);
+  GstParseGroup *group = g_new0 (GstParseGroup, 1);
 
   GST_DEBUG_OBJECT (parsebin, "Creating new group %p with parent chain %p",
       group, parent);
@@ -3623,6 +3633,7 @@ retry:
   /* Don't expose if we're currently shutting down */
   DYN_LOCK (parsebin);
   if (G_UNLIKELY (parsebin->shutdown)) {
+    g_list_free_full (endpads, (GDestroyNotify) gst_object_unref);
     GST_WARNING_OBJECT (parsebin,
         "Currently, shutting down, aborting exposing");
     DYN_UNLOCK (parsebin);
@@ -4296,7 +4307,7 @@ gst_pending_pad_free (GstPendingPad * ppad)
   if (ppad->notify_caps_id)
     g_signal_handler_disconnect (ppad->pad, ppad->notify_caps_id);
   gst_object_unref (ppad->pad);
-  g_slice_free (GstPendingPad, ppad);
+  g_free (ppad);
 }
 
 /*****

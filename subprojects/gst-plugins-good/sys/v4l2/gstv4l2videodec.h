@@ -63,8 +63,12 @@ struct _GstV4l2VideoDec
   gboolean active;
   GstFlowReturn output_flow;
 
-  /* dynamic resolution change flag */
-  gboolean capture_configuration_change;
+  /* Source Change Events */
+  gboolean wait_for_source_change;
+  gboolean draining;
+
+  /* Capabilities */
+  gboolean supports_source_change;
 };
 
 struct _GstV4l2VideoDecClass

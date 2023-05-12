@@ -30,8 +30,6 @@
  *
  * The main configuration is via the #GstURISourceBin:uri property.
  *
- * > urisourcebin is still experimental API and a technology preview.
- * > Its behaviour and exposed API is subject to change.
  */
 
 #ifdef HAVE_CONFIG_H
@@ -109,6 +107,8 @@ struct _ChildSrcPadInfo
   /* An optional demuxer or parsebin */
   GstElement *demuxer;
   gboolean demuxer_handles_buffering;
+  gboolean demuxer_streams_aware;
+  gboolean demuxer_is_parsebin;
 
   /* list of output slots */
   GList *outputs;
@@ -663,7 +663,9 @@ copy_sticky_events (GstPad * pad, GstEvent ** event, gpointer user_data)
 {
   GstPad *gpad = GST_PAD_CAST (user_data);
 
-  GST_DEBUG_OBJECT (gpad, "store sticky event %" GST_PTR_FORMAT, *event);
+  GST_DEBUG_OBJECT (gpad,
+      "store sticky event from %" GST_PTR_FORMAT " %" GST_PTR_FORMAT, pad,
+      *event);
   gst_pad_store_sticky_event (gpad, *event);
 
   return TRUE;
@@ -752,6 +754,14 @@ new_demuxer_pad_added_cb (GstElement * element, GstPad * pad,
   GST_DEBUG_OBJECT (element, "New pad %" GST_PTR_FORMAT, pad);
 
   GST_URI_SOURCE_BIN_LOCK (urisrc);
+  /* Double-check that the demuxer is streams-aware by checking if it posted a
+   * collection */
+  if (info->demuxer && !info->demuxer_is_parsebin
+      && !info->demuxer_streams_aware) {
+    GST_ELEMENT_ERROR (urisrc, CORE, MISSING_PLUGIN, (NULL),
+        ("Adaptive demuxer is not streams-aware, check your installation"));
+
+  }
   /* If the demuxer handles buffering and is streams-aware, we can expose it
      as-is directly. We still add an event probe to deal with EOS */
   slot = new_output_slot (info, pad);
@@ -834,6 +844,18 @@ demux_pad_events (GstPad * pad, GstPadProbeInfo * info, OutputSlotInfo * slot)
     }
       break;
     case GST_EVENT_STREAM_START:
+    {
+      /* This is a temporary hack to notify downstream decodebin3 to *not*
+       * plug in an extra parsebin */
+      if (slot->linked_info && slot->linked_info->demuxer_is_parsebin) {
+        GstStructure *s;
+        GST_PAD_PROBE_INFO_DATA (info) = ev = gst_event_make_writable (ev);
+        s = (GstStructure *) gst_event_get_structure (ev);
+        gst_structure_set (s, "urisourcebin-parsed-data", G_TYPE_BOOLEAN, TRUE,
+            NULL);
+      }
+    }
+      /* PASSTHROUGH */
     case GST_EVENT_FLUSH_STOP:
       BUFFERING_LOCK (urisrc);
       slot->is_eos = FALSE;
@@ -1105,6 +1127,7 @@ new_output_slot (ChildSrcPadInfo * info, GstPad * originating_pad)
     slot->queue_sinkpad =
         gst_element_request_pad_simple (info->multiqueue, "sink_%u");
     srcpad = gst_pad_get_single_internal_link (slot->queue_sinkpad);
+    gst_pad_sticky_events_foreach (originating_pad, copy_sticky_events, srcpad);
     slot->output_pad = create_output_pad (slot, srcpad);
     gst_object_unref (srcpad);
     gst_pad_link (originating_pad, slot->queue_sinkpad);
@@ -1306,10 +1329,10 @@ expose_output_pad (GstURISourceBin * urisrc, GstPad * pad)
 
   target = gst_ghost_pad_get_target (GST_GHOST_PAD (pad));
 
+  gst_pad_set_active (pad, TRUE);
   gst_pad_sticky_events_foreach (target, copy_sticky_events, pad);
   gst_object_unref (target);
 
-  gst_pad_set_active (pad, TRUE);
   GST_URI_SOURCE_BIN_LOCK (urisrc);
   if (!urisrc->activated) {
     GST_DEBUG_OBJECT (urisrc, "Not fully activated, adding pad once PAUSED !");
@@ -1801,11 +1824,6 @@ make_demuxer (GstURISourceBin * urisrc, ChildSrcPadInfo * info, GstCaps * caps)
       continue;
 
     demuxer = gst_element_factory_create (factory, NULL);
-    if (!GST_OBJECT_FLAG_IS_SET (demuxer, GST_BIN_FLAG_STREAMS_AWARE)) {
-      GST_DEBUG_OBJECT (urisrc, "Ignoring non-streams-aware adaptive demuxer");
-      gst_object_unref (demuxer);
-      continue;
-    }
     break;
   }
   gst_plugin_feature_list_free (eligible);
@@ -1895,6 +1913,8 @@ setup_parsebin_for_slot (ChildSrcPadInfo * info, GstPad * originating_pad)
   gst_element_set_locked_state (info->demuxer, TRUE);
   gst_bin_add (GST_BIN_CAST (urisrc), info->demuxer);
 
+  info->demuxer_is_parsebin = TRUE;
+
   if (info->pre_parse_queue) {
     if (!gst_element_link_pads (info->pre_parse_queue, "src", info->demuxer,
             "sink"))
@@ -1927,6 +1947,10 @@ setup_parsebin_for_slot (ChildSrcPadInfo * info, GstPad * originating_pad)
 
 could_not_link:
   {
+    if (info->pre_parse_queue)
+      gst_element_set_locked_state (info->pre_parse_queue, FALSE);
+    if (info->demuxer)
+      gst_element_set_locked_state (info->demuxer, FALSE);
     GST_URI_SOURCE_BIN_UNLOCK (urisrc);
     GST_STATE_UNLOCK (urisrc);
     GST_ELEMENT_ERROR (urisrc, CORE, NEGOTIATION,
@@ -2136,6 +2160,7 @@ no_typefind:
 could_not_link:
   {
     gst_object_unref (sinkpad);
+    gst_element_set_locked_state (info->typefind, FALSE);
     GST_ELEMENT_ERROR (urisrc, CORE, NEGOTIATION,
         (NULL), ("Can't link source to typefind element"));
     return FALSE;
@@ -2579,6 +2604,35 @@ remove_buffering_msgs (GstURISourceBin * urisrc, GstObject * src)
   g_mutex_unlock (&urisrc->buffering_post_lock);
 }
 
+static ChildSrcPadInfo *
+find_adaptive_demuxer_cspi_for_msg (GstURISourceBin * urisrc,
+    GstElement * child)
+{
+  ChildSrcPadInfo *res = NULL;
+  GList *tmp;
+  GstElement *parent = gst_object_ref (child);
+
+  do {
+    GstElement *next_parent;
+
+    for (tmp = urisrc->src_infos; tmp; tmp = tmp->next) {
+      ChildSrcPadInfo *info = tmp->data;
+      if (parent == info->demuxer) {
+        res = info;
+        break;
+      }
+    }
+    next_parent = (GstElement *) gst_element_get_parent (parent);
+    gst_object_unref (parent);
+    parent = next_parent;
+  } while (parent && parent != (GstElement *) urisrc);
+
+  if (parent)
+    gst_object_unref (parent);
+
+  return res;
+}
+
 static void
 handle_message (GstBin * bin, GstMessage * msg)
 {
@@ -2596,18 +2650,33 @@ handle_message (GstBin * bin, GstMessage * msg)
       break;
     }
     case GST_MESSAGE_STREAM_COLLECTION:
+    {
+      ChildSrcPadInfo *info;
       /* We only want to forward stream collection from the source element *OR*
        * from adaptive demuxers. We do not want to forward them from the
        * potential parsebins since there might be many and require aggregation
        * to be useful/coherent. */
-      if (GST_MESSAGE_SRC (msg) != (GstObject *) urisrc->source
-          && !urisrc->is_adaptive) {
+      GST_URI_SOURCE_BIN_LOCK (urisrc);
+      info =
+          find_adaptive_demuxer_cspi_for_msg (urisrc,
+          (GstElement *) GST_MESSAGE_SRC (msg));
+      if (info) {
+        info->demuxer_streams_aware = TRUE;
+        if (info->demuxer_is_parsebin) {
+          GST_DEBUG_OBJECT (bin, "Dropping stream-collection from parsebin");
+          gst_message_unref (msg);
+          msg = NULL;
+        }
+      } else if (GST_MESSAGE_SRC (msg) != (GstObject *) urisrc->source) {
+        GST_LOG_OBJECT (bin, "Collection %" GST_PTR_FORMAT, msg);
         GST_DEBUG_OBJECT (bin,
-            "Dropping stream-collection from non-adaptive-demuxer %"
+            "Dropping stream-collection from %"
             GST_PTR_FORMAT, GST_MESSAGE_SRC (msg));
         gst_message_unref (msg);
         msg = NULL;
       }
+      GST_URI_SOURCE_BIN_UNLOCK (urisrc);
+    }
       break;
     case GST_MESSAGE_BUFFERING:
       handle_buffering_message (urisrc, msg);
@@ -2958,11 +3027,13 @@ gst_uri_source_bin_change_state (GstElement * element,
   /* ERRORS */
 source_failed:
   {
+    remove_source (urisrc);
     return GST_STATE_CHANGE_FAILURE;
   }
 setup_failed:
   {
-    /* clean up leftover groups */
+    if (transition == GST_STATE_CHANGE_READY_TO_PAUSED)
+      remove_source (urisrc);
     return GST_STATE_CHANGE_FAILURE;
   }
 }

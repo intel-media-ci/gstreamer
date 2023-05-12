@@ -309,19 +309,20 @@ on_read_ready (GObject * source, GAsyncResult * result, gpointer user_data)
       }
     }
 
-    if (request->download_start_time == GST_CLOCK_TIME_NONE) {
-      GST_LOG ("Got first data for URI %s", request->uri);
-      request->download_start_time = now;
-    }
-
     if (gst_buffer != NULL) {
       /* Unsent means cancellation is in progress, so don't override
        * the state. Otherwise make sure it is LOADING */
       if (request->state != DOWNLOAD_REQUEST_STATE_UNSENT)
         request->state = DOWNLOAD_REQUEST_STATE_LOADING;
 
-      GST_LOG ("Adding %u bytes to buffer",
-          (guint) (gst_buffer_get_size (gst_buffer)));
+      if (request->download_start_time == GST_CLOCK_TIME_NONE) {
+        GST_LOG ("Got first data for URI %s", request->uri);
+        request->download_start_time = now;
+      }
+      request->download_newest_data_time = now;
+
+      GST_LOG ("Adding %u bytes to buffer (request URI %s)",
+          (guint) (gst_buffer_get_size (gst_buffer)), request->uri);
 
       download_request_add_buffer (request, gst_buffer);
 
@@ -348,10 +349,12 @@ on_read_ready (GObject * source, GAsyncResult * result, gpointer user_data)
 finish_transfer:
   if (request->in_use && !g_cancellable_is_cancelled (transfer->cancellable)) {
     SoupStatus status_code = _soup_message_get_status (transfer->msg);
-
-    GST_LOG ("request complete. Code %d URI %s range %" G_GINT64_FORMAT " %"
-        G_GINT64_FORMAT, status_code, request->uri,
-        request->range_start, request->range_end);
+#ifndef GST_DISABLE_GST_DEBUG
+    guint download_ms = (now - request->download_request_time) / GST_MSECOND;
+    GST_LOG ("request complete in %u ms. Code %d URI %s range %" G_GINT64_FORMAT
+        " %" G_GINT64_FORMAT, download_ms, status_code,
+        request->uri, request->range_start, request->range_end);
+#endif
 
     if (request->state != DOWNLOAD_REQUEST_STATE_UNSENT) {
       if (SOUP_STATUS_IS_SUCCESSFUL (status_code)

@@ -8,7 +8,13 @@ d3d11_sources = [
   'gstd3d11download.cpp',
   'gstd3d11h264dec.cpp',
   'gstd3d11h265dec.cpp',
+  'gstd3d11ipc.cpp',
+  'gstd3d11ipcclient.cpp',
+  'gstd3d11ipcserver.cpp',
+  'gstd3d11ipcsink.cpp',
+  'gstd3d11ipcsrc.cpp',
   'gstd3d11mpeg2dec.cpp',
+  'gstd3d11overlay.cpp',
   'gstd3d11overlaycompositor.cpp',
   'gstd3d11pluginutils.cpp',
   'gstd3d11testsrc.cpp',
@@ -46,6 +52,9 @@ if d3d11_winapi_only_app and (not d3dcompiler_lib.found() or not runtimeobject_l
   endif
   subdir_done()
 endif
+
+d2d_dep = cc.find_library('d2d1', required: d3d11_option)
+have_d2d_h = cc.has_header('d2d1.h', required: d3d11_option)
 
 have_wgc = cxx.compiles('''
     #include<windows.h>
@@ -88,9 +97,11 @@ if d3d11_winapi_desktop
     extra_dep += [winmm_lib]
   endif
 
-  if have_wgc
+  dwmapi_lib = cc.find_library('dwmapi', required: false)
+  if have_wgc and dwmapi_lib.found()
     d3d11_sources += ['gstd3d11winrtcapture.cpp']
     extra_args += ['-DHAVE_WINRT_CAPTURE']
+    extra_dep += [dwmapi_lib]
   endif
 endif
 
@@ -109,7 +120,8 @@ gstd3d11 = library('gstd3d11',
   c_args : gst_plugins_bad_args + extra_c_args + extra_args,
   cpp_args: gst_plugins_bad_args + extra_args,
   include_directories : [configinc],
-  dependencies : [gstbase_dep, gstvideo_dep, gmodule_dep, gstcontroller_dep, gstd3d11_dep, gstcodecs_dep] + extra_dep,
+  dependencies : [gstbase_dep, gstvideo_dep, gmodule_dep, gstcontroller_dep,
+                  gstd3d11_dep, gstcodecs_dep, d2d_dep] + extra_dep,
   install : true,
   install_dir : plugins_install_dir,
 )

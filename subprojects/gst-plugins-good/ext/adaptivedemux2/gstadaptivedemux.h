@@ -85,6 +85,10 @@ G_BEGIN_DECLS
 /* The live stream has lost synchronization and the demuxer needs to be resetted */
 #define GST_ADAPTIVE_DEMUX_FLOW_LOST_SYNC GST_FLOW_CUSTOM_SUCCESS_2 + 1
 
+/* The stream sub-class is busy and can't supply information for
+ * ::update_fragment_info() right now */
+#define GST_ADAPTIVE_DEMUX_FLOW_BUSY (GST_FLOW_CUSTOM_SUCCESS_2 + 3)
+
 typedef struct _GstAdaptiveDemuxPrivate GstAdaptiveDemuxPrivate;
 
 struct _GstAdaptiveDemuxTrack
@@ -99,6 +103,9 @@ struct _GstAdaptiveDemuxTrack
 
   /* Stream flags */
   GstStreamFlags flags;
+
+  /* Unique identifier (for naming and debugging) */
+  gchar *id;
 
   /* Unique identifier */
   gchar *stream_id;
@@ -457,6 +464,7 @@ GstAdaptiveDemuxTrack *gst_adaptive_demux_track_new (GstAdaptiveDemux *demux,
 GstAdaptiveDemuxTrack *gst_adaptive_demux_track_ref (GstAdaptiveDemuxTrack *track);
 void                   gst_adaptive_demux_track_unref (GstAdaptiveDemuxTrack *track);
 
+const gchar *gst_adaptive_demux_get_manifest_ref_uri (GstAdaptiveDemux * demux);
 
 gboolean gst_adaptive_demux_start_new_period (GstAdaptiveDemux * demux);
 
@@ -470,6 +478,9 @@ GstClockTime gst_adaptive_demux2_get_qos_earliest_time (GstAdaptiveDemux *demux)
 GstCaps * gst_codec_utils_caps_from_iso_rfc6831 (gchar * codec);
 
 gdouble gst_adaptive_demux_play_rate (GstAdaptiveDemux *demux);
+
+void gst_adaptive_demux2_manual_manifest_update (GstAdaptiveDemux * demux);
+GstAdaptiveDemuxLoop *gst_adaptive_demux_get_loop (GstAdaptiveDemux *demux);
 
 G_END_DECLS
 

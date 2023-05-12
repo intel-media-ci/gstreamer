@@ -62,6 +62,7 @@
 
 #include "ReadBarcode.h"
 #include "TextUtfEncoding.h"
+#include "ZXVersion.h"
 
 using namespace ZXing;
 
@@ -368,8 +369,12 @@ gst_zxing_transform_frame_ip (GstVideoFilter * vfilter, GstVideoFrame * frame)
   auto result = ReadBarcode ({(unsigned char *)data, width, height, zxing->image_format}, hints);
   if (result.isValid ()) {
     GST_DEBUG_OBJECT (zxing, "Symbol found. Text: %s Format: %s",
-        TextUtfEncoding::ToUtf8 (result.text ()).c_str (),
+        result.text ().c_str (),
+#if ZXING_VERSION_MAJOR >= 2
+        ToString (result.format ()).c_str ());
+#else
         ToString (result.format ()));
+#endif
   } else {
     goto out;
   }
@@ -394,9 +399,13 @@ gst_zxing_transform_frame_ip (GstVideoFilter * vfilter, GstVideoFrame * frame)
         "timestamp", G_TYPE_UINT64, timestamp,
         "stream-time", G_TYPE_UINT64, stream_time,
         "running-time", G_TYPE_UINT64, running_time,
+#if ZXING_VERSION_MAJOR >= 2
+        "type", G_TYPE_STRING, ToString (result.format ()).c_str (),
+#else
         "type", G_TYPE_STRING, ToString (result.format ()),
+#endif
         "symbol", G_TYPE_STRING,
-        TextUtfEncoding::ToUtf8 (result.text ()).c_str (), NULL);
+        result.text ().c_str (), NULL);
 
     if (zxing->attach_frame) {
       /* create a sample from image */

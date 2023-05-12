@@ -104,7 +104,7 @@ rtp_hist_item_init (RTPHistItem * item, GstRTPBuffer * rtp,
 static RTPHistItem *
 rtp_hist_item_new (GstRTPBuffer * rtp, GstBuffer * rtp_payload)
 {
-  RTPHistItem *item = g_slice_new0 (RTPHistItem);
+  RTPHistItem *item = g_new0 (RTPHistItem, 1);
   rtp_hist_item_init (item, rtp, rtp_payload);
   return item;
 }
@@ -122,7 +122,7 @@ rtp_hist_item_free (gpointer _item)
 {
   RTPHistItem *item = _item;
   gst_buffer_unref (item->payload);
-  g_slice_free (RTPHistItem, item);
+  g_free (item);
 }
 
 static GstEvent *
@@ -200,8 +200,8 @@ _alloc_red_packet_and_fill_headers (GstRtpRedEnc * self,
      * for our wrapper */
     if (gst_rtp_buffer_get_extension_onebyte_header (inp_rtp, self->twcc_ext_id,
             0, &inp_data, &inp_size)) {
-      gst_rtp_buffer_add_extension_onebyte_header (&red_rtp, 1, &data,
-          sizeof (guint16));
+      gst_rtp_buffer_add_extension_onebyte_header (&red_rtp, self->twcc_ext_id,
+          &data, sizeof (guint16));
     } else if (gst_rtp_buffer_get_extension_twobytes_header (inp_rtp, &appbits,
             self->twcc_ext_id, 0, &inp_data, &inp_size)) {
       gst_rtp_buffer_add_extension_twobytes_header (&red_rtp, appbits,

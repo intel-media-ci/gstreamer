@@ -108,7 +108,7 @@ static GstFlowReturn gst_d3d111_window_present (GstD3D11Window * self,
     GstBuffer * buffer, GstBuffer * render_target);
 static void gst_d3d11_window_on_resize_default (GstD3D11Window * window,
     guint width, guint height);
-static gboolean gst_d3d11_window_prepare_default (GstD3D11Window * window,
+static GstFlowReturn gst_d3d11_window_prepare_default (GstD3D11Window * window,
     guint display_width, guint display_height, GstCaps * caps,
     GstStructure * config, DXGI_FORMAT display_format, GError ** error);
 
@@ -517,14 +517,14 @@ typedef struct
   gboolean supported;
 } GstD3D11WindowDisplayFormat;
 
-gboolean
+GstFlowReturn
 gst_d3d11_window_prepare (GstD3D11Window * window, guint display_width,
     guint display_height, GstCaps * caps, GstStructure * config,
     DXGI_FORMAT display_format, GError ** error)
 {
   GstD3D11WindowClass *klass;
 
-  g_return_val_if_fail (GST_IS_D3D11_WINDOW (window), FALSE);
+  g_return_val_if_fail (GST_IS_D3D11_WINDOW (window), GST_FLOW_ERROR);
 
   klass = GST_D3D11_WINDOW_GET_CLASS (window);
   g_assert (klass->prepare != NULL);
@@ -536,7 +536,7 @@ gst_d3d11_window_prepare (GstD3D11Window * window, guint display_width,
       display_format, error);
 }
 
-static gboolean
+static GstFlowReturn
 gst_d3d11_window_prepare_default (GstD3D11Window * window, guint display_width,
     guint display_height, GstCaps * caps, GstStructure * config,
     DXGI_FORMAT display_format, GError ** error)
@@ -560,9 +560,6 @@ gst_d3d11_window_prepare_default (GstD3D11Window * window, guint display_width,
       DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
   gboolean hdr10_aware = FALSE;
   gboolean have_hdr10_meta = FALSE;
-  ComPtr < IDXGIFactory5 > factory5;
-  IDXGIFactory1 *factory_handle;
-  BOOL allow_tearing = FALSE;
   GstVideoMasteringDisplayInfo mdcv;
   GstVideoContentLightLevel cll;
   ComPtr < IDXGISwapChain3 > swapchain3;
@@ -600,7 +597,7 @@ gst_d3d11_window_prepare_default (GstD3D11Window * window, guint display_width,
     if (config)
       gst_structure_free (config);
 
-    return FALSE;
+    return GST_FLOW_ERROR;
   }
 
   if (display_format != DXGI_FORMAT_UNKNOWN) {
@@ -621,7 +618,7 @@ gst_d3d11_window_prepare_default (GstD3D11Window * window, guint display_width,
       if (config)
         gst_structure_free (config);
 
-      return FALSE;
+      return GST_FLOW_ERROR;
     }
   } else {
     for (guint i = 0; i < GST_VIDEO_INFO_N_COMPONENTS (&window->info); i++) {
@@ -663,23 +660,6 @@ gst_d3d11_window_prepare_default (GstD3D11Window * window, guint display_width,
 
   /* Step 3: Create swapchain
    * (or reuse old swapchain if the format is not changed) */
-  window->allow_tearing = FALSE;
-
-  factory_handle = gst_d3d11_device_get_dxgi_factory_handle (device);
-  hr = factory_handle->QueryInterface (IID_PPV_ARGS (&factory5));
-  if (SUCCEEDED (hr)) {
-    hr = factory5->CheckFeatureSupport (DXGI_FEATURE_PRESENT_ALLOW_TEARING,
-        (void *) &allow_tearing, sizeof (allow_tearing));
-  }
-
-  if (SUCCEEDED (hr) && allow_tearing)
-    window->allow_tearing = allow_tearing;
-
-  if (window->allow_tearing) {
-    GST_DEBUG_OBJECT (window, "device supports tearing");
-    swapchain_flags |= DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
-  }
-
   GstD3D11DeviceLockGuard lk (device);
   window->dxgi_format = chosen_format->dxgi_format;
 
@@ -694,7 +674,7 @@ gst_d3d11_window_prepare_default (GstD3D11Window * window, guint display_width,
     if (config)
       gst_structure_free (config);
 
-    return FALSE;
+    return GST_FLOW_ERROR;
   }
 
   /* this rect struct will be used to calculate render area */
@@ -782,7 +762,7 @@ gst_d3d11_window_prepare_default (GstD3D11Window * window, guint display_width,
     GST_ERROR_OBJECT (window, "Cannot create converter");
     g_set_error (error, GST_RESOURCE_ERROR, GST_RESOURCE_ERROR_FAILED,
         "Cannot create converter");
-    return FALSE;
+    return GST_FLOW_ERROR;
   }
 
   if (have_hdr10_meta) {
@@ -800,7 +780,7 @@ gst_d3d11_window_prepare_default (GstD3D11Window * window, guint display_width,
     GST_ERROR_OBJECT (window, "Cannot create overlay compositor");
     g_set_error (error, GST_RESOURCE_ERROR, GST_RESOURCE_ERROR_FAILED,
         "Cannot create overlay compositor");
-    return FALSE;
+    return GST_FLOW_ERROR;
   }
 
   /* call resize to allocated resources */
@@ -811,7 +791,7 @@ gst_d3d11_window_prepare_default (GstD3D11Window * window, guint display_width,
 
   GST_DEBUG_OBJECT (window, "New swap chain 0x%p created", window->swap_chain);
 
-  return TRUE;
+  return GST_FLOW_OK;
 }
 
 void
@@ -860,7 +840,6 @@ gst_d3d111_window_present (GstD3D11Window * self, GstBuffer * buffer,
 {
   GstD3D11WindowClass *klass = GST_D3D11_WINDOW_GET_CLASS (self);
   GstFlowReturn ret = GST_FLOW_OK;
-  guint present_flags = 0;
   GstVideoCropMeta *crop_meta;
   RECT input_rect = self->input_rect;
   RECT *prev_rect = &self->prev_input_rect;
@@ -948,15 +927,12 @@ gst_d3d111_window_present (GstD3D11Window * self, GstBuffer * buffer,
   gst_d3d11_overlay_compositor_upload (self->compositor, buffer);
   gst_d3d11_overlay_compositor_draw_unlocked (self->compositor, &rtv);
 
-  if (self->allow_tearing && self->fullscreen)
-    present_flags |= DXGI_PRESENT_ALLOW_TEARING;
-
   if (klass->present) {
     if (self->emit_present) {
       g_signal_emit (self, d3d11_window_signals[SIGNAL_PRESENT], 0,
           self->device, rtv, nullptr);
     }
-    ret = klass->present (self, present_flags);
+    ret = klass->present (self, 0);
   }
 
   self->first_present = FALSE;

@@ -90,6 +90,8 @@ static void
 gst_jpeg_decoder_init (GstJpegDecoder * self)
 {
   gst_video_decoder_set_packetized (GST_VIDEO_DECODER (self), TRUE);
+  gst_video_decoder_set_needs_format (GST_VIDEO_DECODER (self), TRUE);
+
   self->priv = gst_jpeg_decoder_get_instance_private (self);
 }
 
@@ -479,9 +481,10 @@ gst_jpeg_decoder_handle_frame (GstVideoDecoder * decoder,
         break;
 
       case GST_JPEG_MARKER_DRI:
-        if (!(valid_state (priv->state, GST_JPEG_DECODER_STATE_GOT_SOS)
-                && decode_restart_interval (self, &seg)))
+        if (!decode_restart_interval (self, &seg)) {
+          GST_WARNING_OBJECT (self, "Fail to decode restart interval");
           goto unmap_and_error;
+        }
         break;
       case GST_JPEG_MARKER_DNL:
         break;

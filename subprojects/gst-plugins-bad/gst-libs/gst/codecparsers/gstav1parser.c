@@ -544,7 +544,7 @@ gst_av1_parse_reset_state (GstAV1Parser * parser, gboolean free_sps)
     parser->state.sequence_changed = FALSE;
 
     if (parser->seq_header) {
-      g_slice_free (GstAV1SequenceHeaderOBU, parser->seq_header);
+      g_free (parser->seq_header);
       parser->seq_header = NULL;
     }
   }
@@ -697,7 +697,7 @@ gst_av1_parser_identify_one_obu (GstAV1Parser * parser, const guint8 * data,
   }
 
   if (!size) {
-    return ret = GST_AV1_PARSER_NO_MORE_DATA;
+    ret = GST_AV1_PARSER_NO_MORE_DATA;
     goto error;
   }
 
@@ -799,8 +799,7 @@ gst_av1_parser_identify_one_obu (GstAV1Parser * parser, const guint8 * data,
 
     if (obu_length == 0) {
       /* An empty obu? let continue to the next */
-      ret = GST_AV1_PARSER_DROP;
-      goto error;
+      return GST_AV1_PARSER_DROP;
     }
   }
 
@@ -881,8 +880,7 @@ gst_av1_parser_identify_one_obu (GstAV1Parser * parser, const guint8 * data,
         (parser->state.operating_point_idc >> (obu->header.obu_spatial_id +
             8)) & 1;
     if (!inTemporalLayer || !inSpatialLayer) {
-      ret = GST_AV1_PARSER_DROP;
-      goto error;
+      return GST_AV1_PARSER_DROP;
     }
   }
 
@@ -1442,16 +1440,14 @@ gst_av1_parser_parse_sequence_header_obu (GstAV1Parser * parser,
             sizeof (GstAV1SequenceHeaderOBU)))
       goto success;
 
-    g_slice_free (GstAV1SequenceHeaderOBU, parser->seq_header);
+    g_free (parser->seq_header);
   }
 
-  parser->seq_header = g_slice_dup (GstAV1SequenceHeaderOBU, seq_header);
+  parser->seq_header = g_memdup2 (seq_header, sizeof (GstAV1SequenceHeaderOBU));
   gst_av1_parse_reset_state (parser, FALSE);
 
   /* choose_operating_point() set the operating_point */
-  if (parser->state.operating_point < 0 ||
-      parser->state.operating_point >
-      seq_header->operating_points_cnt_minus_1) {
+  if (parser->state.operating_point > seq_header->operating_points_cnt_minus_1) {
     GST_WARNING ("Invalid operating_point %d set by user, just use 0",
         parser->state.operating_point);
     parser->state.operating_point_idc = seq_header->operating_points[0].idc;
@@ -1785,7 +1781,8 @@ gst_av1_parser_parse_metadata_obu (GstAV1Parser * parser, GstAV1OBU * obu,
           &bit_reader, &(metadata->timecode));
       break;
     default:
-      return GST_AV1_PARSER_BITSTREAM_ERROR;
+      GST_WARNING ("Unknown metadata type %u", metadata->metadata_type);
+      return GST_AV1_PARSER_OK;
   }
 
   if (retval != GST_AV1_PARSER_OK)
@@ -4668,7 +4665,7 @@ gst_av1_parser_set_operating_point (GstAV1Parser * parser,
 GstAV1Parser *
 gst_av1_parser_new (void)
 {
-  return g_slice_new0 (GstAV1Parser);
+  return g_new0 (GstAV1Parser, 1);
 }
 
 /**
@@ -4687,6 +4684,6 @@ gst_av1_parser_free (GstAV1Parser * parser)
   g_return_if_fail (parser != NULL);
 
   if (parser->seq_header)
-    g_slice_free (GstAV1SequenceHeaderOBU, parser->seq_header);
-  g_slice_free (GstAV1Parser, parser);
+    g_free (parser->seq_header);
+  g_free (parser);
 }

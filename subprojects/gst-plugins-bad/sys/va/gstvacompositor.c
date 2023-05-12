@@ -53,6 +53,7 @@
 #include "gstvacaps.h"
 #include "gstvadisplay_priv.h"
 #include "gstvafilter.h"
+#include "gstvapluginutils.h"
 
 GST_DEBUG_CATEGORY_STATIC (gst_va_compositor_debug);
 #define GST_CAT_DEFAULT gst_va_compositor_debug
@@ -287,15 +288,18 @@ gst_va_compositor_get_property (GObject * object, guint prop_id,
     GValue * value, GParamSpec * pspec)
 {
   GstVaCompositor *self = GST_VA_COMPOSITOR (object);
+  GstVaCompositorClass *klass = GST_VA_COMPOSITOR_GET_CLASS (self);
 
   switch (prop_id) {
     case PROP_DEVICE_PATH:
     {
-      if (!(self->display && GST_IS_VA_DISPLAY_DRM (self->display))) {
+      if (!self->display)
+        g_value_set_string (value, klass->render_device_path);
+      else if (GST_IS_VA_DISPLAY_PLATFORM (self->display))
+        g_object_get_property (G_OBJECT (self->display), "path", value);
+      else
         g_value_set_string (value, NULL);
-        return;
-      }
-      g_object_get_property (G_OBJECT (self->display), "path", value);
+
       break;
     }
     case PROP_SCALE_METHOD:
@@ -1337,7 +1341,7 @@ gst_va_compositor_class_init (gpointer g_class, gpointer class_data)
     long_name = g_strdup ("VA-API Video Compositor");
   }
 
-  display = gst_va_display_drm_new_from_path (klass->render_device_path);
+  display = gst_va_display_platform_new (klass->render_device_path);
   filter = gst_va_filter_new (display);
 
   if (gst_va_filter_open (filter)) {
@@ -1406,8 +1410,8 @@ gst_va_compositor_class_init (gpointer g_class, gpointer class_data)
    * It shows the DRM device path used for the VA operation, if any.
    */
   properties[PROP_DEVICE_PATH] = g_param_spec_string ("device-path",
-      "Device Path", "DRM device path", NULL,
-      G_PARAM_READABLE | G_PARAM_STATIC_STRINGS);
+      "Device Path", GST_VA_DEVICE_PATH_PROP_DESC, NULL,
+      GST_PARAM_DOC_SHOW_DEFAULT | G_PARAM_READABLE | G_PARAM_STATIC_STRINGS);
 
   /**
    * GstVaCompositor:scale-method:
@@ -1514,24 +1518,9 @@ gst_va_compositor_register (GstPlugin * plugin, GstVaDevice * device,
 
   type_info.class_data = cdata;
 
-  type_name = g_strdup ("GstVaCompositor");
-  feature_name = g_strdup ("vacompositor");
-
-  /* The first compositor to be registered should use a constant
-   * name, like vacompositor, for any additional compositors, we
-   * create unique names, using the render device name. */
-  if (g_type_from_name (type_name)) {
-    gchar *basename = g_path_get_basename (device->render_device_path);
-    g_free (type_name);
-    g_free (feature_name);
-    type_name = g_strdup_printf ("GstVa%sCompositor", basename);
-    feature_name = g_strdup_printf ("va%scompositor", basename);
-    cdata->description = basename;
-
-    /* lower rank for non-first device */
-    if (rank > 0)
-      rank--;
-  }
+  gst_va_create_feature_name (device, "GstVaCompositor", "GstVa%sCompositor",
+      &type_name, "vacompositor", "va%scompositor", &feature_name,
+      &cdata->description, &rank);
 
   g_once (&debug_once, _register_debug_category, NULL);
 

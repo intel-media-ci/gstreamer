@@ -250,6 +250,9 @@ void gst_h264_dpb_set_max_num_reorder_frames (GstH264Dpb * dpb,
                                               guint32 max_num_reorder_frames);
 
 GST_CODECS_API
+guint32 gst_h264_dpb_get_max_num_reorder_frames (GstH264Dpb * dpb);
+
+GST_CODECS_API
 gboolean gst_h264_dpb_get_interlaced  (GstH264Dpb * dpb);
 
 GST_CODECS_API
@@ -323,11 +326,6 @@ GST_CODECS_API
 gboolean         gst_h264_dpb_perform_memory_management_control_operation (GstH264Dpb * dpb,
                                                                            GstH264RefPicMarking *ref_pic_marking,
                                                                            GstH264Picture * picture);
-
-/* Internal methods */
-void  gst_h264_picture_set_reference (GstH264Picture * picture,
-                                      GstH264PictureReference reference,
-                                      gboolean other_field);
 
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(GstH264Picture, gst_h264_picture_unref)
 

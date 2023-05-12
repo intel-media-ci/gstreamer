@@ -374,6 +374,16 @@
                         "return-type": "gboolean",
                         "when": "last"
                     },
+                    "propose-allocation": {
+                        "args": [
+                            {
+                                "name": "arg0",
+                                "type": "GstQuery"
+                            }
+                        ],
+                        "return-type": "gboolean",
+                        "when": "last"
+                    },
                     "pull-preroll": {
                         "action": true,
                         "args": [],
@@ -5536,8 +5546,34 @@
                         "type": "GstGLContext",
                         "writable": false
                     },
+                    "force-live": {
+                        "blurb": "Always operate in live mode and aggregate on timeout regardless of whether any live sources are linked upstream",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": true,
+                        "controllable": false,
+                        "default": "false",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gboolean",
+                        "writable": true
+                    },
                     "latency": {
                         "blurb": "Additional latency in live mode to allow upstream to take longer to produce buffers for the current position (in nanoseconds)",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "0",
+                        "max": "18446744073709551615",
+                        "min": "0",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "guint64",
+                        "writable": true
+                    },
+                    "min-upstream-latency": {
+                        "blurb": "When sources with a higher latency are expected to be plugged in dynamically after the aggregator has started playing, this allows overriding the minimum latency reported by the initial source(s). This is only taken into account when larger than the actually reported minimum latency. (nanoseconds)",
                         "conditionally-available": false,
                         "construct": false,
                         "construct-only": false,
@@ -6651,7 +6687,8 @@
                     "sink_%%u": {
                         "caps": "video/x-raw(memory:GLMemory, meta:GstVideoOverlayComposition):\n         format: { RGBA, BGRA, RGBx, BGRx, ARGB, ABGR, xRGB, xBGR, GBRA, GBR, RGBP, BGRP, RGB, BGR, RGB16, BGR16, AYUV, VUYA, Y410, I420, YV12, NV12, NV21, NV16, NV61, YUY2, UYVY, Y210, Y41B, Y42B, Y444, GRAY8, GRAY16_LE, GRAY16_BE, ARGB64, A420, AV12, NV12_16L32S, NV12_4L4, BGR10A2_LE, RGB10A2_LE, P010_10LE, P012_LE, P016_LE, Y212_LE, Y412_LE }\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\n      framerate: [ 0/1, 2147483647/1 ]\n\nvideo/x-raw(memory:DMABuf, meta:GstVideoOverlayComposition):\n         format: { RGBA, BGRA, RGBx, BGRx, ARGB, ABGR, xRGB, xBGR, GBRA, GBR, RGBP, BGRP, RGB, BGR, RGB16, BGR16, AYUV, VUYA, Y410, I420, YV12, NV12, NV21, NV16, NV61, YUY2, UYVY, Y210, Y41B, Y42B, Y444, GRAY8, GRAY16_LE, GRAY16_BE, ARGB64, A420, AV12, NV12_16L32S, NV12_4L4, BGR10A2_LE, RGB10A2_LE, P010_10LE, P012_LE, P016_LE, Y212_LE, Y412_LE }\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\n      framerate: [ 0/1, 2147483647/1 ]\n\nvideo/x-raw(memory:SystemMemory, meta:GstVideoOverlayComposition):\n         format: { RGBA, BGRA, RGBx, BGRx, ARGB, ABGR, xRGB, xBGR, GBRA, GBR, RGBP, BGRP, RGB, BGR, RGB16, BGR16, AYUV, VUYA, Y410, I420, YV12, NV12, NV21, NV16, NV61, YUY2, UYVY, Y210, Y41B, Y42B, Y444, GRAY8, GRAY16_LE, GRAY16_BE, ARGB64, A420, AV12, NV12_16L32S, NV12_4L4, BGR10A2_LE, RGB10A2_LE, P010_10LE, P012_LE, P016_LE, Y212_LE, Y412_LE }\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\n      framerate: [ 0/1, 2147483647/1 ]\n\nvideo/x-raw(meta:GstVideoGLTextureUploadMeta, meta:GstVideoOverlayComposition):\n         format: RGBA\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\n      framerate: [ 0/1, 2147483647/1 ]\n\nvideo/x-raw(memory:GLMemory):\n         format: { RGBA, BGRA, RGBx, BGRx, ARGB, ABGR, xRGB, xBGR, GBRA, GBR, RGBP, BGRP, RGB, BGR, RGB16, BGR16, AYUV, VUYA, Y410, I420, YV12, NV12, NV21, NV16, NV61, YUY2, UYVY, Y210, Y41B, Y42B, Y444, GRAY8, GRAY16_LE, GRAY16_BE, ARGB64, A420, AV12, NV12_16L32S, NV12_4L4, BGR10A2_LE, RGB10A2_LE, P010_10LE, P012_LE, P016_LE, Y212_LE, Y412_LE }\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\n      framerate: [ 0/1, 2147483647/1 ]\n\nvideo/x-raw(memory:DMABuf):\n         format: { RGBA, BGRA, RGBx, BGRx, ARGB, ABGR, xRGB, xBGR, GBRA, GBR, RGBP, BGRP, RGB, BGR, RGB16, BGR16, AYUV, VUYA, Y410, I420, YV12, NV12, NV21, NV16, NV61, YUY2, UYVY, Y210, Y41B, Y42B, Y444, GRAY8, GRAY16_LE, GRAY16_BE, ARGB64, A420, AV12, NV12_16L32S, NV12_4L4, BGR10A2_LE, RGB10A2_LE, P010_10LE, P012_LE, P016_LE, Y212_LE, Y412_LE }\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\n      framerate: [ 0/1, 2147483647/1 ]\nvideo/x-raw:\n         format: { RGBA, BGRA, RGBx, BGRx, ARGB, ABGR, xRGB, xBGR, GBRA, GBR, RGBP, BGRP, RGB, BGR, RGB16, BGR16, AYUV, VUYA, Y410, I420, YV12, NV12, NV21, NV16, NV61, YUY2, UYVY, Y210, Y41B, Y42B, Y444, GRAY8, GRAY16_LE, GRAY16_BE, ARGB64, A420, AV12, NV12_16L32S, NV12_4L4, BGR10A2_LE, RGB10A2_LE, P010_10LE, P012_LE, P016_LE, Y212_LE, Y412_LE }\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\n      framerate: [ 0/1, 2147483647/1 ]\n\nvideo/x-raw(meta:GstVideoGLTextureUploadMeta):\n         format: RGBA\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\n      framerate: [ 0/1, 2147483647/1 ]\n",
                         "direction": "sink",
-                        "presence": "request"
+                        "presence": "request",
+                        "type": "GstGLVideoMixerInput"
                     },
                     "src": {
                         "caps": "video/x-raw(ANY):\n",
@@ -7108,6 +7145,242 @@
                     }
                 ]
             },
+            "GstGLSinkBin": {
+                "hierarchy": [
+                    "GstGLSinkBin",
+                    "GstBin",
+                    "GstElement",
+                    "GstObject",
+                    "GInitiallyUnowned",
+                    "GObject"
+                ],
+                "interfaces": [
+                    "GstChildProxy",
+                    "GstVideoOverlay",
+                    "GstNavigation",
+                    "GstColorBalance"
+                ],
+                "kind": "object",
+                "properties": {
+                    "async": {
+                        "blurb": "Go asynchronously to PAUSED",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "true",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gboolean",
+                        "writable": true
+                    },
+                    "blocksize": {
+                        "blurb": "Size in bytes to pull per buffer (0 = default)",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "4096",
+                        "max": "-1",
+                        "min": "0",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "guint",
+                        "writable": true
+                    },
+                    "brightness": {
+                        "blurb": "brightness",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": true,
+                        "default": "0",
+                        "max": "1",
+                        "min": "-1",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gdouble",
+                        "writable": true
+                    },
+                    "contrast": {
+                        "blurb": "contrast",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": true,
+                        "default": "1",
+                        "max": "2",
+                        "min": "0",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gdouble",
+                        "writable": true
+                    },
+                    "enable-last-sample": {
+                        "blurb": "Enable the last-sample property",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "true",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gboolean",
+                        "writable": true
+                    },
+                    "hue": {
+                        "blurb": "hue",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": true,
+                        "default": "0",
+                        "max": "1",
+                        "min": "-1",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gdouble",
+                        "writable": true
+                    },
+                    "last-sample": {
+                        "blurb": "The last sample received in the sink",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "GstSample",
+                        "writable": false
+                    },
+                    "max-bitrate": {
+                        "blurb": "The maximum bits per second to render (0 = disabled)",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "0",
+                        "max": "18446744073709551615",
+                        "min": "0",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "guint64",
+                        "writable": true
+                    },
+                    "max-lateness": {
+                        "blurb": "Maximum number of nanoseconds that a buffer can be late before it is dropped (-1 unlimited)",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "5000000",
+                        "max": "9223372036854775807",
+                        "min": "-1",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gint64",
+                        "writable": true
+                    },
+                    "qos": {
+                        "blurb": "Generate Quality-of-Service events upstream",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "true",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gboolean",
+                        "writable": true
+                    },
+                    "render-delay": {
+                        "blurb": "Additional render delay of the sink in nanoseconds",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "0",
+                        "max": "18446744073709551615",
+                        "min": "0",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "guint64",
+                        "writable": true
+                    },
+                    "saturation": {
+                        "blurb": "saturation",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": true,
+                        "default": "1",
+                        "max": "2",
+                        "min": "0",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gdouble",
+                        "writable": true
+                    },
+                    "sink": {
+                        "blurb": "The GL sink chain to use",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "mutable": "ready",
+                        "readable": true,
+                        "type": "GstElement",
+                        "writable": true
+                    },
+                    "sync": {
+                        "blurb": "Sync on the clock",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "true",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gboolean",
+                        "writable": true
+                    },
+                    "throttle-time": {
+                        "blurb": "The time to keep between rendered buffers (0 = disabled)",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "0",
+                        "max": "18446744073709551615",
+                        "min": "0",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "guint64",
+                        "writable": true
+                    },
+                    "ts-offset": {
+                        "blurb": "Timestamp offset in nanoseconds",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "0",
+                        "max": "9223372036854775807",
+                        "min": "-9223372036854775808",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gint64",
+                        "writable": true
+                    }
+                },
+                "signals": {
+                    "create-element": {
+                        "args": [],
+                        "return-type": "GstElement",
+                        "when": "last"
+                    }
+                }
+            },
             "GstGLStereoDownmix": {
                 "kind": "enum",
                 "values": [
@@ -7394,6 +7667,340 @@
                     }
                 ]
             },
+            "GstGLVideoMixerInput": {
+                "hierarchy": [
+                    "GstGLVideoMixerInput",
+                    "GstGhostPad",
+                    "GstProxyPad",
+                    "GstPad",
+                    "GstObject",
+                    "GInitiallyUnowned",
+                    "GObject"
+                ],
+                "kind": "object",
+                "properties": {
+                    "alpha": {
+                        "blurb": "Alpha of the picture",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": true,
+                        "default": "0",
+                        "max": "1",
+                        "min": "0",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gdouble",
+                        "writable": true
+                    },
+                    "blend-constant-color-alpha": {
+                        "blurb": "Blend Constant Color Alpha",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": true,
+                        "default": "0",
+                        "max": "1",
+                        "min": "0",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gdouble",
+                        "writable": true
+                    },
+                    "blend-constant-color-blue": {
+                        "blurb": "Blend Constant Color Green",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": true,
+                        "default": "0",
+                        "max": "1",
+                        "min": "0",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gdouble",
+                        "writable": true
+                    },
+                    "blend-constant-color-green": {
+                        "blurb": "Blend Constant Color Green",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": true,
+                        "default": "0",
+                        "max": "1",
+                        "min": "0",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gdouble",
+                        "writable": true
+                    },
+                    "blend-constant-color-red": {
+                        "blurb": "Blend Constant Color Red",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": true,
+                        "default": "0",
+                        "max": "1",
+                        "min": "0",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gdouble",
+                        "writable": true
+                    },
+                    "blend-equation-alpha": {
+                        "blurb": "Blend Equation for Alpha",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": true,
+                        "default": "add (0)",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "GstGLVideoMixerBlendEquation",
+                        "writable": true
+                    },
+                    "blend-equation-rgb": {
+                        "blurb": "Blend Equation for RGB",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": true,
+                        "default": "add (0)",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "GstGLVideoMixerBlendEquation",
+                        "writable": true
+                    },
+                    "blend-function-dst-alpha": {
+                        "blurb": "Blend Function for Destination Alpha",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": true,
+                        "default": "zero (0)",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "GstGLVideoMixerBlendFunction",
+                        "writable": true
+                    },
+                    "blend-function-dst-rgb": {
+                        "blurb": "Blend Function for Destination RGB",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": true,
+                        "default": "zero (0)",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "GstGLVideoMixerBlendFunction",
+                        "writable": true
+                    },
+                    "blend-function-src-alpha": {
+                        "blurb": "Blend Function for Source Alpha",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": true,
+                        "default": "zero (0)",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "GstGLVideoMixerBlendFunction",
+                        "writable": true
+                    },
+                    "blend-function-src-rgb": {
+                        "blurb": "Blend Function for Source RGB",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": true,
+                        "default": "zero (0)",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "GstGLVideoMixerBlendFunction",
+                        "writable": true
+                    },
+                    "crop-bottom": {
+                        "blurb": "Crop bottom of the picture",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": true,
+                        "default": "0",
+                        "max": "2147483647",
+                        "min": "0",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gint",
+                        "writable": true
+                    },
+                    "crop-left": {
+                        "blurb": "Crop left of the picture",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": true,
+                        "default": "0",
+                        "max": "2147483647",
+                        "min": "0",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gint",
+                        "writable": true
+                    },
+                    "crop-right": {
+                        "blurb": "Crop right of the picture",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": true,
+                        "default": "0",
+                        "max": "2147483647",
+                        "min": "0",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gint",
+                        "writable": true
+                    },
+                    "crop-top": {
+                        "blurb": "Crop top of the picture",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": true,
+                        "default": "0",
+                        "max": "2147483647",
+                        "min": "0",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gint",
+                        "writable": true
+                    },
+                    "height": {
+                        "blurb": "Height of the picture",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": true,
+                        "default": "0",
+                        "max": "2147483647",
+                        "min": "-2147483648",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gint",
+                        "writable": true
+                    },
+                    "repeat-after-eos": {
+                        "blurb": "Aggregate the last frame on pads that are EOS till they are released",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": true,
+                        "default": "false",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gboolean",
+                        "writable": true
+                    },
+                    "sizing-policy": {
+                        "blurb": "Sizing policy to use for image scaling",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": true,
+                        "default": "none (0)",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "GstGLVideoMixerSizingPolicy",
+                        "writable": true
+                    },
+                    "width": {
+                        "blurb": "Width of the picture",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": true,
+                        "default": "0",
+                        "max": "2147483647",
+                        "min": "-2147483648",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gint",
+                        "writable": true
+                    },
+                    "xalign": {
+                        "blurb": "X alignment of the picture",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": true,
+                        "default": "0",
+                        "max": "1",
+                        "min": "0",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gdouble",
+                        "writable": true
+                    },
+                    "xpos": {
+                        "blurb": "X Position of the picture",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": true,
+                        "default": "0",
+                        "max": "2147483647",
+                        "min": "-2147483648",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gint",
+                        "writable": true
+                    },
+                    "yalign": {
+                        "blurb": "Y alignment of the picture",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": true,
+                        "default": "0",
+                        "max": "1",
+                        "min": "0",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gdouble",
+                        "writable": true
+                    },
+                    "ypos": {
+                        "blurb": "Y Position of the picture",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": true,
+                        "default": "0",
+                        "max": "2147483647",
+                        "min": "-2147483648",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gint",
+                        "writable": true
+                    },
+                    "zorder": {
+                        "blurb": "Z Order of the picture",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": true,
+                        "default": "0",
+                        "max": "10000",
+                        "min": "0",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "guint",
+                        "writable": true
+                    }
+                }
+            },
             "GstGLVideoMixerPad": {
                 "hierarchy": [
                     "GstGLVideoMixerPad",
@@ -7620,6 +8227,18 @@
                         "type": "gint",
                         "writable": true
                     },
+                    "sizing-policy": {
+                        "blurb": "Sizing policy to use for image scaling",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": true,
+                        "default": "none (0)",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "GstGLVideoMixerSizingPolicy",
+                        "writable": true
+                    },
                     "width": {
                         "blurb": "Width of the picture",
                         "conditionally-available": false,
@@ -7634,6 +8253,20 @@
                         "type": "gint",
                         "writable": true
                     },
+                    "xalign": {
+                        "blurb": "X alignment of the picture",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": true,
+                        "default": "0.5",
+                        "max": "1",
+                        "min": "0",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gdouble",
+                        "writable": true
+                    },
                     "xpos": {
                         "blurb": "X Position of the picture",
                         "conditionally-available": false,
@@ -7646,6 +8279,20 @@
                         "mutable": "null",
                         "readable": true,
                         "type": "gint",
+                        "writable": true
+                    },
+                    "yalign": {
+                        "blurb": "Y alignment of the picture",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": true,
+                        "default": "0.5",
+                        "max": "1",
+                        "min": "0",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gdouble",
                         "writable": true
                     },
                     "ypos": {
@@ -7664,6 +8311,21 @@
                     }
                 },
                 "signals": {}
+            },
+            "GstGLVideoMixerSizingPolicy": {
+                "kind": "enum",
+                "values": [
+                    {
+                        "desc": "None: Image is scaled to fill configured destination rectangle without padding or keeping the aspect ratio",
+                        "name": "none",
+                        "value": "0"
+                    },
+                    {
+                        "desc": "Keep Aspect Ratio: Image is scaled to fit destination rectangle specified by GstGLVideoMixerPad:{xpos, ypos, width, height} with preserved aspect ratio. The empty space of the resulting image will be distributed in the destination rectangle according to the GstGLVideoMixerPad:{xalign, yalign} values",
+                        "name": "keep-aspect-ratio",
+                        "value": "1"
+                    }
+                ]
             }
         },
         "package": "GStreamer Base Plug-ins",
@@ -7694,7 +8356,7 @@
                         "presence": "always"
                     },
                     "src": {
-                        "caps": "audio/x-raw:\n         format: S16LE\n         layout: interleaved\n           rate: { (int)48000, (int)24000, (int)16000, (int)12000, (int)8000 }\n       channels: [ 1, 8 ]\n",
+                        "caps": "audio/x-raw:\n         format: S16LE\n         layout: interleaved\n           rate: { (int)48000, (int)24000, (int)16000, (int)12000, (int)8000 }\n       channels: [ 1, 255 ]\n",
                         "direction": "src",
                         "presence": "always"
                     }
@@ -7770,7 +8432,7 @@
                 "long-name": "Opus audio encoder",
                 "pad-templates": {
                     "sink": {
-                        "caps": "audio/x-raw:\n         format: S16LE\n         layout: interleaved\n           rate: 48000\n       channels: [ 1, 8 ]\naudio/x-raw:\n         format: S16LE\n         layout: interleaved\n           rate: { (int)8000, (int)12000, (int)16000, (int)24000 }\n       channels: [ 1, 8 ]\n",
+                        "caps": "audio/x-raw:\n         format: S16LE\n         layout: interleaved\n           rate: 48000\n       channels: [ 1, 255 ]\naudio/x-raw:\n         format: S16LE\n         layout: interleaved\n           rate: { (int)8000, (int)12000, (int)16000, (int)24000 }\n       channels: [ 1, 255 ]\n",
                         "direction": "sink",
                         "presence": "always"
                     },
@@ -9002,6 +9664,16 @@
                         "desc": "reference-timestamp",
                         "name": "reference-timestamp",
                         "value": "5"
+                    },
+                    {
+                        "desc": "buffer-count",
+                        "name": "buffer-count",
+                        "value": "6"
+                    },
+                    {
+                        "desc": "buffer-offset",
+                        "name": "buffer-offset",
+                        "value": "7"
                     }
                 ]
             }
@@ -14031,6 +14703,212 @@
         "filename": "gstvideoconvertscale",
         "license": "LGPL",
         "other-types": {
+            "GstVideoConvertScale": {
+                "hierarchy": [
+                    "GstVideoConvertScale",
+                    "GstVideoFilter",
+                    "GstBaseTransform",
+                    "GstElement",
+                    "GstObject",
+                    "GInitiallyUnowned",
+                    "GObject"
+                ],
+                "kind": "object",
+                "properties": {
+                    "add-borders": {
+                        "blurb": "Add black borders if necessary to keep the display aspect ratio",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "true",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gboolean",
+                        "writable": true
+                    },
+                    "alpha-mode": {
+                        "blurb": "Alpha Mode to use",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "copy (0)",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "GstVideoAlphaMode",
+                        "writable": true
+                    },
+                    "alpha-value": {
+                        "blurb": "Alpha Value to use",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "1",
+                        "max": "1",
+                        "min": "0",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gdouble",
+                        "writable": true
+                    },
+                    "chroma-mode": {
+                        "blurb": "Chroma Resampling Mode",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "full (0)",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "GstVideoChromaMode",
+                        "writable": true
+                    },
+                    "chroma-resampler": {
+                        "blurb": "Chroma resampler method",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "linear (1)",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "GstVideoResamplerMethod",
+                        "writable": true
+                    },
+                    "dither": {
+                        "blurb": "Apply dithering while converting",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "bayer (4)",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "GstVideoDitherMethod",
+                        "writable": true
+                    },
+                    "dither-quantization": {
+                        "blurb": "Quantizer to use",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "1",
+                        "max": "-1",
+                        "min": "0",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "guint",
+                        "writable": true
+                    },
+                    "envelope": {
+                        "blurb": "Size of filter envelope",
+                        "conditionally-available": false,
+                        "construct": true,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "2",
+                        "max": "5",
+                        "min": "1",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gdouble",
+                        "writable": true
+                    },
+                    "gamma-mode": {
+                        "blurb": "Gamma Conversion Mode",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "none (0)",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "GstVideoGammaMode",
+                        "writable": true
+                    },
+                    "matrix-mode": {
+                        "blurb": "Matrix Conversion Mode",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "full (0)",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "GstVideoMatrixMode",
+                        "writable": true
+                    },
+                    "method": {
+                        "blurb": "method",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "bilinear (1)",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "GstVideoScaleMethod",
+                        "writable": true
+                    },
+                    "n-threads": {
+                        "blurb": "Maximum number of threads to use",
+                        "conditionally-available": false,
+                        "construct": true,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "1",
+                        "max": "-1",
+                        "min": "0",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "guint",
+                        "writable": true
+                    },
+                    "primaries-mode": {
+                        "blurb": "Primaries Conversion Mode",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "none (0)",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "GstVideoPrimariesMode",
+                        "writable": true
+                    },
+                    "sharpen": {
+                        "blurb": "Sharpening",
+                        "conditionally-available": false,
+                        "construct": true,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "0",
+                        "max": "1",
+                        "min": "0",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gdouble",
+                        "writable": true
+                    },
+                    "sharpness": {
+                        "blurb": "Sharpness of filter",
+                        "conditionally-available": false,
+                        "construct": true,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "1",
+                        "max": "1.5",
+                        "min": "0.5",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gdouble",
+                        "writable": true
+                    }
+                }
+            },
             "GstVideoScaleMethod": {
                 "kind": "enum",
                 "values": [

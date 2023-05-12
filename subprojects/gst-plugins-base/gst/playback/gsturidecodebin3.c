@@ -17,24 +17,12 @@
  * Boston, MA 02110-1301, USA.
  */
 
-/* TODO/FIXME:
- *
- * * BUFFERING MESSAGES
- * ** How/Where do we deal with buffering messages from a new/prerolling
- *    source ? Ideally we want to re-use the same sourcebin ?
- * ** Remember last buffering messages per source handler, if the SourceEntry
- *    group_id is the one being currently outputted on the source ghostpads,
- *    post the (last) buffering messages.
- *    If no group_id is being outputted (still prerolling), then output
- *    the messages directly
- */
-
 /**
  * SECTION:element-uridecodebin3
  * @title: uridecodebin3
  *
  * Decodes data from a URI into raw media. It selects a source element that can
- * handle the given #GstURIDecodeBin3:uri scheme and connects it to a decodebin.
+ * handle the given #GstURIDecodeBin3:uri scheme and connects it to a decodebin3.
  */
 
 #ifdef HAVE_CONFIG_H
@@ -151,6 +139,9 @@ struct _GstSourceHandler
 
   /* buffering message stored for after switching */
   GstMessage *pending_buffering_msg;
+
+  /* TRUE if urisourcebin handles stream-selection */
+  gboolean upstream_selected;
 
   /* Number of expected sourcepads. Default 1, else it's the number of streams
    * specified by GST_MESSAGE_SELECTED_STREAMS from the source */
@@ -378,6 +369,8 @@ static void gst_uri_decode_bin3_get_property (GObject * object, guint prop_id,
 static void gst_uri_decode_bin3_dispose (GObject * obj);
 static GstSourceHandler *new_source_handler (GstURIDecodeBin3 * uridecodebin,
     GstPlayItem * item, gboolean is_main);
+static void free_source_handler (GstURIDecodeBin3 * uridecodebin,
+    GstSourceHandler * item, gboolean lock_state);
 static void free_source_item (GstURIDecodeBin3 * uridecodebin,
     GstSourceItem * item);
 
@@ -513,7 +506,7 @@ gst_uri_decode_bin3_class_init (GstURIDecodeBin3Class * klass)
    * GstURIDecodeBin3:instant-uri:
    *
    * Changes to uri are applied immediately (instead of on EOS or when the
-   * element is set back to PLAYING.
+   * element is set back to PLAYING).
    *
    * Since: 1.22
    */
@@ -682,13 +675,13 @@ add_output_pad (GstURIDecodeBin3 * dec, GstPad * target_pad)
   gchar *pad_name;
   GstEvent *stream_start;
 
-  output = g_slice_new0 (OutputPad);
+  output = g_new0 (OutputPad, 1);
 
   GST_LOG_OBJECT (dec, "Created output %p", output);
 
   output->uridecodebin = dec;
   output->target_pad = target_pad;
-  output->current_group_id = (guint) - 1;
+  output->current_group_id = GST_GROUP_ID_INVALID;
   pad_name = gst_pad_get_name (target_pad);
   output->ghost_pad = gst_ghost_pad_new (pad_name, target_pad);
   g_free (pad_name);
@@ -758,7 +751,7 @@ db_pad_removed_cb (GstElement * element, GstPad * pad, GstURIDecodeBin3 * dec)
     /* Remove event probe */
     gst_pad_remove_probe (output->target_pad, output->probe_id);
 
-    g_slice_free (OutputPad, output);
+    g_free (output);
 
     check_output_group_id (dec);
   }
@@ -932,7 +925,8 @@ activate_source_item (GstSourceItem * item)
     handler->active = TRUE;
   }
 
-  gst_element_sync_state_with_parent (handler->urisourcebin);
+  if (!gst_element_sync_state_with_parent (handler->urisourcebin))
+    return GST_STATE_CHANGE_FAILURE;
 
   return GST_STATE_CHANGE_SUCCESS;
 }
@@ -982,11 +976,21 @@ link_src_pad_to_db3 (GstURIDecodeBin3 * uridecodebin, GstSourcePad * spad)
   if (handler->is_main_source && handler->play_item->sub_item
       && !handler->play_item->sub_item->handler) {
     GstStateChangeReturn ret;
+
+    /* The state lock is taken to ensure we can atomically change the
+     * urisourcebin back to NULL in case of failures */
+    GST_STATE_LOCK (uridecodebin);
     handler->play_item->sub_item->handler =
         new_source_handler (uridecodebin, handler->play_item, FALSE);
     ret = activate_source_item (handler->play_item->sub_item);
-    if (ret == GST_STATE_CHANGE_FAILURE)
+    if (ret == GST_STATE_CHANGE_FAILURE) {
+      free_source_handler (uridecodebin, handler->play_item->sub_item->handler,
+          FALSE);
+      handler->play_item->sub_item->handler = NULL;
+      GST_STATE_UNLOCK (uridecodebin);
       goto sub_item_activation_failed;
+    }
+    GST_STATE_UNLOCK (uridecodebin);
   }
 
   return;
@@ -1055,6 +1059,7 @@ switch_and_activate_input_locked (GstURIDecodeBin3 * uridecodebin,
   GList *old_pads = get_all_play_item_source_pads (uridecodebin->input_item);
   GList *to_activate = NULL;
   GList *iternew, *iterold;
+  gboolean inactive_previous_item = old_pads == NULL;
 
   /* Deactivate old urisourcebins first ? Problem is they might remove the pads */
 
@@ -1122,12 +1127,31 @@ switch_and_activate_input_locked (GstURIDecodeBin3 * uridecodebin,
     uridecodebin->input_item->sub_item = NULL;
   }
 
+  /* If the previous play item was not active at all (i.e. was never linked to
+   * decodebin3), this one *also* becomes the output one */
+  if (inactive_previous_item) {
+    GST_DEBUG_OBJECT (uridecodebin,
+        "Previous play item was never activated, discarding");
+    uridecodebin->play_items =
+        g_list_remove (uridecodebin->play_items, uridecodebin->input_item);
+    free_play_item (uridecodebin, uridecodebin->input_item);
+    uridecodebin->output_item = new_item;
+  }
+
   /* and set new one as input item */
   uridecodebin->input_item = new_item;
 
+  /* If the new source is already drained, propagate about-to-finish */
+  if (new_item->pending_about_to_finish) {
+    emit_and_handle_about_to_finish (uridecodebin, new_item);
+  }
+
+  /* Finally propagate pending buffering message */
   if (new_item->main_item->handler->pending_buffering_msg) {
     GstMessage *msg = new_item->main_item->handler->pending_buffering_msg;
     new_item->main_item->handler->pending_buffering_msg = NULL;
+    GST_DEBUG_OBJECT (uridecodebin,
+        "Posting pending buffering message %" GST_PTR_FORMAT, msg);
     PLAY_ITEMS_UNLOCK (uridecodebin);
     GST_BIN_CLASS (parent_class)->handle_message ((GstBin *) uridecodebin, msg);
     PLAY_ITEMS_LOCK (uridecodebin);
@@ -1164,7 +1188,7 @@ uri_src_probe (GstPad * pad, GstPadProbeInfo * info, GstSourcePad * srcpad)
        * pending play item, switch to it */
       if (handler->play_item == handler->uridecodebin->input_item &&
           play_item_is_eos (handler->play_item)) {
-        g_cond_signal (&handler->uridecodebin->input_source_drained);
+        g_cond_broadcast (&handler->uridecodebin->input_source_drained);
       }
       PLAY_ITEMS_UNLOCK (handler->uridecodebin);
       ret = GST_PAD_PROBE_HANDLED;
@@ -1173,7 +1197,22 @@ uri_src_probe (GstPad * pad, GstPadProbeInfo * info, GstSourcePad * srcpad)
     case GST_EVENT_STREAM_START:
     {
       GstStream *stream = NULL;
+      guint group_id = GST_GROUP_ID_INVALID;
+
       srcpad->saw_eos = FALSE;
+      gst_event_parse_group_id (event, &group_id);
+      /* Unify group id */
+      if (handler->play_item->group_id == GST_GROUP_ID_INVALID) {
+        GST_DEBUG_OBJECT (pad,
+            "Setting play item to group_id %" G_GUINT32_FORMAT, group_id);
+        handler->play_item->group_id = group_id;
+      } else if (handler->play_item->group_id != group_id) {
+        GST_DEBUG_OBJECT (pad, "Updating event group-id to %" G_GUINT32_FORMAT,
+            handler->play_item->group_id);
+        event = gst_event_make_writable (event);
+        GST_PAD_PROBE_INFO_DATA (info) = event;
+        gst_event_set_group_id (event, handler->play_item->group_id);
+      }
       gst_event_parse_stream (event, &stream);
       if (stream) {
         GST_DEBUG_OBJECT (srcpad->src_pad, "Got GstStream %" GST_PTR_FORMAT,
@@ -1211,6 +1250,7 @@ uri_src_block_probe (GstPad * pad, GstPadProbeInfo * info,
     GstEvent *event = GST_PAD_PROBE_INFO_EVENT (info);
     if (GST_EVENT_TYPE (event) == GST_EVENT_STREAM_START) {
       GstStream *stream = NULL;
+      GstQuery *q = gst_query_new_selectable ();
       gst_event_parse_stream (event, &stream);
       if (stream) {
         GST_DEBUG_OBJECT (srcpad->src_pad, "Got GstStream %" GST_PTR_FORMAT,
@@ -1219,9 +1259,37 @@ uri_src_block_probe (GstPad * pad, GstPadProbeInfo * info,
           gst_object_unref (srcpad->stream);
         srcpad->stream = stream;
       }
+      if (gst_pad_query (pad, q)) {
+        PLAY_ITEMS_LOCK (handler->uridecodebin);
+        gst_query_parse_selectable (q, &handler->upstream_selected);
+        GST_DEBUG_OBJECT (srcpad->src_pad, "Upstream is selectable : %d",
+            handler->upstream_selected);
+        PLAY_ITEMS_UNLOCK (handler->uridecodebin);
+      }
+      gst_query_unref (q);
+    } else if (GST_EVENT_TYPE (event) == GST_EVENT_STREAM_COLLECTION) {
+      GstStreamCollection *collection = NULL;
+      PLAY_ITEMS_LOCK (handler->uridecodebin);
+      if (!handler->upstream_selected) {
+        gst_event_parse_stream_collection (event, &collection);
+        if (collection) {
+          GST_DEBUG_OBJECT (srcpad->src_pad, "Seen collection with %d streams",
+              gst_stream_collection_get_size (collection));
+          if (handler->expected_pads == 1) {
+            handler->expected_pads =
+                gst_stream_collection_get_size (collection);
+          }
+          gst_object_unref (collection);
+        }
+      }
+      PLAY_ITEMS_UNLOCK (handler->uridecodebin);
     }
+
     GST_LOG_OBJECT (pad, "Skiping %" GST_PTR_FORMAT, event);
-    return GST_PAD_PROBE_DROP;
+    /* We don't want to be repeatedly called for the same event when unlinked,
+     * so we mark the event as handled */
+    gst_mini_object_unref (GST_PAD_PROBE_INFO_DATA (info));
+    return GST_PAD_PROBE_HANDLED;
   }
 
   PLAY_ITEMS_LOCK (handler->uridecodebin);
@@ -1234,6 +1302,7 @@ uri_src_block_probe (GstPad * pad, GstPadProbeInfo * info,
   } else if (play_item_has_all_pads (handler->play_item)) {
     /* We have all expected pads for this play item but the current input
      * play item isn't done yet, wait for it */
+    GST_DEBUG_OBJECT (pad, "Waiting for input source to be drained");
     g_cond_wait (&handler->uridecodebin->input_source_drained,
         &handler->uridecodebin->play_items_lock);
     if (g_atomic_int_get (&handler->uridecodebin->shutdown))
@@ -1243,8 +1312,8 @@ uri_src_block_probe (GstPad * pad, GstPadProbeInfo * info,
           "We can switch over to the next input item");
       switch_and_activate_input_locked (handler->uridecodebin,
           handler->play_item);
-      ret = GST_PAD_PROBE_REMOVE;
     }
+    ret = GST_PAD_PROBE_REMOVE;
   }
 
   PLAY_ITEMS_UNLOCK (handler->uridecodebin);
@@ -1255,8 +1324,15 @@ uri_src_block_probe (GstPad * pad, GstPadProbeInfo * info,
 shutdown:
   {
     GST_LOG_OBJECT (pad, "Shutting down");
+    /* We are shutting down, we both want to remove this probe and propagate a
+     * GST_FLOW_FLUSHING upstream (to cause tasks to stop) */
+    if (srcpad->block_probe_id)
+      gst_pad_remove_probe (pad, srcpad->block_probe_id);
+    srcpad->block_probe_id = 0;
     PLAY_ITEMS_UNLOCK (handler->uridecodebin);
-    return GST_PAD_PROBE_REMOVE;
+    GST_PAD_PROBE_INFO_FLOW_RETURN (info) = GST_FLOW_FLUSHING;
+    gst_mini_object_unref (GST_PAD_PROBE_INFO_DATA (info));
+    return GST_PAD_PROBE_HANDLED;
   }
 }
 
@@ -1264,7 +1340,7 @@ static void
 src_pad_added_cb (GstElement * element, GstPad * pad,
     GstSourceHandler * handler)
 {
-  GstSourcePad *spad = g_slice_new0 (GstSourcePad);
+  GstSourcePad *spad = g_new0 (GstSourcePad, 1);
   GstURIDecodeBin3 *uridecodebin;
 
   uridecodebin = handler->uridecodebin;
@@ -1340,8 +1416,11 @@ src_pad_removed_cb (GstElement * element, GstPad * pad,
     gst_element_release_request_pad (uridecodebin->decodebin,
         spad->db3_sink_pad);
 
+  if (spad->stream)
+    gst_object_unref (spad->stream);
+
   handler->sourcepads = g_list_remove (handler->sourcepads, spad);
-  g_slice_free (GstSourcePad, spad);
+  g_free (spad);
 }
 
 static void
@@ -1367,7 +1446,7 @@ new_source_handler (GstURIDecodeBin3 * uridecodebin, GstPlayItem * item,
 {
   GstSourceHandler *handler;
 
-  handler = g_slice_new0 (GstSourceHandler);
+  handler = g_new0 (GstSourceHandler, 1);
 
   handler->uridecodebin = uridecodebin;
   handler->play_item = item;
@@ -1571,14 +1650,17 @@ gst_uri_decode_bin3_get_property (GObject * object, guint prop_id,
   }
 }
 
+/* lock_state: TRUE if the STATE LOCK should be taken. Set to FALSE if the
+ * caller already has taken it */
 static void
 free_source_handler (GstURIDecodeBin3 * uridecodebin,
-    GstSourceHandler * handler)
+    GstSourceHandler * handler, gboolean lock_state)
 {
   GST_LOG_OBJECT (uridecodebin, "source handler %p", handler);
   if (handler->active) {
     GList *iter;
-    GST_STATE_LOCK (uridecodebin);
+    if (lock_state)
+      GST_STATE_LOCK (uridecodebin);
     GST_LOG_OBJECT (uridecodebin, "Removing %" GST_PTR_FORMAT,
         handler->urisourcebin);
     for (iter = handler->sourcepads; iter; iter = iter->next) {
@@ -1588,18 +1670,19 @@ free_source_handler (GstURIDecodeBin3 * uridecodebin,
     }
     gst_element_set_state (handler->urisourcebin, GST_STATE_NULL);
     gst_bin_remove ((GstBin *) uridecodebin, handler->urisourcebin);
-    GST_STATE_UNLOCK (uridecodebin);
+    if (lock_state)
+      GST_STATE_UNLOCK (uridecodebin);
     g_list_free (handler->sourcepads);
   }
   if (handler->pending_buffering_msg)
     gst_message_unref (handler->pending_buffering_msg);
-  g_slice_free (GstSourceHandler, handler);
+  g_free (handler);
 }
 
 static GstSourceItem *
 new_source_item (GstURIDecodeBin3 * dec, GstPlayItem * item, gchar * uri)
 {
-  GstSourceItem *sourceitem = g_slice_new0 (GstSourceItem);
+  GstSourceItem *sourceitem = g_new0 (GstSourceItem, 1);
 
   sourceitem->play_item = item;
   sourceitem->uri = uri;
@@ -1612,9 +1695,9 @@ free_source_item (GstURIDecodeBin3 * uridecodebin, GstSourceItem * item)
 {
   GST_LOG_OBJECT (uridecodebin, "source item %p", item);
   if (item->handler)
-    free_source_handler (uridecodebin, item->handler);
+    free_source_handler (uridecodebin, item->handler, TRUE);
   g_free (item->uri);
-  g_slice_free (GstSourceItem, item);
+  g_free (item);
 }
 
 static void
@@ -1631,7 +1714,7 @@ source_item_set_uri (GstSourceItem * item, const gchar * uri)
 static GstPlayItem *
 new_play_item (GstURIDecodeBin3 * dec)
 {
-  GstPlayItem *item = g_slice_new0 (GstPlayItem);
+  GstPlayItem *item = g_new0 (GstPlayItem, 1);
 
   item->uridecodebin = dec;
   item->group_id = GST_GROUP_ID_INVALID;
@@ -1648,12 +1731,15 @@ free_play_item (GstURIDecodeBin3 * dec, GstPlayItem * item)
   if (item->sub_item)
     free_source_item (dec, item->sub_item);
 
-  g_slice_free (GstPlayItem, item);
+  g_free (item);
 }
 
 static void
 play_item_set_uri (GstPlayItem * item, const gchar * uri)
 {
+  if (!uri)
+    return;
+
   if (!item->main_item) {
     item->main_item =
         new_source_item (item->uridecodebin, item, g_strdup (uri));
@@ -1665,6 +1751,14 @@ play_item_set_uri (GstPlayItem * item, const gchar * uri)
 static void
 play_item_set_suburi (GstPlayItem * item, const gchar * uri)
 {
+  if (!uri) {
+    if (item->sub_item) {
+      free_source_item (item->uridecodebin, item->sub_item);
+      item->sub_item = NULL;
+    }
+    return;
+  }
+
   if (!item->sub_item) {
     item->sub_item = new_source_item (item->uridecodebin, item, g_strdup (uri));
   } else {
@@ -1757,6 +1851,7 @@ gst_uri_decode_bin3_set_uri (GstURIDecodeBin3 * dec, const gchar * uri)
 
   item = next_inactive_play_item (dec);
   play_item_set_uri (item, uri);
+
   if (dec->instant_uri && item != dec->input_item) {
     GList *old_pads = get_all_play_item_source_pads (dec->input_item);
     GList *iter;
@@ -1827,10 +1922,16 @@ assign_handlers_to_item (GstURIDecodeBin3 * dec, GstPlayItem * item)
 
   /* Create missing handlers */
   if (item->main_item->handler == NULL) {
+    /* The state lock is taken to ensure we can atomically change the
+     * urisourcebin back to NULL in case of failures */
+    GST_STATE_LOCK (dec);
     item->main_item->handler = new_source_handler (dec, item, TRUE);
     ret = activate_source_item (item->main_item);
-    if (ret == GST_STATE_CHANGE_FAILURE)
-      return ret;
+    if (ret == GST_STATE_CHANGE_FAILURE) {
+      free_source_handler (dec, item->main_item->handler, FALSE);
+      item->main_item->handler = NULL;
+    }
+    GST_STATE_UNLOCK (dec);
   }
 
   return ret;
@@ -1859,7 +1960,7 @@ purge_play_items (GstURIDecodeBin3 * dec)
   GST_DEBUG_OBJECT (dec, "Purging play items");
 
   PLAY_ITEMS_LOCK (dec);
-  g_cond_signal (&dec->input_source_drained);
+  g_cond_broadcast (&dec->input_source_drained);
   while (dec->play_items && dec->play_items->next) {
     GstPlayItem *item = dec->play_items->data;
     dec->play_items = g_list_remove (dec->play_items, item);
@@ -1891,7 +1992,7 @@ gst_uri_decode_bin3_change_state (GstElement * element,
     case GST_STATE_CHANGE_PAUSED_TO_READY:
       PLAY_ITEMS_LOCK (uridecodebin);
       g_atomic_int_set (&uridecodebin->shutdown, 1);
-      g_cond_signal (&uridecodebin->input_source_drained);
+      g_cond_broadcast (&uridecodebin->input_source_drained);
       PLAY_ITEMS_UNLOCK (uridecodebin);
       break;
     default:
@@ -1951,6 +2052,53 @@ find_source_handler_for_element (GstURIDecodeBin3 * uridecodebin,
   return NULL;
 }
 
+static GstMessage *
+gst_uri_decode_bin3_handle_redirection (GstURIDecodeBin3 * uridecodebin,
+    GstMessage * message, const GstStructure * details)
+{
+  gchar *uri = NULL;
+  GstSourceHandler *handler;
+  const gchar *location;
+  gchar *current_uri;
+
+  PLAY_ITEMS_LOCK (uridecodebin);
+  /* Find the matching handler (if any) */
+  handler = find_source_handler_for_element (uridecodebin, message->src);
+  if (!handler || !handler->play_item || !handler->play_item->main_item)
+    goto beach;
+
+  current_uri = handler->play_item->main_item->uri;
+
+  location = gst_structure_get_string ((GstStructure *) details,
+      "redirect-location");
+  GST_DEBUG_OBJECT (uridecodebin, "Handle redirection message from '%s' to '%s",
+      current_uri, location);
+
+  if (gst_uri_is_valid (location)) {
+    uri = g_strdup (location);
+  } else if (current_uri) {
+    uri = gst_uri_join_strings (current_uri, location);
+  }
+  if (!uri)
+    goto beach;
+
+  if (g_strcmp0 (current_uri, uri)) {
+    gboolean was_instant = uridecodebin->instant_uri;
+    GST_DEBUG_OBJECT (uridecodebin, "Doing instant switch to '%s'", uri);
+    uridecodebin->instant_uri = TRUE;
+    /* Force instant switch */
+    gst_uri_decode_bin3_set_uri (uridecodebin, uri);
+    uridecodebin->instant_uri = was_instant;
+    gst_message_unref (message);
+    message = NULL;
+  }
+  g_free (uri);
+
+beach:
+  PLAY_ITEMS_UNLOCK (uridecodebin);
+  return message;
+}
+
 static void
 gst_uri_decode_bin3_handle_message (GstBin * bin, GstMessage * msg)
 {
@@ -1979,10 +2127,14 @@ gst_uri_decode_bin3_handle_message (GstBin * bin, GstMessage * msg)
       PLAY_ITEMS_LOCK (uridecodebin);
       /* Find the matching handler (if any) */
       handler = find_source_handler_for_element (uridecodebin, msg->src);
-      if (!handler || !uridecodebin->input_item->main_item) {
+      if (!handler) {
+        GST_LOG_OBJECT (uridecodebin, "No handler for message, dropping it");
         gst_message_unref (msg);
         msg = NULL;
-      } else if (handler != uridecodebin->input_item->main_item->handler) {
+      } else if (!uridecodebin->input_item->main_item
+          || handler != uridecodebin->input_item->main_item->handler) {
+        GST_LOG_OBJECT (uridecodebin,
+            "Handler isn't active input item, storing message");
         /* Store the message for a later time */
         if (handler->pending_buffering_msg)
           gst_message_unref (handler->pending_buffering_msg);
@@ -1996,6 +2148,16 @@ gst_uri_decode_bin3_handle_message (GstBin * bin, GstMessage * msg)
       PLAY_ITEMS_UNLOCK (uridecodebin);
       break;
 
+    }
+    case GST_MESSAGE_ERROR:
+    {
+      const GstStructure *details = NULL;
+
+      gst_message_parse_error_details (msg, &details);
+      if (details && gst_structure_has_field (details, "redirect-location"))
+        msg =
+            gst_uri_decode_bin3_handle_redirection (uridecodebin, msg, details);
+      break;
     }
     default:
       break;

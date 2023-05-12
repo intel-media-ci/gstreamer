@@ -3,8 +3,8 @@
 set -eux
 
 cd C:/
-git clone -b ${DEFAULT_BRANCH} https://gitlab.freedesktop.org/gstreamer/cerbero.git
-cd cerbero
+git clone -b ${DEFAULT_BRANCH} https://gitlab.freedesktop.org/gstreamer/cerbero.git C:/cerbero
+cd C:/cerbero
 
 echo 'local_sources="C:/cerbero/cerbero-sources"' > localconf.cbc
 echo 'home_dir="C:/cerbero/cerbero-build"' >> localconf.cbc
@@ -23,5 +23,7 @@ echo 'vs_install_version = "vs16"' >> localconf.cbc
 
 # Wipe visualstudio package dist, sources, logs, and the build tools recipes
 ./cerbero-uninstalled -t -v visualstudio -c localconf.cbc -c config/win64.cbc wipe --force --build-tools
+# Vendored sources get confused with hard links
+rm -rvf /c/cerbero/cerbero-sources/*/cargo-vendor
 # clean the localconf
-rm /c/cerbero/localconf.cbc
+rm -v /c/cerbero/localconf.cbc

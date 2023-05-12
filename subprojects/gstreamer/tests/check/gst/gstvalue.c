@@ -819,28 +819,28 @@ GST_START_TEST (test_deserialize_string)
     const gchar *to;
   } tests[] = {
     {
-    "\"foo\"", "foo"}, {
-    "\"foo\\%\"", "foo%"}, {
-    "\"0123456789_-+/:.\"", "0123456789_-+/:."}, {
-    "\"Hello\\ World\"", "Hello World"}, {
-    "\"Hello\\ World", "\"Hello\\ World"}, {
-    "\"\\", "\"\\"}, {
-    "\"\\0", "\"\\0"}, {
-    "\"t\\303\\274t\"", "tüt"}, {
-      /* utf8 octal sequence */
-    "", ""},                    /* empty strings */
+        "\"foo\"", "foo"}, {
+        "\"foo\\%\"", "foo%"}, {
+        "\"0123456789_-+/:.\"", "0123456789_-+/:."}, {
+        "\"Hello\\ World\"", "Hello World"}, {
+        "\"Hello\\ World", "\"Hello\\ World"}, {
+        "\"\\", "\"\\"}, {
+        "\"\\0", "\"\\0"}, {
+        "\"t\\303\\274t\"", "tüt"}, {
+          /* utf8 octal sequence */
+        "", ""},                /* empty strings */
     {
-    "\"\"", ""}, {              /* quoted empty string -> empty string */
-    "\" \"", " "}, {            /* allow spaces to be not escaped */
-    "tüüt", "tüüt"},        /* allow special chars to be not escaped */
-        /* Expected FAILURES: */
+        "\"\"", ""}, {          /* quoted empty string -> empty string */
+        "\" \"", " "}, {        /* allow spaces to be not escaped */
+        "tüüt", "tüüt"},    /* allow special chars to be not escaped */
+    /* Expected FAILURES: */
     {
-    "\"\\0\"", NULL}, {         /* unfinished escaped character */
-    "\"", NULL}, {              /* solitary quote */
-    "\"\\380\"", NULL}, {       /* invalid octal sequence */
-    "\"\\344\\204\\062\"", NULL}, {
-      /* invalid utf8: wrong end byte */
-    "\"\\344\\204\"", NULL}     /* invalid utf8: wrong number of bytes */
+        "\"\\0\"", NULL}, {     /* unfinished escaped character */
+        "\"", NULL}, {          /* solitary quote */
+        "\"\\380\"", NULL}, {   /* invalid octal sequence */
+        "\"\\344\\204\\062\"", NULL}, {
+          /* invalid utf8: wrong end byte */
+        "\"\\344\\204\"", NULL} /* invalid utf8: wrong number of bytes */
   };
   guint i;
   GValue v = { 0, };
@@ -2656,24 +2656,72 @@ GST_START_TEST (test_fraction_range)
   fail_unless (gst_value_intersect (&dest, &src, &range) == TRUE);
   fail_unless (G_VALUE_TYPE (&dest) == GST_TYPE_FRACTION);
   fail_unless (gst_value_compare (&dest, &src) == GST_VALUE_EQUAL);
+  g_value_unset (&dest);
+
+  /* Check that union of fraction + range = range */
+  fail_unless (gst_value_union (&dest, &src, &range) == TRUE);
+  fail_unless (G_VALUE_TYPE (&dest) == GST_TYPE_FRACTION_RANGE);
+  fail_unless (gst_value_compare (&dest, &range) == GST_VALUE_EQUAL);
+  g_value_unset (&dest);
+
+  /* Check that union of fraction that is not in the range fails */
+  gst_value_set_fraction (&src, 1, 20);
+  fail_unless (gst_value_union (&dest, &src, &range) == FALSE);
+  g_value_unset (&dest);
 
   /* Check that a intersection selects the overlapping range */
   gst_value_set_fraction (&start, 1, 3);
   gst_value_set_fraction (&end, 2, 3);
   gst_value_set_fraction_range (&range2, &start, &end);
-  g_value_unset (&dest);
   fail_unless (gst_value_intersect (&dest, &range, &range2) == TRUE);
   fail_unless (G_VALUE_TYPE (&dest) == GST_TYPE_FRACTION_RANGE);
+  fail_unless (gst_value_compare (&dest, &range2) == GST_VALUE_EQUAL);
+  g_value_unset (&dest);
 
+  /* Fully enclosed union: [1/4, 2/3] ∪ [1/3, 2/3] = [1/4, 2/3] */
+  fail_unless (gst_value_union (&dest, &range, &range2) == TRUE);
+  fail_unless (G_VALUE_TYPE (&dest) == GST_TYPE_FRACTION_RANGE);
+  fail_unless (gst_value_compare (&dest, &range) == GST_VALUE_EQUAL);
+  g_value_unset (&dest);
+  /* Same, but swapped args */
+  fail_unless (gst_value_union (&dest, &range2, &range) == TRUE);
+  fail_unless (G_VALUE_TYPE (&dest) == GST_TYPE_FRACTION_RANGE);
+  fail_unless (gst_value_compare (&dest, &range) == GST_VALUE_EQUAL);
+  g_value_unset (&dest);
+
+  /* Extend union: [1/5, 1/2] ∪ [1/3, 2/3] = [1/5, 2/3] */
+  gst_value_set_fraction (&start, 1, 5);
+  gst_value_set_fraction (&end, 1, 2);
+  gst_value_set_fraction_range (&range2, &start, &end);
+  fail_unless (gst_value_union (&dest, &range, &range2) == TRUE);
+  fail_unless (G_VALUE_TYPE (&dest) == GST_TYPE_FRACTION_RANGE);
+  gst_value_set_fraction (&start, 1, 5);
+  gst_value_set_fraction (&end, 2, 3);
   gst_value_set_fraction_range (&range2, &start, &end);
   fail_unless (gst_value_compare (&dest, &range2) == GST_VALUE_EQUAL);
+  g_value_unset (&dest);
+  /* Same, but swapped args */
+  gst_value_set_fraction (&start, 1, 5);
+  gst_value_set_fraction (&end, 1, 2);
+  gst_value_set_fraction_range (&range2, &start, &end);
+  fail_unless (gst_value_union (&dest, &range2, &range) == TRUE);
+  fail_unless (G_VALUE_TYPE (&dest) == GST_TYPE_FRACTION_RANGE);
+  gst_value_set_fraction (&start, 1, 5);
+  gst_value_set_fraction (&end, 2, 3);
+  gst_value_set_fraction_range (&range2, &start, &end);
+  fail_unless (gst_value_compare (&dest, &range2) == GST_VALUE_EQUAL);
+  g_value_unset (&dest);
 
   /* Check that non intersection ranges don't intersect */
   gst_value_set_fraction (&start, 4, 2);
   gst_value_set_fraction (&end, 5, 2);
   gst_value_set_fraction_range (&range2, &start, &end);
-  g_value_unset (&dest);
   fail_unless (gst_value_intersect (&dest, &range, &range2) == FALSE);
+
+  /* [1/4, 2/3] ∪ [4/2, 5/2] should fail */
+  fail_unless (gst_value_union (&dest, &range, &range2) == FALSE);
+  /* Same, but swapped args */
+  fail_unless (gst_value_union (&dest, &range2, &range) == FALSE);
 
   g_value_unset (&start);
   g_value_unset (&end);
@@ -2758,7 +2806,8 @@ GST_START_TEST (test_compare_caps)
 {
   GValue value = { 0 }
   , value2 = {
-  0};
+    0
+  };
 
   g_value_init (&value, GST_TYPE_CAPS);
   g_value_init (&value2, GST_TYPE_CAPS);
@@ -3232,21 +3281,22 @@ GST_START_TEST (test_stepped_int_range_ops)
     const gchar *result;
   } ranges[] = {
     {
-    "[16, 4096, 16]", "inter", "[100, 200, 10]", "160"}, {
-    "[16, 4096, 16]", "inter", "[100, 200, 100]", NULL}, {
-    "[16, 4096, 16]", "inter", "[0, 512, 256]", "[256, 512, 256]"}, {
-    "[16, 32, 16]", "union", "[32, 96, 16]", "[16, 96, 16]"}, {
-    "[16, 32, 16]", "union", "[48, 96, 16]", "[16, 96, 16]"}, {
-    "[112, 192, 16]", "union", "[48, 96, 16]", "[48, 192, 16]"}, {
-    "[16, 32, 16]", "union", "[64, 96, 16]", NULL}, {
-    "[112, 192, 16]", "union", "[48, 96, 8]", NULL}, {
-    "[10, 20, 5]", "union", "10", "[10, 20, 5]"}, {
-    "[10, 20, 5]", "union", "20", "[10, 20, 5]"}, {
-    "[10, 20, 5]", "union", "15", "[10, 20, 5]"}, {
-    "[10, 20, 5]", "union", "5", "[5, 20, 5]"}, {
-    "[10, 20, 5]", "union", "12", NULL}, {
-    "[10, 20, 5]", "union", "30", NULL}, {
-  "[10, 20, 5]", "union", "25", "[10, 25, 5]"},};
+        "[16, 4096, 16]", "inter", "[100, 200, 10]", "160"}, {
+        "[16, 4096, 16]", "inter", "[100, 200, 100]", NULL}, {
+        "[16, 4096, 16]", "inter", "[0, 512, 256]", "[256, 512, 256]"}, {
+        "[16, 32, 16]", "union", "[32, 96, 16]", "[16, 96, 16]"}, {
+        "[16, 32, 16]", "union", "[48, 96, 16]", "[16, 96, 16]"}, {
+        "[112, 192, 16]", "union", "[48, 96, 16]", "[48, 192, 16]"}, {
+        "[16, 32, 16]", "union", "[64, 96, 16]", NULL}, {
+        "[112, 192, 16]", "union", "[48, 96, 8]", NULL}, {
+        "[10, 20, 5]", "union", "10", "[10, 20, 5]"}, {
+        "[10, 20, 5]", "union", "20", "[10, 20, 5]"}, {
+        "[10, 20, 5]", "union", "15", "[10, 20, 5]"}, {
+        "[10, 20, 5]", "union", "5", "[5, 20, 5]"}, {
+        "[10, 20, 5]", "union", "12", NULL}, {
+        "[10, 20, 5]", "union", "30", NULL}, {
+        "[10, 20, 5]", "union", "25", "[10, 25, 5]"},
+  };
 
   for (n = 0; n < G_N_ELEMENTS (ranges); ++n) {
     gchar *end = NULL;
@@ -3349,8 +3399,9 @@ GST_START_TEST (test_structure_single_ops)
     gboolean can_fixate;
   } single_struct[] = {
     {
-    "foo,bar=(int)1", TRUE, TRUE}, {
-  "foo,bar=(int)[1,2]", FALSE, TRUE},};
+        "foo,bar=(int)1", TRUE, TRUE}, {
+        "foo,bar=(int)[1,2]", FALSE, TRUE},
+  };
   gint i;
 
   for (i = 0; i < G_N_ELEMENTS (single_struct); i++) {

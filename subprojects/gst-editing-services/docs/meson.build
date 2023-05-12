@@ -108,29 +108,24 @@ libs_doc = [hotdoc.generate_doc('gst-editing-services',
     gi_order_generated_subpages: true,
     dependencies: [ges_dep],
     disable_incremental_build: true,
+    depends: ges_gir[0],
 )]
 
-plugins_doc = []
-list_plugin_res = run_command(python3, '-c',
-'''
-import sys
-import json
-
-with open("@0@") as f:
-    print(':'.join(json.load(f).keys()), end='')
-'''.format(plugins_cache),
-  check: true)
-foreach plugin_name: list_plugin_res.stdout().split(':')
-    plugins_doc += [hotdoc.generate_doc(plugin_name,
-        project_version: apiversion,
-        sitemap: 'plugins/sitemap.txt',
-        index: 'plugins/index.md',
-        gst_index: 'plugins/index.md',
-        gst_smart_index: true,
-        gst_c_sources: ['../plugins/*/*.[ch]',],
-        dependencies: [gst_dep],
-        gst_order_generated_subpages: true,
-        gst_cache_file: plugins_cache,
-        gst_plugin_name: plugin_name,
-    )]
-endforeach
+if host_machine.system() == 'windows'
+  pathsep = ';'
+else
+  pathsep = ':'
+endif
+cdir = meson.current_source_dir()
+gst_plugins_doc = run_command(
+    plugins_cache_generator,
+    'hotdoc-config',
+    '--builddir', meson.current_build_dir(),
+    '--project_version', apiversion,
+    '--sitemap', cdir / 'plugins/sitemap.txt',
+    '--index', cdir / 'plugins/index.md',
+    '--gst_index', cdir / 'plugins/index.md',
+    '--gst_c_sources', cdir / '../plugins/*/*.[ch]',
+    '--gst_cache_file', plugins_cache,
+    check: true,
+).stdout().split(pathsep)

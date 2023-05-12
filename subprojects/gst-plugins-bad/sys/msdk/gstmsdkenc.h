@@ -37,6 +37,7 @@
 #include "msdk.h"
 #include "msdk-enums.h"
 #include "gstmsdkcontext.h"
+#include "gstmsdkcaps.h"
 
 G_BEGIN_DECLS
 
@@ -58,6 +59,7 @@ G_BEGIN_DECLS
 typedef struct _GstMsdkEnc GstMsdkEnc;
 typedef struct _GstMsdkEncClass GstMsdkEncClass;
 typedef struct _MsdkEncTask MsdkEncTask;
+typedef struct _MsdkEncCData MsdkEncCData;
 
 enum
 {
@@ -158,7 +160,7 @@ struct _GstMsdkEnc
   guint gop_size;
   guint ref_frames;
   guint i_frames;
-  guint b_frames;
+  gint b_frames;
   guint num_slices;
   gint16 mbbrc;
   gint16 adaptive_i;
@@ -166,6 +168,9 @@ struct _GstMsdkEnc
   guint max_frame_size_i;
   guint max_frame_size_p;
   gint16 lowdelay_brc;
+
+  GstClockTime start_pts;
+  GstClockTime frame_duration;
 
   GstStructure *ext_coding_props;
 
@@ -203,6 +208,12 @@ struct _MsdkEncTask
 {
   mfxSyncPoint sync_point;
   mfxBitstream output_bitstream;
+};
+
+struct _MsdkEncCData
+{
+  GstCaps *sink_caps;
+  GstCaps *src_caps;
 };
 
 GType gst_msdkenc_get_type (void);

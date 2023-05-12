@@ -26,21 +26,11 @@
 
 #include <gst/gst_private.h>
 
-#ifndef G_OS_WIN32
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
-#else
-#define WIN32_LEAN_AND_MEAN
-
-#define fsync(fd) _commit(fd)
-#include <io.h>
-
-#include <windows.h>
-extern HMODULE _priv_gst_dll_handle;
-#endif
 
 #ifdef HAVE_SYS_UTSNAME_H
 #include <sys/utsname.h>
@@ -147,7 +137,7 @@ static gboolean plugin_loader_sync_with_child (GstPluginLoader * l);
 static GstPluginLoader *
 plugin_loader_new (GstRegistry * registry)
 {
-  GstPluginLoader *l = g_slice_new0 (GstPluginLoader);
+  GstPluginLoader *l = g_new0 (GstPluginLoader, 1);
 
   if (registry)
     l->registry = gst_object_ref (registry);
@@ -211,12 +201,12 @@ plugin_loader_free (GstPluginLoader * loader)
   while (cur) {
     PendingPluginEntry *entry = (PendingPluginEntry *) (cur->data);
     g_free (entry->filename);
-    g_slice_free (PendingPluginEntry, entry);
+    g_free (entry);
 
     cur = g_list_delete_link (cur, cur);
   }
 
-  g_slice_free (GstPluginLoader, loader);
+  g_free (loader);
 
   return got_plugin_details;
 }
@@ -235,7 +225,7 @@ plugin_loader_load (GstPluginLoader * loader, const gchar * filename,
   GST_LOG_OBJECT (loader->registry,
       "Sending file %s to child. tag %u", filename, loader->next_tag);
 
-  entry = g_slice_new (PendingPluginEntry);
+  entry = g_new (PendingPluginEntry, 1);
   entry->tag = loader->next_tag++;
   entry->filename = g_strdup (filename);
   entry->file_size = file_size;
@@ -283,7 +273,7 @@ restart:
       /* Now remove this crashy plugin from the head of the list */
       l->pending_plugins = g_list_delete_link (cur, cur);
       g_free (entry->filename);
-      g_slice_free (PendingPluginEntry, entry);
+      g_free (entry);
       if (l->pending_plugins == NULL)
         l->pending_plugins_tail = NULL;
       if (!gst_plugin_loader_spawn (l))
@@ -460,83 +450,6 @@ gst_plugin_loader_try_helper (GstPluginLoader * loader, gchar * location)
   return TRUE;
 }
 
-static int
-count_directories (const char *filepath)
-{
-  int i = 0;
-  char *tmp;
-  gsize len;
-
-  g_return_val_if_fail (!g_path_is_absolute (filepath), 0);
-
-  tmp = g_strdup (filepath);
-  len = strlen (tmp);
-
-#if defined(G_OS_WIN32)
-  /* ignore UNC share paths entirely */
-  if (len >= 3 && G_IS_DIR_SEPARATOR (tmp[0]) && G_IS_DIR_SEPARATOR (tmp[1])
-      && !G_IS_DIR_SEPARATOR (tmp[2])) {
-    GST_WARNING ("found a UNC share path, ignoring");
-    return 0;
-  }
-#endif
-
-  /* remove trailing slashes if they exist */
-  while (
-#if defined(G_OS_WIN32)
-      /* don't remove the trailing slash for C:\.
-       * UNC paths are at least \\s\s */
-      len > 3
-#else
-      /* don't remove the trailing slash for / */
-      len > 1
-#endif
-      && G_IS_DIR_SEPARATOR (tmp[len - 1])) {
-    tmp[len - 1] = '\0';
-    len--;
-  }
-
-  while (tmp) {
-    char *dirname, *basename;
-    len = strlen (tmp);
-
-    if (g_strcmp0 (tmp, ".") == 0)
-      break;
-    if (g_strcmp0 (tmp, "/") == 0)
-      break;
-#if defined(G_OS_WIN32)
-    /* g_path_get_dirname() may return something of the form 'C:.', where C is
-     * a drive letter */
-    if (len == 3 && g_ascii_isalpha (tmp[0]) && tmp[1] == ':' && tmp[2] == '.')
-      break;
-#endif
-
-    basename = g_path_get_basename (tmp);
-    dirname = g_path_get_dirname (tmp);
-
-    if (g_strcmp0 (basename, "..") == 0) {
-      i--;
-    } else if (g_strcmp0 (basename, ".") == 0) {
-      /* nothing to do */
-    } else {
-      i++;
-    }
-
-    g_clear_pointer (&basename, g_free);
-    g_clear_pointer (&tmp, g_free);
-    tmp = dirname;
-  }
-
-  g_clear_pointer (&tmp, g_free);
-
-  if (i < 0) {
-    g_critical ("path counting resulted in a negative directory count!");
-    return 0;
-  }
-
-  return i;
-}
-
 static gboolean
 gst_plugin_loader_spawn (GstPluginLoader * loader)
 {
@@ -564,17 +477,11 @@ gst_plugin_loader_spawn (GstPluginLoader * loader)
     /* use the installed version */
     GST_LOG ("Trying installed plugin scanner");
 
-#ifdef G_OS_WIN32
-#define EXESUFFIX ".exe"
-#else
-#define EXESUFFIX
-#endif
-
 #define MAX_PATH_DEPTH 64
 
     relocated_libgstreamer = priv_gst_get_relocated_libgstreamer ();
     if (relocated_libgstreamer) {
-      int plugin_subdir_depth = count_directories (GST_PLUGIN_SUBDIR);
+      int plugin_subdir_depth = priv_gst_count_directories (GST_PLUGIN_SUBDIR);
 
       GST_DEBUG ("found libgstreamer-" GST_API_VERSION " library "
           "at %s", relocated_libgstreamer);
@@ -588,7 +495,7 @@ gst_plugin_loader_spawn (GstPluginLoader * loader)
           filenamev[i++] = "..";
         filenamev[i++] = GST_PLUGIN_SCANNER_SUBDIR;
         filenamev[i++] = "gstreamer-" GST_API_VERSION;
-        filenamev[i++] = "gst-plugin-scanner" EXESUFFIX;
+        filenamev[i++] = "gst-plugin-scanner";
         filenamev[i++] = NULL;
         g_assert (i <= MAX_PATH_DEPTH + 5);
 
@@ -605,6 +512,8 @@ gst_plugin_loader_spawn (GstPluginLoader * loader)
     } else {
       helper_bin = g_strdup (GST_PLUGIN_SCANNER_INSTALLED);
     }
+
+#undef MAX_PATH_DEPTH
 
     GST_DEBUG ("using system plugin scanner at %s", helper_bin);
 
@@ -632,22 +541,19 @@ plugin_loader_cleanup_child (GstPluginLoader * l)
   close (l->fd_w.fd);
   close (l->fd_r.fd);
 
-#ifndef G_OS_WIN32
   GST_LOG ("waiting for child process to exit");
   waitpid (l->child_pid, NULL, 0);
-#else
-  g_warning ("FIXME: Implement child process shutdown for Win32");
-#endif
   g_spawn_close_pid (l->child_pid);
 
   l->child_running = FALSE;
 }
 
 gboolean
-_gst_plugin_loader_client_run (void)
+_gst_plugin_loader_client_run (const gchar * pipe_name)
 {
   gboolean res = TRUE;
   GstPluginLoader *l;
+  int dup_fd;
 
   l = plugin_loader_new (NULL);
   if (l == NULL)
@@ -656,37 +562,27 @@ _gst_plugin_loader_client_run (void)
   /* On entry, the inward pipe is STDIN, and outward is STDOUT.
    * Dup those somewhere better so that plugins printing things
    * won't interfere with anything */
-#ifndef G_OS_WIN32
-  {
-    int dup_fd;
-
-    dup_fd = dup (0);           /* STDIN */
-    if (dup_fd == -1) {
-      GST_ERROR ("Failed to start. Could not dup STDIN, errno %d", errno);
-      res = FALSE;
-      goto beach;
-    }
-    l->fd_r.fd = dup_fd;
-    close (0);
-
-    dup_fd = dup (1);           /* STDOUT */
-    if (dup_fd == -1) {
-      GST_ERROR ("Failed to start. Could not dup STDOUT, errno %d", errno);
-      res = FALSE;
-      goto beach;
-    }
-    l->fd_w.fd = dup_fd;
-    close (1);
-
-    /* Dup stderr down to stdout so things that plugins print are visible,
-     * but don't care if it fails */
-    dup2 (2, 1);
+  dup_fd = dup (0);             /* STDIN */
+  if (dup_fd == -1) {
+    GST_ERROR ("Failed to start. Could not dup STDIN, errno %d", errno);
+    res = FALSE;
+    goto beach;
   }
-#else
-  /* FIXME: Use DuplicateHandle and friends on win32 */
-  l->fd_w.fd = 1;               /* STDOUT */
-  l->fd_r.fd = 0;               /* STDIN */
-#endif
+  l->fd_r.fd = dup_fd;
+  close (0);
+
+  dup_fd = dup (1);             /* STDOUT */
+  if (dup_fd == -1) {
+    GST_ERROR ("Failed to start. Could not dup STDOUT, errno %d", errno);
+    res = FALSE;
+    goto beach;
+  }
+  l->fd_w.fd = dup_fd;
+  close (1);
+
+  /* Dup stderr down to stdout so things that plugins print are visible,
+   * but don't care if it fails */
+  dup2 (2, 1);
 
   gst_poll_add_fd (l->fdset, &l->fd_w);
   gst_poll_add_fd (l->fdset, &l->fd_r);
@@ -699,10 +595,7 @@ _gst_plugin_loader_client_run (void)
   /* Loop, listening for incoming packets on the fd and writing responses */
   while (!l->rx_done && exchange_packets (l));
 
-#ifndef G_OS_WIN32
 beach:
-#endif
-
   plugin_loader_free (l);
 
   return res;
@@ -982,7 +875,7 @@ handle_rx_packet (GstPluginLoader * l,
         } else {
           cur = g_list_delete_link (cur, cur);
           g_free (e->filename);
-          g_slice_free (PendingPluginEntry, e);
+          g_free (e);
         }
       }
 
@@ -1016,7 +909,7 @@ handle_rx_packet (GstPluginLoader * l,
 
       if (entry != NULL) {
         g_free (entry->filename);
-        g_slice_free (PendingPluginEntry, entry);
+        g_free (entry);
       }
 
       /* Remove the plugin entry we just loaded */

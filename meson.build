@@ -1,5 +1,5 @@
 project('gstreamer-full', 'c',
-  version : '1.21.2.1',
+  version : '1.23.0.1',
   meson_version : '>= 0.62.0',
   default_options : ['buildtype=debugoptimized',
                      # Needed due to https://github.com/mesonbuild/meson/issues/1889,
@@ -32,6 +32,14 @@ endif
 
 # Install gst-indent pre-commit hook
 run_command(python3, '-c', 'import shutil; shutil.copy("scripts/git-hooks/multi-pre-commit.hook", ".git/hooks/pre-commit")', check: false)
+
+
+gitlint = find_program('gitlint', required: false)
+if gitlint.found()
+  run_command(gitlint, 'install-hook', check: false)
+else
+  message('gitlint not found, please install it with your package manager or `python3 -m pip install gitlint` to enable the commit message hook')
+endif
 
 # On macOS, you have to run "Install Certificates.command" otherwise Python
 # doesn't have access to the latest SSL CA Certificates, and Meson will fail to
@@ -105,11 +113,13 @@ subprojects = [
   ['gst-plugins-rs', { 'option': get_option('rs'), 'build-hotdoc': true, 'match_gst_version': false}],
 ]
 
-if build_system == 'windows'
-  subproject('win-flex-bison-binaries')
-  subproject('win-nasm')
-elif build_system == 'darwin'
-  subproject('macos-bison-binary')
+if get_option('build-tools-source') == 'subproject'
+  if build_system == 'windows'
+    subproject('win-flex-bison-binaries')
+    subproject('win-nasm')
+  elif build_system == 'darwin'
+    subproject('macos-bison-binary')
+  endif
 endif
 
 orc_option = get_option('orc')
@@ -154,10 +164,7 @@ foreach sp : subprojects
   if match_gst_version
     subproj = subproject(project_name, version: gst_version, required: is_required, default_options: default_options)
   elif sysdep != ''
-      sysdep_dep = dependency(sysdep, version: sysdep_version, required: false, default_options: default_options)
-      if not sysdep_dep.found()
-        subproj = subproject(project_name, required: is_required, default_options: default_options)
-      endif
+    sysdep_dep = dependency(sysdep, version: sysdep_version, required: is_required, default_options: default_options)
   else
     subproj = subproject(project_name, required: is_required, default_options: default_options)
   endif
@@ -220,6 +227,23 @@ gst_plugins_doc_dep = custom_target('plugins-doc-cache',
   capture: true,
 )
 
+gir_files = []
+gir_targets = []
+foreach pkgname_library : all_libraries
+  lib_def = pkgname_library[1]
+  foreach gir_target: lib_def.get('gir_targets', [])
+    gir_files += [gir_target[0].full_path()]
+    gir_targets += gir_target
+  endforeach
+endforeach
+
+custom_target('update_girs',
+  command: [find_program('scripts/update-girs.py'), meson.build_root()] + gir_files,
+  output: 'update_girs',
+  capture: true,
+  depends: gir_targets
+)
+
 if meson.is_cross_build() or build_machine.system() == 'windows'
     if get_option('doc').enabled()
         error('Documentation enabled but building the doc while cross building or building on windows is not supported yet.')
@@ -256,7 +280,11 @@ configure_file(
 )
 
 if documented_projects != ''
-  subproject('gst-docs', required: get_option('doc').enabled())
+  gst_doc = subproject('gst-docs', required: get_option('doc').enabled())
+  if gst_doc.found()
+    gst_doc_target = gst_doc.get_variable('gstreamer_doc')
+    alias_target('gst-doc', gst_doc_target)
+  endif
   message('Gst docs subprojects: ' + documented_projects)
 endif
 
@@ -267,7 +295,7 @@ foreach plugin: all_plugins
   plugin_path = plugin.get_variable('full_path')
   all_plugins_paths += plugin_path
   all_plugins_dirs += fs.parent(plugin_path)
-  plugins_names += plugin_path
+  plugins_names += fs.name(plugin_path)
 endforeach
 
 # Work around meson bug: https://github.com/mesonbuild/meson/pull/6770
@@ -491,6 +519,8 @@ run_target('devenv', command : devenv_cmd)
 if orc_subproject.found() and orc_update_targets.length() > 0
   alias_target('update-orc-dist', orc_update_targets)
 endif
+
+subdir('scripts')
 
 dotnet_format = find_program('dotnet-format', required: false)
 if dotnet_format.found()

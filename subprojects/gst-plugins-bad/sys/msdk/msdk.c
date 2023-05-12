@@ -30,8 +30,7 @@
  */
 
 #include "msdk.h"
-#include "gstmsdkvideomemory.h"
-#include "gstmsdksystemmemory.h"
+#include "gstmsdkcontext.h"
 
 GST_DEBUG_CATEGORY_EXTERN (gst_msdk_debug);
 #define GST_CAT_DEFAULT gst_msdk_debug
@@ -180,6 +179,40 @@ msdk_get_platform_codename (mfxSession session)
 
 #if (MFX_VERSION >= 2000)
 
+gpointer
+msdk_get_impl_description (const mfxLoader * loader, mfxU32 impl_idx)
+{
+  mfxImplDescription *desc = NULL;
+  mfxStatus status = MFX_ERR_NONE;
+
+  g_return_val_if_fail (loader != NULL, NULL);
+
+  status = MFXEnumImplementations (*loader, impl_idx,
+      MFX_IMPLCAPS_IMPLDESCSTRUCTURE, (mfxHDL *) & desc);
+  if (status != MFX_ERR_NONE) {
+    GST_ERROR ("Failed to get implementation description, %s",
+        msdk_status_to_string (status));
+    return NULL;
+  }
+
+  return desc;
+}
+
+gboolean
+msdk_release_impl_description (const mfxLoader * loader, gpointer impl_desc)
+{
+  mfxStatus status = MFX_ERR_NONE;
+  mfxImplDescription *desc = (mfxImplDescription *) impl_desc;
+
+  g_return_val_if_fail (loader != NULL, FALSE);
+
+  status = MFXDispReleaseImplDescription (*loader, desc);
+  if (status != MFX_ERR_NONE)
+    return FALSE;
+
+  return TRUE;
+}
+
 mfxStatus
 msdk_init_msdk_session (mfxIMPL impl, mfxVersion * pver,
     MsdkSession * msdk_session)
@@ -259,8 +292,10 @@ msdk_init_msdk_session (mfxIMPL impl, mfxVersion * pver,
     sts = MFXCreateSession (loader, impl_idx, &session);
     MFXDispReleaseImplDescription (loader, impl_desc);
 
-    if (sts == MFX_ERR_NONE)
+    if (sts == MFX_ERR_NONE) {
+      msdk_session->impl_idx = impl_idx;
       break;
+    }
 
     impl_idx++;
   }
@@ -282,6 +317,18 @@ msdk_init_msdk_session (mfxIMPL impl, mfxVersion * pver,
 }
 
 #else
+
+gpointer
+msdk_get_impl_description (const mfxLoader * loader, mfxU32 impl_idx)
+{
+  return NULL;
+}
+
+gboolean
+msdk_release_impl_description (const mfxLoader * loader, gpointer impl_desc)
+{
+  return TRUE;
+}
 
 mfxStatus
 msdk_init_msdk_session (mfxIMPL impl, mfxVersion * pver,
@@ -389,20 +436,6 @@ failed:
   return msdk_session;
 }
 
-gboolean
-msdk_is_available (void)
-{
-  /* Make sure we can create GstMsdkContext instance (the job type is not used actually) */
-  GstMsdkContext *msdk_context = gst_msdk_context_new (1, GST_MSDK_JOB_DECODER);
-
-  if (!msdk_context) {
-    return FALSE;
-  }
-
-  gst_object_unref (msdk_context);
-  return TRUE;
-}
-
 void
 gst_msdk_set_video_alignment (GstVideoInfo * info, guint alloc_w, guint alloc_h,
     GstVideoAlignment * alignment)
@@ -467,7 +500,7 @@ gst_msdk_get_mfx_fourcc_from_format (GstVideoFormat format)
 
 void
 gst_msdk_set_mfx_frame_info_from_video_info (mfxFrameInfo * mfx_info,
-    GstVideoInfo * info)
+    const GstVideoInfo * info)
 {
   g_return_if_fail (info && mfx_info);
 
@@ -538,22 +571,6 @@ gst_msdk_set_mfx_frame_info_from_video_info (mfxFrameInfo * mfx_info,
 }
 
 gboolean
-gst_msdk_is_msdk_buffer (GstBuffer * buf)
-{
-  GstAllocator *allocator;
-  GstMemory *mem = gst_buffer_peek_memory (buf, 0);
-
-  allocator = GST_MEMORY_CAST (mem)->allocator;
-
-  if (allocator && (GST_IS_MSDK_VIDEO_ALLOCATOR (allocator) ||
-          GST_IS_MSDK_SYSTEM_ALLOCATOR (allocator) ||
-          GST_IS_MSDK_DMABUF_ALLOCATOR (allocator)))
-    return TRUE;
-  else
-    return FALSE;
-}
-
-gboolean
 gst_msdk_is_va_mem (GstMemory * mem)
 {
   GstAllocator *allocator;
@@ -563,26 +580,6 @@ gst_msdk_is_va_mem (GstMemory * mem)
     return FALSE;
 
   return g_str_equal (allocator->mem_type, "VAMemory");
-}
-
-mfxFrameSurface1 *
-gst_msdk_get_surface_from_buffer (GstBuffer * buf)
-{
-  GstAllocator *allocator;
-  GstMemory *mem = gst_buffer_peek_memory (buf, 0);
-
-  allocator = GST_MEMORY_CAST (mem)->allocator;
-
-  if (GST_IS_MSDK_VIDEO_ALLOCATOR (allocator))
-    return GST_MSDK_VIDEO_MEMORY_CAST (mem)->surface;
-  else if (GST_IS_MSDK_SYSTEM_ALLOCATOR (allocator))
-    return GST_MSDK_SYSTEM_MEMORY_CAST (mem)->surface;
-  else if (GST_IS_MSDK_DMABUF_ALLOCATOR (allocator)) {
-    return gst_mini_object_get_qdata (GST_MINI_OBJECT (mem),
-        g_quark_from_static_string ("GstMsdkBufferSurface"));
-  }
-
-  return NULL;
 }
 
 GstVideoFormat
@@ -596,6 +593,22 @@ gst_msdk_get_video_format_from_mfx_fourcc (mfxU32 fourcc)
   }
 
   return GST_VIDEO_FORMAT_UNKNOWN;
+}
+
+void
+gst_msdk_get_video_format_list (GValue * formats)
+{
+  GValue gfmt = G_VALUE_INIT;
+  const struct map *m = gst_msdk_video_format_to_mfx_map;
+
+  g_value_init (&gfmt, G_TYPE_UINT);
+
+  for (; m->format != 0; m++) {
+    g_value_set_uint (&gfmt, m->format);
+    gst_value_list_append_value (formats, &gfmt);
+  }
+
+  g_value_unset (&gfmt);
 }
 
 void

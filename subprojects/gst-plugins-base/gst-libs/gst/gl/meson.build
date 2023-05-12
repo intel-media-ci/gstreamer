@@ -896,7 +896,7 @@ if need_win_gbm != 'no'
     endif
   endif
 
-  gbm_gudev_dep = dependency('gudev-1.0', version : '>=147', required : false)
+  gbm_gudev_dep = dependency('gudev-1.0', version : '>=147', required : false, allow_fallback: true)
   gbm_libdrm_dep = dependency('libdrm', version : '>= 2.4.55', required : false)
   gbm_dep = dependency('gbm', required : false)
   if egl_dep.found() and gbm_gudev_dep.found() and gbm_libdrm_dep.found() and gbm_dep.found()
@@ -1111,6 +1111,8 @@ if build_gstgl
     library_def += {'gir': [gir]}
     if not static_build
       gl_gir = gnome.generate_gir(gstgl, kwargs: gir)
+      library_def += {'gir_targets':  library_def.get('gir_targets', []) + [gl_gir]}
+      library_def += {'gir': [gir]}
       gen_sources += [gl_gir]
     endif
   endif
@@ -1118,7 +1120,8 @@ if build_gstgl
   gstgl_dep = declare_dependency(link_with : gstgl,
     include_directories : [libsinc, compat_includes],
     sources: gen_sources,
-    dependencies : [video_dep, gst_base_dep])
+    dependencies : [video_dep, gst_base_dep, gl_winsys_deps],
+    variables: pkgconfig_gl_variables)
   gstglproto_dep = declare_dependency(
     dependencies : [gstgl_dep] + gl_lib_deps,
     sources: gen_sources
@@ -1155,6 +1158,7 @@ if build_gstgl
       if not static_build
         gir += {'includes': gir['includes'] + [gl_gir[0]]}
         gl_x11_gir = gnome.generate_gir(gstgl, kwargs: gir)
+        library_def += {'gir_targets':  library_def.get('gir_targets', []) + [gl_x11_gir]}
       endif
     endif
     gstglx11_dep = declare_dependency(dependencies : [gstgl_dep, x11_dep, xcb_dep],
@@ -1192,6 +1196,7 @@ if build_gstgl
       if not static_build
         gir += {'includes': gir['includes'] + [gl_gir[0]]}
         gl_wayland_gir = gnome.generate_gir(gstgl, kwargs: gir)
+        library_def += {'gir_targets':  library_def.get('gir_targets', []) + [gl_wayland_gir]}
       endif
     endif
     gstglwayland_dep = declare_dependency(dependencies : [gstgl_dep],
@@ -1227,6 +1232,7 @@ if build_gstgl
       if not static_build
         gir += {'includes': gir['includes'] + [gl_gir[0]]}
         gl_egl_gir = gnome.generate_gir(gstgl, kwargs: gir)
+        library_def += {'gir_targets':  library_def.get('gir_targets', []) + [gl_egl_gir]}
       endif
     endif
     gstglegl_dep = declare_dependency(dependencies : [gstgl_dep],

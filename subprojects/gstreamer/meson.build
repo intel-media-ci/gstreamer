@@ -1,5 +1,5 @@
 project('gstreamer', 'c',
-  version : '1.21.2.1',
+  version : '1.23.0.1',
   meson_version : '>= 0.62',
   default_options : [ 'warning_level=1',
                       'buildtype=debugoptimized' ])
@@ -16,8 +16,6 @@ else
 endif
 gst_version_is_dev = gst_version_minor % 2 == 1 and gst_version_micro < 90
 
-host_system = host_machine.system()
-
 apiversion = '1.0'
 soversion = 0
 # maintaining compatibility with the previous libtool versioning
@@ -33,6 +31,19 @@ libexecdir = get_option('libexecdir')
 helpers_install_dir = join_paths(libexecdir, 'gstreamer-1.0')
 
 cc = meson.get_compiler('c')
+host_system = host_machine.system()
+
+if host_system == 'darwin'
+  ios_test_code = '''#include <TargetConditionals.h>
+  #if ! TARGET_OS_IPHONE
+  #error "Not iOS/tvOS/watchOS/iPhoneSimulator"
+  #endif'''
+  if cc.compiles(ios_test_code, name : 'building for iOS')
+    host_system = 'ios'
+  endif
+
+  add_languages('objc', native: false, required: true)
+endif
 
 cdata = configuration_data()
 
@@ -82,18 +93,10 @@ endif
 
 # Symbol visibility
 have_visibility_hidden = false
-if cc.get_id() == 'msvc'
-  export_define = '__declspec(dllexport) extern'
-elif cc.has_argument('-fvisibility=hidden')
+if cc.has_argument('-fvisibility=hidden')
   add_project_arguments('-fvisibility=hidden', language: 'c')
-  export_define = 'extern __attribute__ ((visibility ("default")))'
   have_visibility_hidden = true
-else
-  export_define = 'extern'
 endif
-
-# Passing this through the command line would be too messy
-cdata.set('GST_API_EXPORT', export_define)
 
 # Disable strict aliasing
 if cc.has_argument('-fno-strict-aliasing')
@@ -146,6 +149,8 @@ cdata.set_quoted('GST_PLUGIN_SUBDIR', get_option('libdir'),
   description: 'plugin directory path component, used to find plugins on relocatable builds')
 cdata.set_quoted('GST_PLUGIN_SCANNER_SUBDIR', libexecdir,
   description: 'libexecdir path component, used to find plugin-scanner on relocatable builds')
+cdata.set_quoted('GST_PTP_HELPER_SUBDIR', libexecdir,
+  description: 'libexecdir path component, used to find ptp-helper on relocatable builds')
 cdata.set('GST_DISABLE_OPTION_PARSING', not get_option('option-parsing'))
 
 mem_align_opt = get_option('memory-alignment')
@@ -279,7 +284,8 @@ if cc.has_function('localtime_r', prefix : '#include<time.h>')
   cdata.set('HAVE_DECL_LOCALTIME_R', 1)
 endif
 
-if cc.links('''#include <pthread.h>
+if cc.links('''#define _GNU_SOURCE
+               #include <pthread.h>
                int main() {
                  pthread_setname_np("example"); return 0;
                }''', name : 'pthread_setname_np(const char*)')
@@ -293,7 +299,7 @@ if cc.has_header_symbol('pthread.h', 'pthread_cond_timedwait_relative_np')
 endif
 
 # Check for futex(2)
-if cc.links('''#include <linux/futex.h>
+if cc.compiles('''#include <linux/futex.h>
                #include <sys/syscall.h>
                #include <unistd.h>
                int main (int argc, char ** argv) {
@@ -301,6 +307,15 @@ if cc.links('''#include <linux/futex.h>
                  return 0;
                }''', name : 'futex(2) system call')
   cdata.set('HAVE_FUTEX', 1)
+endif
+if cc.compiles('''#include <linux/futex.h>
+               #include <sys/syscall.h>
+               #include <unistd.h>
+               int main (int argc, char ** argv) {
+                 syscall (__NR_futex_time64, NULL, FUTEX_WAKE, FUTEX_WAIT);
+                 return 0;
+               }''', name : 'futex(2) system call')
+  cdata.set('HAVE_FUTEX_TIME64', 1)
 endif
 
 # Check for posix timers and monotonic clock
@@ -340,14 +355,6 @@ endif
 
 # All supported platforms have long long now
 cdata.set('HAVE_LONG_LONG', 1)
-
-# We only want to use the __declspec(dllexport/import) dance in GST_EXPORT when
-# building with MSVC
-if cc.get_id() == 'msvc'
-  cdata.set('GSTCONFIG_BUILT_WITH_MSVC', 1)
-else
-  cdata.set('GSTCONFIG_BUILT_WITH_MSVC', 0)
-endif
 
 # -------------------------------------------------------------------------------------
 # config.h things needed by libcheck
@@ -656,6 +663,8 @@ endif
 
 configure_file(output : 'config.h', configuration : cdata)
 install_data('gst-element-check-1.0.m4', install_dir : join_paths(get_option('datadir'), 'aclocal'))
+
+meson.add_dist_script('scripts/gen-changelog.py', meson.project_name(), '1.20.0', meson.project_version())
 
 plugin_names = []
 gst_plugins = []

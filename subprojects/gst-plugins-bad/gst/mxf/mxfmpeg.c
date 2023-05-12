@@ -141,9 +141,8 @@ mxf_metadata_mpeg_video_descriptor_handle_tag (MXFMetadataBase * metadata,
   gboolean ret = TRUE;
   MXFUL *tag_ul = NULL;
 
-  if (!(tag_ul =
-          (MXFUL *) g_hash_table_lookup (primer->mappings,
-              GUINT_TO_POINTER (((guint) tag)))))
+  tag_ul = mxf_primer_tag_to_ul (primer, tag);
+  if (!tag_ul)
     return FALSE;
 
   if (memcmp (tag_ul, &_single_sequence_ul, 16) == 0) {
@@ -258,110 +257,100 @@ mxf_metadata_mpeg_video_descriptor_write_tags (MXFMetadataBase * m,
   MXFLocalTag *t;
 
   if (self->single_sequence != -1) {
-    t = g_slice_new0 (MXFLocalTag);
+    t = g_new0 (MXFLocalTag, 1);
     memcpy (&t->ul, &_single_sequence_ul, 16);
     t->size = 1;
-    t->data = g_slice_alloc (t->size);
-    t->g_slice = TRUE;
+    t->data = g_malloc (t->size);
     GST_WRITE_UINT8 (t->data, (self->single_sequence) ? 1 : 0);
     mxf_primer_pack_add_mapping (primer, 0, &t->ul);
     ret = g_list_prepend (ret, t);
   }
 
   if (self->const_b_frames) {
-    t = g_slice_new0 (MXFLocalTag);
+    t = g_new0 (MXFLocalTag, 1);
     memcpy (&t->ul, &_constant_b_frames_ul, 16);
     t->size = 1;
-    t->data = g_slice_alloc (t->size);
-    t->g_slice = TRUE;
+    t->data = g_malloc (t->size);
     GST_WRITE_UINT8 (t->data, (self->const_b_frames) ? 1 : 0);
     mxf_primer_pack_add_mapping (primer, 0, &t->ul);
     ret = g_list_prepend (ret, t);
   }
 
   if (self->coded_content_type) {
-    t = g_slice_new0 (MXFLocalTag);
+    t = g_new0 (MXFLocalTag, 1);
     memcpy (&t->ul, &_coded_content_type_ul, 16);
     t->size = 1;
-    t->data = g_slice_alloc (t->size);
-    t->g_slice = TRUE;
+    t->data = g_malloc (t->size);
     GST_WRITE_UINT8 (t->data, self->coded_content_type);
     mxf_primer_pack_add_mapping (primer, 0, &t->ul);
     ret = g_list_prepend (ret, t);
   }
 
   if (self->low_delay) {
-    t = g_slice_new0 (MXFLocalTag);
+    t = g_new0 (MXFLocalTag, 1);
     memcpy (&t->ul, &_low_delay_ul, 16);
     t->size = 1;
-    t->data = g_slice_alloc (t->size);
-    t->g_slice = TRUE;
+    t->data = g_malloc (t->size);
     GST_WRITE_UINT8 (t->data, (self->low_delay) ? 1 : 0);
     mxf_primer_pack_add_mapping (primer, 0, &t->ul);
     ret = g_list_prepend (ret, t);
   }
 
   if (self->closed_gop) {
-    t = g_slice_new0 (MXFLocalTag);
+    t = g_new0 (MXFLocalTag, 1);
     memcpy (&t->ul, &_closed_gop_ul, 16);
     t->size = 1;
-    t->data = g_slice_alloc (t->size);
-    t->g_slice = TRUE;
+    t->data = g_malloc (t->size);
     GST_WRITE_UINT8 (t->data, (self->closed_gop) ? 1 : 0);
     mxf_primer_pack_add_mapping (primer, 0, &t->ul);
     ret = g_list_prepend (ret, t);
   }
 
   if (self->identical_gop) {
-    t = g_slice_new0 (MXFLocalTag);
+    t = g_new0 (MXFLocalTag, 1);
     memcpy (&t->ul, &_identical_gop_ul, 16);
     t->size = 1;
-    t->data = g_slice_alloc (t->size);
-    t->g_slice = TRUE;
+    t->data = g_malloc (t->size);
     GST_WRITE_UINT8 (t->data, (self->identical_gop) ? 1 : 0);
     mxf_primer_pack_add_mapping (primer, 0, &t->ul);
     ret = g_list_prepend (ret, t);
   }
 
   if (self->max_gop) {
-    t = g_slice_new0 (MXFLocalTag);
+    t = g_new0 (MXFLocalTag, 1);
     memcpy (&t->ul, &_identical_gop_ul, 16);
     t->size = 2;
-    t->data = g_slice_alloc (t->size);
-    t->g_slice = TRUE;
+    t->data = g_malloc (t->size);
     GST_WRITE_UINT16_BE (t->data, self->max_gop);
     mxf_primer_pack_add_mapping (primer, 0, &t->ul);
     ret = g_list_prepend (ret, t);
   }
 
   if (self->b_picture_count) {
-    t = g_slice_new0 (MXFLocalTag);
+    t = g_new0 (MXFLocalTag, 1);
     memcpy (&t->ul, &_b_picture_count_ul, 16);
     t->size = 2;
-    t->data = g_slice_alloc (t->size);
-    t->g_slice = TRUE;
+    t->data = g_malloc (t->size);
     GST_WRITE_UINT16_BE (t->data, self->b_picture_count);
     mxf_primer_pack_add_mapping (primer, 0, &t->ul);
     ret = g_list_prepend (ret, t);
   }
 
   if (self->bitrate) {
-    t = g_slice_new0 (MXFLocalTag);
+    t = g_new0 (MXFLocalTag, 1);
     memcpy (&t->ul, &_bitrate_ul, 16);
     t->size = 4;
-    t->data = g_slice_alloc (t->size);
-    t->g_slice = TRUE;
+    t->data = g_malloc (t->size);
     GST_WRITE_UINT32_BE (t->data, self->bitrate);
     mxf_primer_pack_add_mapping (primer, 0, &t->ul);
     ret = g_list_prepend (ret, t);
   }
 
   if (self->profile_and_level) {
-    t = g_slice_new0 (MXFLocalTag);
+    t = g_new0 (MXFLocalTag, 1);
     memcpy (&t->ul, &_profile_and_level_ul, 16);
     t->size = 1;
-    t->data = g_slice_alloc (t->size);
-    t->g_slice = TRUE;
+    t->data = g_malloc (t->size);
     GST_WRITE_UINT8 (t->data, self->profile_and_level);
     mxf_primer_pack_add_mapping (primer, 0, &t->ul);
     ret = g_list_prepend (ret, t);
@@ -403,34 +392,16 @@ typedef enum
 } MXFMPEGEssenceType;
 
 static gboolean
-mxf_is_mpeg_essence_track (const MXFMetadataTimelineTrack * track)
+mxf_is_mpeg_essence_track (const MXFMetadataFileDescriptor * d)
 {
-  guint i;
-
-  g_return_val_if_fail (track != NULL, FALSE);
-
-  if (track->parent.descriptor == NULL)
-    return FALSE;
-
-  for (i = 0; i < track->parent.n_descriptor; i++) {
-    MXFMetadataFileDescriptor *d = track->parent.descriptor[i];
-    MXFUL *key;
-
-    if (!d)
-      continue;
-
-    key = &d->essence_container;
-    /* SMPTE 381M 7 */
-    /* SMPTE RP2008 8.1 */
-    if (mxf_is_generic_container_essence_container_label (key) &&
-        key->u[12] == 0x02 &&
-        (key->u[13] == 0x04 ||
-            key->u[13] == 0x07 || key->u[13] == 0x08 || key->u[13] == 0x09 ||
-            key->u[13] == 0x0f || key->u[13] == 0x10))
-      return TRUE;
-  }
-
-  return FALSE;
+  const MXFUL *key = &d->essence_container;
+  /* SMPTE 381M 7 */
+  /* SMPTE RP2008 8.1 */
+  return (mxf_is_generic_container_essence_container_label (key) &&
+      key->u[12] == 0x02 &&
+      (key->u[13] == 0x04 ||
+          key->u[13] == 0x07 || key->u[13] == 0x08 || key->u[13] == 0x09 ||
+          key->u[13] == 0x0f || key->u[13] == 0x10));
 }
 
 /* See ISO/IEC 13818-2 for MPEG ES format */
@@ -1315,7 +1286,7 @@ mxf_mpeg_video_get_descriptor (GstPadTemplate * tmpl, GstCaps * caps,
       ret->parent.parent.parent.essence_container.u[13] = 0x04;
       ret->parent.parent.parent.essence_container.u[14] = 0x60;
       if ((v = gst_structure_get_value (s, "codec_data"))) {
-        MXFLocalTag *t = g_slice_new0 (MXFLocalTag);
+        MXFLocalTag *t = g_new0 (MXFLocalTag, 1);
         GstMapInfo map;
 
         codec_data = gst_value_get_buffer (v);

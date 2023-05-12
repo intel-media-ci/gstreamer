@@ -499,8 +499,8 @@ _action_free (GstValidateAction * action)
   g_free (GST_VALIDATE_ACTION_FILENAME (action));
   g_free (GST_VALIDATE_ACTION_DEBUG (action));
 
-  g_slice_free (GstValidateActionPrivate, action->priv);
-  g_slice_free (GstValidateAction, action);
+  g_free (action->priv);
+  g_free (action);
 }
 
 static void
@@ -510,7 +510,7 @@ gst_validate_action_init (GstValidateAction * action)
       _gst_validate_action_type, (GstMiniObjectCopyFunction) _action_copy, NULL,
       (GstMiniObjectFreeFunction) _action_free);
 
-  action->priv = g_slice_new0 (GstValidateActionPrivate);
+  action->priv = g_new0 (GstValidateActionPrivate, 1);
 
   g_weak_ref_init (&action->priv->scenario, NULL);
 }
@@ -541,7 +541,7 @@ gst_validate_action_new (GstValidateScenario * scenario,
     GstValidateActionType * action_type, GstStructure * structure,
     gboolean add_to_lists)
 {
-  GstValidateAction *action = g_slice_new0 (GstValidateAction);
+  GstValidateAction *action = g_new0 (GstValidateAction, 1);
 
   g_assert (action_type);
 
@@ -607,6 +607,12 @@ struct _GstValidateActionTypePrivate
 static void
 _action_type_free (GstValidateActionType * type)
 {
+  for (gint i = 0; type->parameters[i].name; i++) {
+    if (type->parameters[i].free) {
+      type->parameters[i].free (&type->parameters[i]);
+    }
+  }
+
   g_free (type->parameters);
   g_free (type->description);
   g_free (type->name);
@@ -616,7 +622,7 @@ _action_type_free (GstValidateActionType * type)
   if (type->overriden_type)
     gst_mini_object_unref (GST_MINI_OBJECT (type->overriden_type));
 
-  g_slice_free (GstValidateActionType, type);
+  g_free (type);
 }
 
 static void
@@ -632,7 +638,7 @@ gst_validate_action_type_init (GstValidateActionType * type)
 GstValidateActionType *
 gst_validate_action_type_new (void)
 {
-  GstValidateActionType *type = g_slice_new0 (GstValidateActionType);
+  GstValidateActionType *type = g_new0 (GstValidateActionType, 1);
 
   gst_validate_action_type_init (type);
 
@@ -1412,9 +1418,11 @@ _set_or_check_properties (GQuark field_id, const GValue * value,
   GstValidateAction *action;
   GstObject *obj = NULL;
   GParamSpec *paramspec = NULL;
+  gboolean no_value_check = FALSE;
+  GstValidateObjectSetPropertyFlags flags = 0;
   const gchar *field = g_quark_to_string (field_id);
   const gchar *unused_fields[] = { "__scenario__", "__action__", "__res__",
-    "playback-time", "repeat", NULL
+    "playback-time", "repeat", "no-value-check", NULL
   };
 
   if (g_strv_contains (unused_fields, field))
@@ -1423,14 +1431,23 @@ _set_or_check_properties (GQuark field_id, const GValue * value,
   gst_structure_get (structure, "__scenario__", G_TYPE_POINTER, &scenario,
       "__action__", G_TYPE_POINTER, &action, NULL);
 
+  gst_structure_get_boolean (structure, "no-value-check", &no_value_check);
+
+  if (no_value_check) {
+    flags |= GST_VALIDATE_OBJECT_SET_PROPERTY_FLAGS_NO_VALUE_CHECK;
+  }
+  if (action->priv->optional)
+    flags |= GST_VALIDATE_OBJECT_SET_PROPERTY_FLAGS_OPTIONAL;
+
   obj = _get_target_object_property (scenario, action, field, &paramspec);
   if (!obj || !paramspec) {
     res = GST_VALIDATE_EXECUTE_ACTION_ERROR_REPORTED;
     goto done;
   }
   if (gst_structure_has_name (action->structure, "set-properties"))
-    res = gst_validate_object_set_property (GST_VALIDATE_REPORTER (scenario),
-        G_OBJECT (obj), paramspec->name, value, action->priv->optional);
+    res =
+        gst_validate_object_set_property_full (GST_VALIDATE_REPORTER (scenario),
+        G_OBJECT (obj), paramspec->name, value, flags);
   else
     res = _check_property (scenario, action, obj, paramspec->name, value);
 
@@ -2479,6 +2496,13 @@ _foreach_find_iterator (GQuark field_id, GValue * value,
 }
 
 
+/**
+ * gst_validate_execute_action:
+ * @action_type: The #GstValidateActionType to execute
+ * @action: (transfer full): The #GstValidateAction to execute
+ *
+ * Executes @action
+ */
 GstValidateExecuteActionReturn
 gst_validate_execute_action (GstValidateActionType * action_type,
     GstValidateAction * action)
@@ -4408,7 +4432,8 @@ handle_bus_message (MessageData * d)
           gst_validate_action_set_done (priv->actions->data);
       }
 
-      if (old_state == GST_STATE_READY && state == GST_STATE_PAUSED)
+      if (old_state == scenario->priv->target_state - 1
+          && state == scenario->priv->target_state)
         _add_execute_actions_gsource (scenario);
 
       /* GstBin only send a new latency message when reaching PLAYING if
@@ -4695,14 +4720,17 @@ gst_validate_scenario_load_structures (GstValidateScenario * scenario,
       gst_structure_get_boolean (structure, "is-config", is_config);
       gst_structure_get_boolean (structure, "handles-states",
           &priv->handles_state);
+      if (!gst_structure_get_enum (structure, "target-state", GST_TYPE_STATE,
+              (gint *) & priv->target_state) && !priv->handles_state) {
+        priv->target_state = GST_STATE_PLAYING;
+      }
+
       gst_structure_get_boolean (structure, "ignore-eos", &priv->ignore_eos);
       gst_structure_get_boolean (structure, "allow-errors",
           &priv->allow_errors);
       gst_structure_get_boolean (structure, "actions-on-idle",
           &priv->execute_on_idle);
 
-      if (!priv->handles_state)
-        priv->target_state = GST_STATE_PLAYING;
 
       pipeline_name = gst_structure_get_string (structure, "pipeline-name");
       if (pipeline_name) {
@@ -5285,6 +5313,8 @@ gst_validate_scenario_new (GstValidateRunner *
       g_object_new (GST_TYPE_VALIDATE_SCENARIO, "validate-runner",
       runner, NULL);
 
+  g_object_ref_sink (scenario);
+
   if (structures) {
     gboolean is_config;
     gst_validate_scenario_load_structures (scenario, structures, &is_config,
@@ -5365,6 +5395,10 @@ gst_validate_scenario_new (GstValidateRunner *
   if (scenario->priv->handles_state) {
     GST_INFO_OBJECT (scenario, "Scenario handles state."
         " Starting the get position source");
+    _add_execute_actions_gsource (scenario);
+  } else if (scenario->priv->target_state == GST_STATE_NULL) {
+    GST_INFO_OBJECT (scenario,
+        "Target state is NULL, starting action execution");
     _add_execute_actions_gsource (scenario);
   }
 

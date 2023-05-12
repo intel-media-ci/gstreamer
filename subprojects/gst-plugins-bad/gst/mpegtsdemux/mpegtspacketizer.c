@@ -94,7 +94,7 @@ get_pcr_table (MpegTSPacketizer2 * packetizer, guint16 pid)
     res->prev_out_time = GST_CLOCK_TIME_NONE;
     res->pcroffset = 0;
 
-    res->current = g_slice_new0 (PCROffsetCurrent);
+    res->current = g_new0 (PCROffsetCurrent, 1);
   }
 
   return res;
@@ -104,7 +104,7 @@ static void
 pcr_offset_group_free (PCROffsetGroup * group)
 {
   g_free (group->values);
-  g_slice_free (PCROffsetGroup, group);
+  g_free (group);
 }
 
 static void
@@ -115,8 +115,7 @@ flush_observations (MpegTSPacketizer2 * packetizer)
   for (i = 0; i < packetizer->lastobsid; i++) {
     g_list_free_full (packetizer->observations[i]->groups,
         (GDestroyNotify) pcr_offset_group_free);
-    if (packetizer->observations[i]->current)
-      g_slice_free (PCROffsetCurrent, packetizer->observations[i]->current);
+    g_free (packetizer->observations[i]->current);
     g_free (packetizer->observations[i]);
     packetizer->observations[i] = NULL;
   }
@@ -963,6 +962,7 @@ mpegts_packetizer_push_section (MpegTSPacketizer2 * packetizer,
   guint8 packet_cc;
   GList *others = NULL;
   guint8 version_number, section_number, last_section_number;
+  gboolean cc_discont = FALSE;
 
   data = packet->data;
   packet_cc = FLAGS_CONTINUITY_COUNTER (packet->scram_afc_cc);
@@ -1009,24 +1009,18 @@ mpegts_packetizer_push_section (MpegTSPacketizer2 * packetizer,
    *
    **/
 
-  if (packet->payload_unit_start_indicator) {
+  if (packet->payload_unit_start_indicator)
     pointer = *data++;
-    /* If the pointer is zero, we're guaranteed to be able to handle it */
-    if (pointer == 0) {
-      GST_LOG
-          ("PID 0x%04x PUSI and pointer == 0, skipping straight to section_start parsing",
-          packet->pid);
-      mpegts_packetizer_clear_section (stream);
-      goto section_start;
-    }
-  }
 
   if (stream->continuity_counter == CONTINUITY_UNSET ||
       (stream->continuity_counter + 1) % 16 != packet_cc) {
-    if (stream->continuity_counter != CONTINUITY_UNSET)
+    if (stream->continuity_counter != CONTINUITY_UNSET) {
       GST_WARNING ("PID 0x%04x section discontinuity (%d vs %d)", packet->pid,
           stream->continuity_counter, packet_cc);
+      cc_discont = TRUE;
+    }
     mpegts_packetizer_clear_section (stream);
+    stream->continuity_counter = packet_cc;
     /* If not a PUSI, not much we can do */
     if (!packet->payload_unit_start_indicator) {
       GST_LOG ("PID 0x%04x continuity discont/unset and not PUSI, bailing out",
@@ -1040,6 +1034,19 @@ mpegts_packetizer_push_section (MpegTSPacketizer2 * packetizer,
         pointer);
     goto section_start;
   }
+
+  if (packet->payload_unit_start_indicator && pointer == 0) {
+    /* If the pointer is zero, we're guaranteed to be able to handle it */
+    GST_LOG
+        ("PID 0x%04x PUSI and pointer == 0, skipping straight to section_start parsing",
+        packet->pid);
+    mpegts_packetizer_clear_section (stream);
+    stream->continuity_counter = packet_cc;
+    goto section_start;
+  }
+
+  stream->continuity_counter = packet_cc;
+
 
   GST_LOG ("Accumulating data from beginning of packet");
 
@@ -1192,7 +1199,7 @@ section_start:
    * * same last_section_number
    * * same section_number was seen
    */
-  if (seen_section_before (stream, table_id, subtable_extension,
+  if (!cc_discont && seen_section_before (stream, table_id, subtable_extension,
           version_number, section_number, last_section_number)) {
     GST_DEBUG
         ("PID 0x%04x Already processed table_id:0x%02x subtable_extension:0x%04x, version_number:%d, section_number:%d",
@@ -1780,7 +1787,7 @@ _reevaluate_group_pcr_offset (MpegTSPCR * pcrtable, PCROffsetGroup * group)
 static PCROffsetGroup *
 _new_group (guint64 pcr, guint64 offset, guint64 pcr_offset, guint flags)
 {
-  PCROffsetGroup *group = g_slice_new0 (PCROffsetGroup);
+  PCROffsetGroup *group = g_new0 (PCROffsetGroup, 1);
 
   GST_DEBUG ("Input PCR %" GST_TIME_FORMAT " offset:%" G_GUINT64_FORMAT
       " pcr_offset:%" G_GUINT64_FORMAT " flags:%d",

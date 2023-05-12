@@ -123,6 +123,8 @@ QtGLWindow::~QtGLWindow()
     gst_object_unref(this->priv->display);
   if (this->priv->context)
     gst_object_unref(this->priv->context);
+  if (this->priv->caps)
+      gst_caps_unref(this->priv->caps);
   g_free (this->priv);
   this->priv = NULL;
 }
@@ -236,6 +238,9 @@ QtGLWindow::afterRendering()
     gl->CopyTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA, 0, 0, width, height, 0);
   }
 
+  gl->BindFramebuffer (GL_FRAMEBUFFER, 0);
+  gst_video_frame_unmap (&gl_frame);
+
   if (this->priv->context) {
     sync_meta = gst_buffer_get_gl_sync_meta (this->priv->buffer);
     if (!sync_meta) {
@@ -246,16 +251,19 @@ QtGLWindow::afterRendering()
 
   GST_DEBUG ("rendering finished");
 
-errors:
-  gl->BindFramebuffer (GL_FRAMEBUFFER, 0);
-  gst_video_frame_unmap (&gl_frame);
-
+done:
   gst_gl_context_activate (context, FALSE);
 
   this->priv->result = ret;
   this->priv->updated = TRUE;
   g_cond_signal (&this->priv->update_cond);
   g_mutex_unlock (&this->priv->lock);
+  return;
+
+errors:
+  gl->BindFramebuffer (GL_FRAMEBUFFER, 0);
+  gst_video_frame_unmap (&gl_frame);
+  goto done;
 }
 
 void
@@ -324,8 +332,12 @@ QtGLWindow::getGeometry(int * width, int * height)
   if (width == NULL || height == NULL)
     return FALSE;
 
-  *width = this->source->width();
-  *height = this->source->height();
+  double scale = this->source->effectiveDevicePixelRatio();
+  *width = this->source->width() * scale;
+  *height = this->source->height() * scale;
+
+  GST_LOG("Window width %d height %d scale %f", *width, *height,
+      scale);
 
   return TRUE;
 }

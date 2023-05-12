@@ -35,6 +35,10 @@
 
 GST_DEBUG_CATEGORY_STATIC (GST_CAT_PERFORMANCE);
 
+#if LIBAVCODEC_VERSION_INT < AV_VERSION_INT(58,132,100)
+#define AV_CODEC_CAP_OTHER_THREADS AV_CODEC_CAP_AUTO_THREADS
+#endif
+
 #define GST_FFMPEG_VIDEO_CODEC_FRAME_FLAG_ALLOCATED (1<<15)
 
 #define MAX_TS_MASK 0xff
@@ -615,7 +619,7 @@ gst_ffmpegviddec_set_format (GstVideoDecoder * decoder,
   if (ffmpegdec->max_threads == 0) {
     /* When thread type is FF_THREAD_FRAME, extra latency is introduced equal
      * to one frame per thread. We thus need to calculate the thread count ourselves */
-    if ((!(oclass->in_plugin->capabilities & AV_CODEC_CAP_AUTO_THREADS)) ||
+    if ((!(oclass->in_plugin->capabilities & AV_CODEC_CAP_OTHER_THREADS)) ||
         (ffmpegdec->context->thread_type & FF_THREAD_FRAME))
       ffmpegdec->context->thread_count =
           MIN (gst_ffmpeg_auto_max_threads (), 16);
@@ -723,7 +727,7 @@ gst_ffmpegviddec_video_frame_new (GstFFMpegVidDec * ffmpegdec,
 {
   GstFFMpegVidDecVideoFrame *dframe;
 
-  dframe = g_slice_new0 (GstFFMpegVidDecVideoFrame);
+  dframe = g_new0 (GstFFMpegVidDecVideoFrame, 1);
   dframe->ffmpegdec = ffmpegdec;
   dframe->frame = frame;
 
@@ -747,7 +751,7 @@ gst_ffmpegviddec_video_frame_free (GstFFMpegVidDec * ffmpegdec,
   if (frame->avbuffer) {
     av_buffer_unref (&frame->avbuffer);
   }
-  g_slice_free (GstFFMpegVidDecVideoFrame, frame);
+  g_free (frame);
 }
 
 static void
@@ -1344,7 +1348,7 @@ gst_ffmpegviddec_negotiate (GstFFMpegVidDec * ffmpegdec,
   GstStructure *in_s;
   GstVideoInterlaceMode interlace_mode;
   gint caps_height;
-  gboolean one_field = ! !(flags & GST_VIDEO_BUFFER_FLAG_ONEFIELD);
+  gboolean one_field = !!(flags & GST_VIDEO_BUFFER_FLAG_ONEFIELD);
 
   if (!update_video_context (ffmpegdec, context, picture, one_field))
     return TRUE;
@@ -1778,15 +1782,16 @@ gst_ffmpegviddec_video_frame (GstFFMpegVidDec * ffmpegdec,
   res = avcodec_receive_frame (ffmpegdec->context, ffmpegdec->picture);
 
   /* No frames available at this time */
-  if (res == AVERROR (EAGAIN))
+  if (res == AVERROR (EAGAIN)) {
+    GST_DEBUG_OBJECT (ffmpegdec, "Need more data");
     goto beach;
-  else if (res == AVERROR_EOF) {
+  } else if (res == AVERROR_EOF) {
     *ret = GST_FLOW_EOS;
     GST_DEBUG_OBJECT (ffmpegdec, "Context was entirely flushed");
     goto beach;
   } else if (res < 0) {
-    *ret = GST_FLOW_OK;
-    GST_WARNING_OBJECT (ffmpegdec, "Legitimate decoding error");
+    GST_VIDEO_DECODER_ERROR (ffmpegdec, 1, STREAM, DECODE, (NULL),
+        ("Video decoding error"), *ret);
     goto beach;
   }
 
@@ -1841,7 +1846,7 @@ gst_ffmpegviddec_video_frame (GstFFMpegVidDec * ffmpegdec,
   GST_DEBUG_OBJECT (ffmpegdec, "repeat_pict:%d",
       ffmpegdec->picture->repeat_pict);
   GST_DEBUG_OBJECT (ffmpegdec, "corrupted frame: %d",
-      ! !(ffmpegdec->picture->flags & AV_FRAME_FLAG_CORRUPT));
+      !!(ffmpegdec->picture->flags & AV_FRAME_FLAG_CORRUPT));
 
   if (!gst_ffmpegviddec_negotiate (ffmpegdec, ffmpegdec->context,
           ffmpegdec->picture, GST_BUFFER_FLAGS (out_frame->input_buffer)))
@@ -2037,8 +2042,12 @@ gst_ffmpegviddec_drain (GstVideoDecoder * decoder)
   if (!ffmpegdec->opened)
     return GST_FLOW_OK;
 
-  if (avcodec_send_packet (ffmpegdec->context, NULL))
+  GST_VIDEO_DECODER_STREAM_UNLOCK (ffmpegdec);
+  if (avcodec_send_packet (ffmpegdec->context, NULL)) {
+    GST_VIDEO_DECODER_STREAM_LOCK (ffmpegdec);
     goto send_packet_failed;
+  }
+  GST_VIDEO_DECODER_STREAM_LOCK (ffmpegdec);
 
   do {
     got_frame = gst_ffmpegviddec_frame (ffmpegdec, NULL, &ret);
@@ -2114,6 +2123,9 @@ gst_ffmpegviddec_handle_frame (GstVideoDecoder * decoder,
   /* now decode the frame */
   gst_avpacket_init (&packet, data, size);
 
+  if (!packet.size)
+    goto done;
+
   if (ffmpegdec->palette) {
     guint8 *pal;
 
@@ -2122,9 +2134,6 @@ gst_ffmpegviddec_handle_frame (GstVideoDecoder * decoder,
     gst_buffer_extract (ffmpegdec->palette, 0, pal, AVPALETTE_SIZE);
     GST_DEBUG_OBJECT (ffmpegdec, "copy pal %p %p", &packet, pal);
   }
-
-  if (!packet.size)
-    goto done;
 
   /* save reference to the timing info */
   ffmpegdec->context->reordered_opaque = (gint64) frame->system_frame_number;
@@ -2141,8 +2150,10 @@ gst_ffmpegviddec_handle_frame (GstVideoDecoder * decoder,
   GST_VIDEO_DECODER_STREAM_UNLOCK (ffmpegdec);
   if (avcodec_send_packet (ffmpegdec->context, &packet) < 0) {
     GST_VIDEO_DECODER_STREAM_LOCK (ffmpegdec);
+    av_packet_free_side_data (&packet);
     goto send_packet_failed;
   }
+  av_packet_free_side_data (&packet);
   GST_VIDEO_DECODER_STREAM_LOCK (ffmpegdec);
 
   do {
@@ -2164,7 +2175,8 @@ done:
 
 send_packet_failed:
   {
-    GST_WARNING_OBJECT (ffmpegdec, "Failed to send data for decoding");
+    GST_VIDEO_DECODER_ERROR (decoder, 1, STREAM, DECODE,
+        ("Failed to send data for decoding"), ("Invalid input packet"), ret);
     goto done;
   }
 }
@@ -2623,6 +2635,9 @@ gst_ffmpegviddec_register (GstPlugin * plugin)
     /* MP2 : Use MP3 for decoding */
     /* Theora: Use libtheora based theoradec */
     /* CDG: use cdgdec */
+    /* AV1: Use av1dec, dav1ddec or any of the hardware decoders.
+     *      Also ffmpeg's decoder only works with hardware support!
+     */
     if (!strcmp (in_plugin->name, "theora") ||
         !strcmp (in_plugin->name, "mpeg1video") ||
         strstr (in_plugin->name, "crystalhd") != NULL ||
@@ -2631,7 +2646,8 @@ gst_ffmpegviddec_register (GstPlugin * plugin)
         !strcmp (in_plugin->name, "pgssub") ||
         !strcmp (in_plugin->name, "dvdsub") ||
         !strcmp (in_plugin->name, "dvbsub") ||
-        !strcmp (in_plugin->name, "cdgraphics")) {
+        !strcmp (in_plugin->name, "cdgraphics") ||
+        !strcmp (in_plugin->name, "av1")) {
       GST_LOG ("Ignoring decoder %s", in_plugin->name);
       continue;
     }

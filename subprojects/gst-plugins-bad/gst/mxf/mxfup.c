@@ -52,30 +52,30 @@ static const struct
   const gchar *caps_string;
 } _rgba_mapping_table[] = {
   {
-    "RGB", 3, {
-  'R', 8, 'G', 8, 'B', 8}, GST_VIDEO_CAPS_MAKE ("RGB")}, {
-    "BGR", 3, {
-  'B', 8, 'G', 8, 'R', 8}, GST_VIDEO_CAPS_MAKE ("BGR")}, {
-    "v308", 3, {
-  'Y', 8, 'U', 8, 'V', 8}, GST_VIDEO_CAPS_MAKE ("v308")}, {
-    "xRGB", 4, {
-  'F', 8, 'R', 8, 'G', 8, 'B', 8}, GST_VIDEO_CAPS_MAKE ("xRGB")}, {
-    "RGBx", 4, {
-  'R', 8, 'G', 8, 'B', 8, 'F', 8}, GST_VIDEO_CAPS_MAKE ("RGBx")}, {
-    "xBGR", 4, {
-  'F', 8, 'B', 8, 'G', 8, 'R', 8}, GST_VIDEO_CAPS_MAKE ("xBGR")}, {
-    "BGRx", 4, {
-  'B', 8, 'G', 8, 'R', 8, 'F', 8}, GST_VIDEO_CAPS_MAKE ("BGRx")}, {
-    "RGBA", 4, {
-  'R', 8, 'G', 8, 'B', 8, 'A', 8}, GST_VIDEO_CAPS_MAKE ("RGBA")}, {
-    "ARGB", 4, {
-  'A', 8, 'R', 8, 'G', 8, 'B', 8}, GST_VIDEO_CAPS_MAKE ("RGBA")}, {
-    "BGRA", 4, {
-  'B', 8, 'G', 8, 'R', 8, 'A', 8}, GST_VIDEO_CAPS_MAKE ("BGRA")}, {
-    "ABGR", 4, {
-  'A', 8, 'B', 8, 'G', 8, 'R', 8}, GST_VIDEO_CAPS_MAKE ("ABGR")}, {
-    "AYUV", 4, {
-  'A', 8, 'Y', 8, 'U', 8, 'V', 8}, GST_VIDEO_CAPS_MAKE ("AYUV")}
+        "RGB", 3, {
+          'R', 8, 'G', 8, 'B', 8}, GST_VIDEO_CAPS_MAKE ("RGB")}, {
+        "BGR", 3, {
+          'B', 8, 'G', 8, 'R', 8}, GST_VIDEO_CAPS_MAKE ("BGR")}, {
+        "v308", 3, {
+          'Y', 8, 'U', 8, 'V', 8}, GST_VIDEO_CAPS_MAKE ("v308")}, {
+        "xRGB", 4, {
+          'F', 8, 'R', 8, 'G', 8, 'B', 8}, GST_VIDEO_CAPS_MAKE ("xRGB")}, {
+        "RGBx", 4, {
+          'R', 8, 'G', 8, 'B', 8, 'F', 8}, GST_VIDEO_CAPS_MAKE ("RGBx")}, {
+        "xBGR", 4, {
+          'F', 8, 'B', 8, 'G', 8, 'R', 8}, GST_VIDEO_CAPS_MAKE ("xBGR")}, {
+        "BGRx", 4, {
+          'B', 8, 'G', 8, 'R', 8, 'F', 8}, GST_VIDEO_CAPS_MAKE ("BGRx")}, {
+        "RGBA", 4, {
+          'R', 8, 'G', 8, 'B', 8, 'A', 8}, GST_VIDEO_CAPS_MAKE ("RGBA")}, {
+        "ARGB", 4, {
+          'A', 8, 'R', 8, 'G', 8, 'B', 8}, GST_VIDEO_CAPS_MAKE ("RGBA")}, {
+        "BGRA", 4, {
+          'B', 8, 'G', 8, 'R', 8, 'A', 8}, GST_VIDEO_CAPS_MAKE ("BGRA")}, {
+        "ABGR", 4, {
+          'A', 8, 'B', 8, 'G', 8, 'R', 8}, GST_VIDEO_CAPS_MAKE ("ABGR")}, {
+        "AYUV", 4, {
+          'A', 8, 'Y', 8, 'U', 8, 'V', 8}, GST_VIDEO_CAPS_MAKE ("AYUV")}
 };
 
 static const struct
@@ -88,8 +88,9 @@ static const struct
   const gchar *caps_string;
 } _cdci_mapping_table[] = {
   {
-  "YUY2", 2, 1, 0, TRUE, GST_VIDEO_CAPS_MAKE ("YUY2")}, {
-"UYVY", 2, 1, 0, FALSE, GST_VIDEO_CAPS_MAKE ("UYVY")},};
+      "YUY2", 2, 1, 0, TRUE, GST_VIDEO_CAPS_MAKE ("YUY2")}, {
+      "UYVY", 2, 1, 0, FALSE, GST_VIDEO_CAPS_MAKE ("UYVY")},
+};
 
 typedef struct
 {
@@ -101,30 +102,13 @@ typedef struct
 } MXFUPMappingData;
 
 static gboolean
-mxf_is_up_essence_track (const MXFMetadataTimelineTrack * track)
+mxf_is_up_essence_track (const MXFMetadataFileDescriptor * d)
 {
-  guint i;
+  const MXFUL *key = &d->essence_container;
 
-  g_return_val_if_fail (track != NULL, FALSE);
-
-  if (track->parent.descriptor == NULL)
-    return FALSE;
-
-  for (i = 0; i < track->parent.n_descriptor; i++) {
-    MXFMetadataFileDescriptor *d = track->parent.descriptor[i];
-    MXFUL *key;
-
-    if (!d)
-      continue;
-
-    key = &d->essence_container;
-    /* SMPTE 384M 8 */
-    if (mxf_is_generic_container_essence_container_label (key) &&
-        key->u[12] == 0x02 && key->u[13] == 0x05 && key->u[15] <= 0x03)
-      return TRUE;
-  }
-
-  return FALSE;
+  /* SMPTE 384M 8 */
+  return (mxf_is_generic_container_essence_container_label (key) &&
+      key->u[12] == 0x02 && key->u[13] == 0x05 && key->u[15] <= 0x03);
 }
 
 static GstFlowReturn

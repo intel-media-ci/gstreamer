@@ -397,7 +397,11 @@ gst_va_encoder_open (GstVaEncoder * self, VAProfile profile,
     GST_ERROR_OBJECT (self, "Failed to create reconstruct pool");
     goto error;
   }
-  gst_buffer_pool_set_active (recon_pool, TRUE);
+
+  if (!gst_buffer_pool_set_active (recon_pool, TRUE)) {
+    GST_ERROR_OBJECT (self, "Failed to activate reconstruct pool");
+    goto error;
+  }
 
   status = vaCreateContext (dpy, config, coded_width, coded_height,
       VA_PROGRESSIVE, NULL, 0, &context);
@@ -603,6 +607,35 @@ gst_va_encoder_get_max_slice_num (GstVaEncoder * self,
   return attrib.value;
 }
 
+gint32
+gst_va_encoder_get_slice_structure (GstVaEncoder * self,
+    VAProfile profile, VAEntrypoint entrypoint)
+{
+  VAStatus status;
+  VADisplay dpy;
+  VAConfigAttrib attrib = {.type = VAConfigAttribEncSliceStructure };
+
+  g_return_val_if_fail (GST_IS_VA_ENCODER (self), 0);
+
+  if (profile == VAProfileNone)
+    return -1;
+
+  dpy = gst_va_display_get_va_dpy (self->display);
+  status = vaGetConfigAttributes (dpy, profile, entrypoint, &attrib, 1);
+  if (status != VA_STATUS_SUCCESS) {
+    GST_WARNING_OBJECT (self, "Failed to query encoding slice structure: %s",
+        vaErrorStr (status));
+    return 0;
+  }
+
+  if (attrib.value == VA_ATTRIB_NOT_SUPPORTED) {
+    GST_WARNING_OBJECT (self, "Driver does not support slice structure");
+    return 0;
+  }
+
+  return attrib.value;
+}
+
 gboolean
 gst_va_encoder_get_max_num_reference (GstVaEncoder * self,
     VAProfile profile, VAEntrypoint entrypoint,
@@ -640,6 +673,44 @@ gst_va_encoder_get_max_num_reference (GstVaEncoder * self,
     *list1 = (attrib.value >> 16) & 0xffff;
 
   return TRUE;
+}
+
+guint
+gst_va_encoder_get_prediction_direction (GstVaEncoder * self,
+    VAProfile profile, VAEntrypoint entrypoint)
+{
+#if VA_CHECK_VERSION(1,9,0)
+  VAStatus status;
+  VADisplay dpy;
+  VAConfigAttrib attrib = {.type = VAConfigAttribPredictionDirection };
+
+  g_return_val_if_fail (GST_IS_VA_ENCODER (self), 0);
+
+  if (profile == VAProfileNone)
+    return 0;
+
+  if (entrypoint != self->entrypoint)
+    return 0;
+
+  dpy = gst_va_display_get_va_dpy (self->display);
+  status = vaGetConfigAttributes (dpy, profile, entrypoint, &attrib, 1);
+  if (status != VA_STATUS_SUCCESS) {
+    GST_WARNING_OBJECT (self, "Failed to query prediction direction: %s",
+        vaErrorStr (status));
+    return 0;
+  }
+
+  if (attrib.value == VA_ATTRIB_NOT_SUPPORTED) {
+    GST_WARNING_OBJECT (self, "Driver does not support query"
+        " prediction direction");
+    return 0;
+  }
+
+  return attrib.value & (VA_PREDICTION_DIRECTION_PREVIOUS |
+      VA_PREDICTION_DIRECTION_FUTURE | VA_PREDICTION_DIRECTION_BI_NOT_EMPTY);
+#else
+  return 0;
+#endif
 }
 
 guint32
@@ -727,6 +798,35 @@ gst_va_encoder_has_trellis (GstVaEncoder * self,
   }
 
   return attrib.value & VA_ENC_QUANTIZATION_TRELLIS_SUPPORTED;
+}
+
+gboolean
+gst_va_encoder_has_tile (GstVaEncoder * self,
+    VAProfile profile, VAEntrypoint entrypoint)
+{
+  VAStatus status;
+  VADisplay dpy;
+  VAConfigAttrib attrib = {.type = VAConfigAttribEncTileSupport };
+
+  g_return_val_if_fail (GST_IS_VA_ENCODER (self), FALSE);
+
+  if (profile == VAProfileNone)
+    return FALSE;
+
+  dpy = gst_va_display_get_va_dpy (self->display);
+  status = vaGetConfigAttributes (dpy, profile, entrypoint, &attrib, 1);
+  if (status != VA_STATUS_SUCCESS) {
+    GST_WARNING_OBJECT (self, "Failed to query the tile: %s",
+        vaErrorStr (status));
+    return FALSE;
+  }
+
+  if (attrib.value == VA_ATTRIB_NOT_SUPPORTED) {
+    GST_WARNING_OBJECT (self, "Driver does not support tile");
+    return FALSE;
+  }
+
+  return attrib.value > 0;
 }
 
 guint32
@@ -945,15 +1045,18 @@ gst_va_encoder_get_srcpad_caps (GstVaEncoder * self)
 static gboolean
 _destroy_all_buffers (GstVaEncodePicture * pic)
 {
+  GstVaDisplay *display;
   VABufferID buffer;
   guint i;
   gboolean ret = TRUE;
 
-  g_return_val_if_fail (GST_IS_VA_DISPLAY (pic->display), FALSE);
+  display = gst_va_buffer_peek_display (pic->raw_buffer);
+  if (!display)
+    return FALSE;
 
   for (i = 0; i < pic->params->len; i++) {
     buffer = g_array_index (pic->params, VABufferID, i);
-    ret &= _destroy_buffer (pic->display, buffer);
+    ret &= _destroy_buffer (display, buffer);
   }
   pic->params = g_array_set_size (pic->params, 0);
 
@@ -1101,10 +1204,9 @@ gst_va_encode_picture_new (GstVaEncoder * self, GstBuffer * raw_buffer)
     return NULL;
   }
 
-  pic = g_slice_new (GstVaEncodePicture);
+  pic = g_new (GstVaEncodePicture, 1);
   pic->raw_buffer = gst_buffer_ref (raw_buffer);
   pic->reconstruct_buffer = reconstruct_buffer;
-  pic->display = gst_object_ref (self->display);
   pic->coded_buffer = coded_buffer;
 
   pic->params = g_array_sized_new (FALSE, FALSE, sizeof (VABufferID), 8);
@@ -1115,20 +1217,25 @@ gst_va_encode_picture_new (GstVaEncoder * self, GstBuffer * raw_buffer)
 void
 gst_va_encode_picture_free (GstVaEncodePicture * pic)
 {
+  GstVaDisplay *display;
+
   g_return_if_fail (pic);
 
   _destroy_all_buffers (pic);
 
+  display = gst_va_buffer_peek_display (pic->raw_buffer);
+  if (!display)
+    return;
+
   if (pic->coded_buffer != VA_INVALID_ID)
-    _destroy_buffer (pic->display, pic->coded_buffer);
+    _destroy_buffer (display, pic->coded_buffer);
 
   gst_buffer_unref (pic->raw_buffer);
   gst_buffer_unref (pic->reconstruct_buffer);
 
   g_clear_pointer (&pic->params, g_array_unref);
-  gst_clear_object (&pic->display);
 
-  g_slice_free (GstVaEncodePicture, pic);
+  g_free (pic);
 }
 
 /* currently supported rate controls */

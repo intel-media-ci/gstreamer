@@ -57,6 +57,7 @@
 #include <gst/gl/gstglcontext.h>
 #include "vtdec.h"
 #include "vtutil.h"
+#include "helpers.h"
 #include "corevideobuffer.h"
 #include "coremediabuffer.h"
 #include "videotexturecache-gl.h"
@@ -169,7 +170,7 @@ gst_vtdec_class_init (GstVtdecClass * klass)
   {
     GstCaps *caps = gst_caps_from_string (VIDEO_SRC_CAPS);
     /* RGBA64_LE is kCVPixelFormatType_64RGBALE, only available on macOS 11.3+ */
-    if (GST_VTUTIL_HAVE_64ARGBALE)
+    if (GST_APPLEMEDIA_HAVE_64RGBALE)
       caps = gst_vtutil_caps_append_video_format (caps, "RGBA64_LE");
     gst_element_class_add_pad_template (element_class,
         gst_pad_template_new ("src", GST_PAD_SRC, GST_PAD_ALWAYS, caps));
@@ -299,7 +300,7 @@ get_preferred_video_format (GstStructure * s, gboolean prores)
           return vfmt;
         break;
       case GST_VIDEO_FORMAT_RGBA64_LE:
-        if (GST_VTUTIL_HAVE_64ARGBALE) {
+        if (GST_APPLEMEDIA_HAVE_64RGBALE) {
           if (prores)
             return vfmt;
         } else {
@@ -678,35 +679,9 @@ gst_vtdec_create_session (GstVtdec * vtdec, GstVideoFormat format,
   VTDecompressionOutputCallbackRecord callback;
   CFMutableDictionaryRef videoDecoderSpecification;
   OSStatus status;
-  guint32 cv_format = 0;
+  guint32 cv_format = gst_video_format_to_cvpixelformat (format);
 
   g_return_val_if_fail (vtdec->session == NULL, FALSE);
-
-  switch (format) {
-    case GST_VIDEO_FORMAT_NV12:
-      cv_format = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
-      break;
-    case GST_VIDEO_FORMAT_AYUV64:
-/* This is fine for now because Apple only ships LE devices */
-#if G_BYTE_ORDER != G_LITTLE_ENDIAN
-#error "AYUV64 is NE but kCVPixelFormatType_4444AYpCbCr16 is LE"
-#endif
-      cv_format = kCVPixelFormatType_4444AYpCbCr16;
-      break;
-    case GST_VIDEO_FORMAT_ARGB64_BE:
-      cv_format = kCVPixelFormatType_64ARGB;
-      break;
-    case GST_VIDEO_FORMAT_RGBA64_LE:
-      if (GST_VTUTIL_HAVE_64ARGBALE)
-        cv_format = kCVPixelFormatType_64RGBALE;
-      else
-        /* Codepath will never be hit on macOS older than Big Sur (11.3) */
-        g_warn_if_reached ();
-      break;
-    default:
-      g_warn_if_reached ();
-      break;
-  }
 
   videoDecoderSpecification =
       CFDictionaryCreateMutable (NULL, 0, &kCFTypeDictionaryKeyCallBacks,
@@ -1033,7 +1008,7 @@ gst_vtdec_push_frames_if_needed (GstVtdec * vtdec, gboolean drain,
     }
   }
 
-  if (drain)
+  if (drain || flush)
     VTDecompressionSessionWaitForAsynchronousFrames (vtdec->session);
 
   /* push a buffer if there are enough frames to guarantee that we push in PTS
@@ -1064,54 +1039,6 @@ gst_vtdec_push_frames_if_needed (GstVtdec * vtdec, gboolean drain,
   }
 
   return ret;
-}
-
-static gboolean
-parse_h264_profile_and_level_from_codec_data (GstVtdec * vtdec,
-    GstBuffer * codec_data, int *profile, int *level)
-{
-  GstMapInfo map;
-  guint8 *data;
-  gint size;
-  gboolean ret = TRUE;
-
-  gst_buffer_map (codec_data, &map, GST_MAP_READ);
-  data = map.data;
-  size = map.size;
-
-  /* parse the avcC data */
-  if (size < 7)
-    goto avcc_too_small;
-
-  /* parse the version, this must be 1 */
-  if (data[0] != 1)
-    goto wrong_version;
-
-  /* AVCProfileIndication */
-  /* profile_compat */
-  /* AVCLevelIndication */
-  if (profile)
-    *profile = data[1];
-
-  if (level)
-    *level = data[3];
-
-out:
-  gst_buffer_unmap (codec_data, &map);
-
-  return ret;
-
-avcc_too_small:
-  GST_ELEMENT_ERROR (vtdec, STREAM, DECODE, (NULL),
-      ("invalid codec_data buffer length"));
-  ret = FALSE;
-  goto out;
-
-wrong_version:
-  GST_ELEMENT_ERROR (vtdec, STREAM, DECODE, (NULL),
-      ("wrong avcC version in codec_data"));
-  ret = FALSE;
-  goto out;
 }
 
 static int
@@ -1170,47 +1097,126 @@ gst_vtdec_compute_reorder_queue_length (GstVtdec * vtdec,
     vtdec->reorder_queue_length = 0;
   }
 
+  GST_DEBUG_OBJECT (vtdec, "Reorder queue length: %d",
+      vtdec->reorder_queue_length);
+  return TRUE;
+}
+
+static gboolean
+parse_h264_decoder_config_record (GstVtdec * vtdec, GstBuffer * codec_data,
+    GstH264DecoderConfigRecord ** config)
+{
+  GstH264NalParser *parser = gst_h264_nal_parser_new ();
+  GstMapInfo map;
+  gboolean ret = TRUE;
+
+  gst_buffer_map (codec_data, &map, GST_MAP_READ);
+
+  if (gst_h264_parser_parse_decoder_config_record (parser, map.data, map.size,
+          config) != GST_H264_PARSER_OK) {
+    GST_WARNING_OBJECT (vtdec, "Failed to parse codec-data");
+    ret = FALSE;
+  }
+
+  gst_h264_nal_parser_free (parser);
+  gst_buffer_unmap (codec_data, &map);
+  return ret;
+}
+
+static gboolean
+get_h264_dpb_size_from_sps (GstVtdec * vtdec, GstH264NalUnit * nalu,
+    gint * dpb_size)
+{
+  GstH264ParserResult result;
+  GstH264SPS sps;
+  gint width_mb, height_mb;
+  gint max_dpb_frames, max_dpb_size, max_dpb_mbs;
+
+  result = gst_h264_parse_sps (nalu, &sps);
+  if (result != GST_H264_PARSER_OK) {
+    GST_WARNING_OBJECT (vtdec, "Failed to parse SPS, result %d", result);
+    return FALSE;
+  }
+
+  max_dpb_mbs = get_dpb_max_mb_s_from_level (vtdec, sps.level_idc);
+  if (max_dpb_mbs == -1) {
+    GST_ELEMENT_ERROR (vtdec, STREAM, DECODE, (NULL),
+        ("invalid level found in SPS, could not compute max_dpb_mbs"));
+    gst_h264_sps_clear (&sps);
+    return FALSE;
+  }
+
+  /* This formula is specified in sections A.3.1.h and A.3.2.f of the 2009
+   * edition of the standard */
+  width_mb = sps.width / 16;
+  height_mb = sps.height / 16;
+  max_dpb_frames = MIN (max_dpb_mbs / (width_mb * height_mb),
+      GST_VTDEC_DPB_MAX_SIZE);
+
+  if (sps.vui_parameters_present_flag
+      && sps.vui_parameters.bitstream_restriction_flag)
+    max_dpb_frames = MAX (1, sps.vui_parameters.max_dec_frame_buffering);
+
+  /* Some non-conforming H264 streams may request a number of frames 
+   * larger than the calculated limit.
+   * See https://chromium-review.googlesource.com/c/chromium/src/+/760276/
+   */
+  max_dpb_size = MAX (max_dpb_frames, sps.num_ref_frames);
+  if (max_dpb_size > GST_VTDEC_DPB_MAX_SIZE) {
+    GST_WARNING_OBJECT (vtdec, "Too large calculated DPB size %d",
+        max_dpb_size);
+    max_dpb_size = GST_VTDEC_DPB_MAX_SIZE;
+  }
+
+  *dpb_size = max_dpb_size;
+
+  gst_h264_sps_clear (&sps);
   return TRUE;
 }
 
 static gboolean
 compute_h264_decode_picture_buffer_length (GstVtdec * vtdec,
-    GstBuffer * codec_data, int *length)
+    GstBuffer * codec_data, gint * length)
 {
-  int profile, level;
-  int dpb_mb_size = 16;
-  int max_dpb_size_frames = 16;
-  int max_dpb_mb_s = -1;
-  int width_in_mb_s = GST_ROUND_UP_16 (vtdec->video_info.width) / dpb_mb_size;
-  int height_in_mb_s = GST_ROUND_UP_16 (vtdec->video_info.height) / dpb_mb_size;
+  GstH264DecoderConfigRecord *config = NULL;
+  GstH264NalUnit *nalu;
+  guint8 profile, level;
+  gboolean ret = TRUE;
+  gint new_length;
+  guint i;
 
   *length = 0;
-
-  if (!parse_h264_profile_and_level_from_codec_data (vtdec, codec_data,
-          &profile, &level))
-    return FALSE;
 
   if (vtdec->video_info.width == 0 || vtdec->video_info.height == 0)
     return FALSE;
 
+  if (!parse_h264_decoder_config_record (vtdec, codec_data, &config))
+    return FALSE;
+
+  profile = config->profile_indication;
+  level = config->level_indication;
   GST_INFO_OBJECT (vtdec, "parsed profile %d, level %d", profile, level);
+
   if (profile == 66) {
     /* baseline or constrained-baseline, we don't need to reorder */
-    return TRUE;
+    goto out;
   }
 
-  max_dpb_mb_s = get_dpb_max_mb_s_from_level (vtdec, level);
-  if (max_dpb_mb_s == -1) {
-    GST_ELEMENT_ERROR (vtdec, STREAM, DECODE, (NULL),
-        ("invalid level in codec_data, could not compute max_dpb_mb_s"));
-    return FALSE;
+  for (i = 0; i < config->sps->len; i++) {
+    nalu = &g_array_index (config->sps, GstH264NalUnit, i);
+
+    if (nalu->type != GST_H264_NAL_SPS)
+      continue;
+
+    if (!get_h264_dpb_size_from_sps (vtdec, nalu, &new_length))
+      GST_WARNING_OBJECT (vtdec, "Failed to get DPB size from SPS");
+    else
+      *length = MAX (*length, new_length);
   }
 
-  /* this formula is specified in sections A.3.1.h and A.3.2.f of the 2009
-   * edition of the standard */
-  *length = MIN (floor (max_dpb_mb_s / (width_in_mb_s * height_in_mb_s)),
-      max_dpb_size_frames);
-  return TRUE;
+out:
+  gst_h264_decoder_config_record_free (config);
+  return ret;
 }
 
 static gboolean

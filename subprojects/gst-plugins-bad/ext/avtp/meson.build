@@ -3,7 +3,11 @@ avtp_sources = [
   'gstavtpaafdepay.c',
   'gstavtpaafpay.c',
   'gstavtpcvfdepay.c',
+  'gstavtprvfdepay.c',
+  'gstavtpvfdepaybase.c',
   'gstavtpcvfpay.c',
+  'gstavtprvfpay.c',
+  'gstavtpvfpaybase.c',
   'gstavtpbasedepayload.c',
   'gstavtpbasepayload.c',
   'gstavtpsink.c',
@@ -25,7 +29,7 @@ if host_machine.system() != 'linux' or not cc.has_type('struct sock_txtime', pre
   endif
 endif
 
-avtp_dep = dependency('avtp', required: avtp_option,
+avtp_dep = dependency('avtp', required: avtp_option, version : '>= 0.2.0',
                       fallback: ['avtp', 'avtp_dep'])
 
 if avtp_dep.found()

@@ -98,7 +98,7 @@ G_DEFINE_TYPE (GstH265Timestamper,
     gst_h265_timestamper, GST_TYPE_CODEC_TIMESTAMPER);
 
 GST_ELEMENT_REGISTER_DEFINE (h265timestamper, "h265timestamper",
-    GST_RANK_NONE, GST_TYPE_H265_TIMESTAMPER);
+    GST_RANK_MARGINAL, GST_TYPE_H265_TIMESTAMPER);
 
 static void
 gst_h265_timestamper_class_init (GstH265TimestamperClass * klass)
@@ -111,7 +111,7 @@ gst_h265_timestamper_class_init (GstH265TimestamperClass * klass)
   gst_element_class_add_static_pad_template (element_class, &srctemplate);
 
   gst_element_class_set_static_metadata (element_class, "H.265 timestamper",
-      "Codec/Video", "Timestamp H.265 streams",
+      "Codec/Video/Timestamper", "Timestamp H.265 streams",
       "Seungha Yang <seungha@centricular.com>");
 
   timestamper_class->start = GST_DEBUG_FUNCPTR (gst_h265_timestamper_start);
@@ -139,6 +139,7 @@ gst_h265_timestamper_set_caps (GstCodecTimestamper * timestamper,
   const gchar *str;
   gboolean found_format = FALSE;
   const GValue *codec_data_val;
+  gboolean ret = TRUE;
 
   self->packetized = FALSE;
   self->nal_length_size = 4;
@@ -155,70 +156,47 @@ gst_h265_timestamper_set_caps (GstCodecTimestamper * timestamper,
     GstBuffer *codec_data = gst_value_get_buffer (codec_data_val);
     GstH265Parser *parser = self->parser;
     GstMapInfo map;
-    GstH265NalUnit nalu;
     GstH265ParserResult pres;
-    guint num_nal_arrays;
-    guint off;
-    guint num_nals, i, j;
-    guint8 *data;
-    gsize size;
+    GstH265DecoderConfigRecord *config = NULL;
+    guint i, j;
 
     if (!gst_buffer_map (codec_data, &map, GST_MAP_READ)) {
       GST_ERROR_OBJECT (self, "Unable to map codec-data buffer");
       return FALSE;
     }
 
-    data = map.data;
-    size = map.size;
-
-    /* parse the hvcC data */
-    if (size < 23) {
-      GST_WARNING_OBJECT (self, "hvcC too small");
+    pres = gst_h265_parser_parse_decoder_config_record (parser,
+        map.data, map.size, &config);
+    if (pres != GST_H265_PARSER_OK) {
+      GST_WARNING_OBJECT (self, "Failed to parse hvcC data");
+      ret = FALSE;
       goto unmap;
     }
 
-    /* wrong hvcC version */
-    if (data[0] != 0 && data[0] != 1) {
-      goto unmap;
-    }
-
-    self->nal_length_size = (data[21] & 0x03) + 1;
+    self->nal_length_size = config->length_size_minus_one + 1;
     GST_DEBUG_OBJECT (self, "nal length size %u", self->nal_length_size);
 
-    num_nal_arrays = data[22];
-    off = 23;
+    for (i = 0; i < config->nalu_array->len; i++) {
+      GstH265DecoderConfigRecordNalUnitArray *array =
+          &g_array_index (config->nalu_array,
+          GstH265DecoderConfigRecordNalUnitArray, i);
 
-    for (i = 0; i < num_nal_arrays; i++) {
-      if (off + 3 >= size) {
-        GST_WARNING_OBJECT (self, "hvcC too small");
-        goto unmap;
-      }
-
-      num_nals = GST_READ_UINT16_BE (data + off + 1);
-      off += 3;
-      for (j = 0; j < num_nals; j++) {
-        pres = gst_h265_parser_identify_nalu_hevc (parser,
-            data, off, size, 2, &nalu);
-
-        if (pres != GST_H265_PARSER_OK) {
-          GST_WARNING_OBJECT (self, "hvcC too small");
-          goto unmap;
-        }
-
-        gst_h265_timestamper_process_nal (self, &nalu);
-
-        off = nalu.offset + nalu.size;
+      for (j = 0; j < array->nalu->len; j++) {
+        GstH265NalUnit *nalu = &g_array_index (array->nalu, GstH265NalUnit, j);
+        gst_h265_timestamper_process_nal (self, nalu);
       }
     }
+
     /* codec_data would mean packetized format */
     if (!found_format)
       self->packetized = TRUE;
 
   unmap:
     gst_buffer_unmap (codec_data, &map);
+    gst_h265_decoder_config_record_free (config);
   }
 
-  return TRUE;
+  return ret;
 }
 
 static void

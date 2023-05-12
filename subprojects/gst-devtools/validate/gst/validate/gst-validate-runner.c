@@ -22,12 +22,13 @@
  * Boston, MA 02111-1307, USA.
  */
 
-#include <string.h>
-#include <stdlib.h>
 
 #ifdef HAVE_CONFIG_H
 #  include "config.h"
 #endif
+
+#include <string.h>
+#include <stdlib.h>
 
 #include "validate.h"
 #include "gst-validate-internal.h"
@@ -235,7 +236,7 @@ static void
 _set_reporting_level_for_name (GstValidateRunner * runner,
     const gchar * pattern, GstValidateReportingDetails level)
 {
-  PatternLevel *pattern_level = g_malloc (sizeof (PatternLevel));
+  PatternLevel *pattern_level = g_new (PatternLevel, 1);
   GPatternSpec *pattern_spec = g_pattern_spec_new (pattern);
 
   pattern_level->pattern = pattern_spec;

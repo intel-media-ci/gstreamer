@@ -71,11 +71,7 @@ struct _GstVaAV1Dec
 {
   GstVaBaseDec parent;
 
-  GstFlowReturn last_ret;
-
   GstAV1SequenceHeaderOBU seq;
-  gint max_width;
-  gint max_height;
   GstVideoFormat preferred_format;
   /* Used for layers not output. */
   GstBufferPool *internal_pool;
@@ -97,9 +93,6 @@ gst_va_av1_dec_negotiate (GstVideoDecoder * decoder)
 {
   GstVaAV1Dec *self = GST_VA_AV1_DEC (decoder);
   GstVaBaseDec *base = GST_VA_BASE_DEC (decoder);
-  GstAV1Decoder *av1dec = GST_AV1_DECODER (decoder);
-  GstVideoFormat format = GST_VIDEO_FORMAT_UNKNOWN;
-  GstCapsFeatures *capsfeatures = NULL;
 
   /* Ignore downstream renegotiation request. */
   if (!base->need_negotiation)
@@ -109,7 +102,7 @@ gst_va_av1_dec_negotiate (GstVideoDecoder * decoder)
 
   /* Do not re-create the context if only the frame size changes */
   if (!gst_va_decoder_config_is_equal (base->decoder, base->profile,
-          base->rt_format, self->max_width, self->max_height)) {
+          base->rt_format, base->width, base->height)) {
     if (gst_va_decoder_is_open (base->decoder)
         && !gst_va_decoder_close (base->decoder))
       return FALSE;
@@ -117,36 +110,22 @@ gst_va_av1_dec_negotiate (GstVideoDecoder * decoder)
     if (!gst_va_decoder_open (base->decoder, base->profile, base->rt_format))
       return FALSE;
 
-    if (!gst_va_decoder_set_frame_size (base->decoder, self->max_width,
-            self->max_height))
+    if (!gst_va_decoder_set_frame_size (base->decoder, base->width,
+            base->height))
       return FALSE;
   }
 
-  if (base->output_state)
-    gst_video_codec_state_unref (base->output_state);
-
-  gst_va_base_dec_get_preferred_format_and_caps_features (base, &format,
-      &capsfeatures);
-  if (format == GST_VIDEO_FORMAT_UNKNOWN)
+  if (!gst_va_base_dec_set_output_state (base))
     return FALSE;
 
   if (self->preferred_format != GST_VIDEO_FORMAT_UNKNOWN &&
-      self->preferred_format != format) {
+      self->preferred_format !=
+      GST_VIDEO_INFO_FORMAT (&base->output_state->info)) {
     GST_WARNING_OBJECT (self, "The preferred_format is different from"
         " the last result");
     return FALSE;
   }
-  self->preferred_format = format;
-
-  base->output_state = gst_video_decoder_set_output_state (decoder, format,
-      base->width, base->height, av1dec->input_state);
-
-  base->output_state->caps = gst_video_info_to_caps (&base->output_state->info);
-  if (capsfeatures)
-    gst_caps_set_features_simple (base->output_state->caps, capsfeatures);
-
-  GST_INFO_OBJECT (self, "Negotiated caps %" GST_PTR_FORMAT,
-      base->output_state->caps);
+  self->preferred_format = GST_VIDEO_INFO_FORMAT (&base->output_state->info);
 
   return GST_VIDEO_DECODER_CLASS (parent_class)->negotiate (decoder);
 }
@@ -298,7 +277,7 @@ _create_internal_pool (GstVaAV1Dec * self, gint width, gint height)
   gst_video_info_set_format (&info, self->preferred_format, width, height);
 
   caps = gst_video_info_to_caps (&info);
-  if (caps == NULL) {
+  if (!caps) {
     GST_WARNING_OBJECT (self, "Failed to create caps for internal pool");
     return NULL;
   }
@@ -312,16 +291,20 @@ _create_internal_pool (GstVaAV1Dec * self, gint width, gint height)
   pool = gst_va_pool_new_with_config (caps, GST_VIDEO_INFO_SIZE (&info),
       1, 0, VA_SURFACE_ATTRIB_USAGE_HINT_DECODER, GST_VA_FEATURE_AUTO,
       allocator, &params);
+
+  gst_clear_caps (&caps);
+  gst_object_unref (allocator);
+
   if (!pool) {
     GST_WARNING_OBJECT (self, "Failed to create internal pool");
-    gst_object_unref (allocator);
-    gst_clear_caps (&caps);
     return NULL;
   }
 
-  gst_object_unref (allocator);
-
-  gst_buffer_pool_set_active (pool, TRUE);
+  if (!gst_buffer_pool_set_active (pool, TRUE)) {
+    GST_WARNING_OBJECT (self, "Failed to activate internal pool");
+    gst_object_unref (pool);
+    return NULL;
+  }
 
   return pool;
 }
@@ -332,8 +315,10 @@ gst_va_av1_dec_new_sequence (GstAV1Decoder * decoder,
 {
   GstVaAV1Dec *self = GST_VA_AV1_DEC (decoder);
   GstVaBaseDec *base = GST_VA_BASE_DEC (decoder);
+  GstVideoInfo *info = &base->output_info;
   VAProfile profile;
   guint rt_format;
+  gint width, height;
 
   GST_LOG_OBJECT (self, "new sequence");
 
@@ -347,27 +332,56 @@ gst_va_av1_dec_new_sequence (GstAV1Decoder * decoder,
 
   self->seq = *seq_hdr;
 
+  width = seq_hdr->max_frame_width_minus_1 + 1;
+  height = seq_hdr->max_frame_height_minus_1 + 1;
+
   if (!gst_va_decoder_config_is_equal (base->decoder, profile,
-          rt_format, seq_hdr->max_frame_width_minus_1 + 1,
-          seq_hdr->max_frame_height_minus_1 + 1)) {
+          rt_format, width, height)) {
     _clear_internal_pool (self);
     self->preferred_format = GST_VIDEO_FORMAT_UNKNOWN;
 
     base->profile = profile;
     base->rt_format = rt_format;
-    self->max_width = seq_hdr->max_frame_width_minus_1 + 1;
-    self->max_height = seq_hdr->max_frame_height_minus_1 + 1;
+    GST_VIDEO_INFO_WIDTH (info) = base->width = width;
+    GST_VIDEO_INFO_HEIGHT (info) = base->height = height;
     base->need_negotiation = TRUE;
-
     base->min_buffers = 7 + 4;  /* dpb size + scratch surfaces */
-
-    /* May be changed by frame header */
-    base->width = self->max_width;
-    base->height = self->max_height;
     base->need_valign = FALSE;
   }
 
+  g_clear_pointer (&base->input_state, gst_video_codec_state_unref);
+  base->input_state = gst_video_codec_state_ref (decoder->input_state);
+
   return GST_FLOW_OK;
+}
+
+static inline GstFlowReturn
+_acquire_internal_buffer (GstVaAV1Dec * self, GstVideoCodecFrame * frame)
+{
+  GstVaBaseDec *base = GST_VA_BASE_DEC (self);
+  GstFlowReturn ret;
+
+  if (!self->internal_pool) {
+    self->internal_pool =
+        _create_internal_pool (self, base->width, base->height);
+    if (!self->internal_pool)
+      return GST_FLOW_ERROR;
+  }
+
+  if (base->need_negotiation) {
+    if (!gst_video_decoder_negotiate (GST_VIDEO_DECODER (self)))
+      return GST_FLOW_NOT_NEGOTIATED;
+  }
+
+  ret = gst_buffer_pool_acquire_buffer (self->internal_pool,
+      &frame->output_buffer, NULL);
+  if (ret != GST_FLOW_OK) {
+    GST_WARNING_OBJECT (self,
+        "Failed to allocated output buffer from internal pool, return %s",
+        gst_flow_get_name (ret));
+  }
+
+  return ret;
 }
 
 static GstFlowReturn
@@ -376,62 +390,42 @@ gst_va_av1_dec_new_picture (GstAV1Decoder * decoder,
 {
   GstVaAV1Dec *self = GST_VA_AV1_DEC (decoder);
   GstVaBaseDec *base = GST_VA_BASE_DEC (decoder);
-  GstVaDecodePicture *pic;
-  GstVideoDecoder *vdec = GST_VIDEO_DECODER (decoder);
   GstAV1FrameHeaderOBU *frame_hdr = &picture->frame_hdr;
+  GstVaDecodePicture *pic;
+  GstVideoInfo *info = &base->output_info;
+  GstFlowReturn ret;
 
   /* Only output the highest spatial layer. For non output pictures,
      we just use internal pool, then no negotiation needed. */
   if (picture->spatial_id < decoder->highest_spatial_layer) {
-    if (!self->internal_pool) {
-      self->internal_pool =
-          _create_internal_pool (self, self->max_width, self->max_height);
-      if (!self->internal_pool)
-        return GST_FLOW_ERROR;
-    }
+    ret = _acquire_internal_buffer (self, frame);
+    if (ret != GST_FLOW_OK)
+      return ret;
   } else {
-    if (frame_hdr->upscaled_width != base->width
-        || frame_hdr->frame_height != base->height) {
-      base->width = frame_hdr->upscaled_width;
-      base->height = frame_hdr->frame_height;
+    if (frame_hdr->upscaled_width != GST_VIDEO_INFO_WIDTH (info)
+        || frame_hdr->frame_height != GST_VIDEO_INFO_HEIGHT (info)) {
+      GST_VIDEO_INFO_WIDTH (info) = frame_hdr->upscaled_width;
+      GST_VIDEO_INFO_HEIGHT (info) = frame_hdr->frame_height;
 
-      if (base->width < self->max_width || base->height < self->max_height) {
+      if (GST_VIDEO_INFO_WIDTH (info) < base->width
+          || GST_VIDEO_INFO_HEIGHT (info) < base->height) {
         base->need_valign = TRUE;
         /* *INDENT-OFF* */
-        base->valign = (GstVideoAlignment){
-          .padding_bottom = self->max_height - base->height,
-          .padding_right = self->max_width - base->width,
+        base->valign = (GstVideoAlignment) {
+          .padding_bottom = base->height - GST_VIDEO_INFO_HEIGHT (info),
+          .padding_right = base->width - GST_VIDEO_INFO_WIDTH (info),
         };
         /* *INDENT-ON* */
       }
 
       base->need_negotiation = TRUE;
     }
-  }
 
-  if (base->need_negotiation) {
-    if (!gst_video_decoder_negotiate (GST_VIDEO_DECODER (self))) {
-      GST_ERROR_OBJECT (self, "Failed to negotiate with downstream");
-      return GST_FLOW_NOT_NEGOTIATED;
-    }
-  }
-
-  if (picture->spatial_id < decoder->highest_spatial_layer) {
-    self->last_ret = gst_buffer_pool_acquire_buffer (self->internal_pool,
-        &frame->output_buffer, NULL);
-    if (self->last_ret != GST_FLOW_OK) {
-      GST_WARNING_OBJECT (self,
-          "Failed to allocated output buffer from internal pool, return %s",
-          gst_flow_get_name (self->last_ret));
-      return self->last_ret;
-    }
-  } else {
-    self->last_ret = gst_video_decoder_allocate_output_frame (vdec, frame);
-    if (self->last_ret != GST_FLOW_OK) {
-      GST_WARNING_OBJECT (self,
-          "Failed to allocated output buffer, return %s",
-          gst_flow_get_name (self->last_ret));
-      return self->last_ret;
+    ret = gst_va_base_dec_prepare_output_frame (base, frame);
+    if (ret != GST_FLOW_OK) {
+      GST_WARNING_OBJECT (self, "Failed to allocated output buffer, return %s",
+          gst_flow_get_name (ret));
+      return ret;
     }
   }
 
@@ -686,7 +680,7 @@ gst_va_av1_dec_start_picture (GstAV1Decoder * decoder, GstAV1Picture * picture,
   GstVaBaseDec *base = GST_VA_BASE_DEC (decoder);
   GstAV1FrameHeaderOBU *frame_header = &picture->frame_hdr;
   GstAV1SequenceHeaderOBU *seq_header = &self->seq;
-  VADecPictureParameterBufferAV1 pic_param = { };
+  VADecPictureParameterBufferAV1 pic_param = { 0, };
   GstVaDecodePicture *va_pic;
   guint i;
 
@@ -890,13 +884,11 @@ gst_va_av1_dec_decode_tile (GstAV1Decoder * decoder, GstAV1Picture * picture,
   GstAV1TileGroupOBU *tile_group = &tile->tile_group;
   GstVaDecodePicture *va_pic;
   guint i;
-  VASliceParameterBufferAV1 slice_param[GST_AV1_MAX_TILE_COUNT];
+  VASliceParameterBufferAV1 slice_param[GST_AV1_MAX_TILE_COUNT] = { 0, };
 
   GST_TRACE_OBJECT (self, "-");
 
   for (i = 0; i < tile_group->tg_end - tile_group->tg_start + 1; i++) {
-    slice_param[i] = (VASliceParameterBufferAV1) {
-    };
     slice_param[i].slice_data_size =
         tile_group->entry[tile_group->tg_start + i].tile_size;
     slice_param[i].slice_data_offset =
@@ -945,6 +937,8 @@ gst_va_av1_dec_output_picture (GstAV1Decoder * decoder,
 {
   GstVaAV1Dec *self = GST_VA_AV1_DEC (decoder);
   GstVaBaseDec *base = GST_VA_BASE_DEC (decoder);
+  GstVideoDecoder *vdec = GST_VIDEO_DECODER (decoder);
+  gboolean ret;
 
   g_assert (picture->frame_hdr.show_frame ||
       picture->frame_hdr.show_existing_frame);
@@ -952,12 +946,6 @@ gst_va_av1_dec_output_picture (GstAV1Decoder * decoder,
   GST_LOG_OBJECT (self,
       "Outputting picture %p (system_frame_number %d)",
       picture, picture->system_frame_number);
-
-  if (self->last_ret != GST_FLOW_OK) {
-    gst_av1_picture_unref (picture);
-    gst_video_decoder_drop_frame (GST_VIDEO_DECODER (self), frame);
-    return self->last_ret;
-  }
 
   if (picture->frame_hdr.show_existing_frame) {
     GstVaDecodePicture *pic;
@@ -967,12 +955,12 @@ gst_va_av1_dec_output_picture (GstAV1Decoder * decoder,
     frame->output_buffer = gst_buffer_ref (pic->gstbuffer);
   }
 
-  if (base->copy_frames)
-    gst_va_base_dec_copy_output_buffer (base, frame);
-
+  ret = gst_va_base_dec_process_output (base, frame, picture->discont_state, 0);
   gst_av1_picture_unref (picture);
 
-  return gst_video_decoder_finish_frame (GST_VIDEO_DECODER (self), frame);
+  if (ret)
+    return gst_video_decoder_finish_frame (vdec, frame);
+  return GST_FLOW_ERROR;
 }
 
 static gboolean
@@ -1119,24 +1107,9 @@ gst_va_av1_dec_register (GstPlugin * plugin, GstVaDevice * device,
 
   type_info.class_data = cdata;
 
-  type_name = g_strdup ("GstVaAV1Dec");
-  feature_name = g_strdup ("vaav1dec");
-
-  /* The first decoder to be registered should use a constant name,
-   * like vaav1dec, for any additional decoders, we create unique
-   * names, using inserting the render device name. */
-  if (g_type_from_name (type_name)) {
-    gchar *basename = g_path_get_basename (device->render_device_path);
-    g_free (type_name);
-    g_free (feature_name);
-    type_name = g_strdup_printf ("GstVa%sAV1Dec", basename);
-    feature_name = g_strdup_printf ("va%sav1dec", basename);
-    cdata->description = basename;
-
-    /* lower rank for non-first device */
-    if (rank > 0)
-      rank--;
-  }
+  gst_va_create_feature_name (device, "GstVaAV1Dec", "GstVa%sAV1Dec",
+      &type_name, "vaav1dec", "va%sav1dec", &feature_name,
+      &cdata->description, &rank);
 
   g_once (&debug_once, _register_debug_category, NULL);
 

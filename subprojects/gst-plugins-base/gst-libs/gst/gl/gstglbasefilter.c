@@ -42,6 +42,10 @@
 #define GST_CAT_DEFAULT gst_gl_base_filter_debug
 GST_DEBUG_CATEGORY_STATIC (GST_CAT_DEFAULT);
 
+/* cached quark to avoid contention on the global quark table lock */
+#define META_TAG_VIDEO meta_tag_video_quark
+static GQuark meta_tag_video_quark;
+
 struct _GstGLBaseFilterPrivate
 {
   GstGLContext *other_context;
@@ -96,6 +100,8 @@ static void gst_gl_base_filter_default_gl_stop (GstGLBaseFilter * filter);
 
 static gboolean gst_gl_base_filter_find_gl_context_unlocked (GstGLBaseFilter *
     filter);
+static gboolean gst_gl_base_filter_transform_meta (GstBaseTransform * trans,
+    GstBuffer * outbuf, GstMeta * meta, GstBuffer * inbuf);
 static void
 gst_gl_base_filter_class_init (GstGLBaseFilterClass * klass)
 {
@@ -115,6 +121,8 @@ gst_gl_base_filter_class_init (GstGLBaseFilterClass * klass)
   GST_BASE_TRANSFORM_CLASS (klass)->stop = gst_gl_base_filter_stop;
   GST_BASE_TRANSFORM_CLASS (klass)->decide_allocation =
       gst_gl_base_filter_decide_allocation;
+  GST_BASE_TRANSFORM_CLASS (klass)->transform_meta =
+      gst_gl_base_filter_transform_meta;
 
   element_class->set_context = gst_gl_base_filter_set_context;
   element_class->change_state = gst_gl_base_filter_change_state;
@@ -128,6 +136,8 @@ gst_gl_base_filter_class_init (GstGLBaseFilterClass * klass)
   klass->supported_gl_api = GST_GL_API_ANY;
   klass->gl_start = gst_gl_base_filter_default_gl_start;
   klass->gl_stop = gst_gl_base_filter_default_gl_stop;
+
+  meta_tag_video_quark = g_quark_from_static_string (GST_META_TAG_VIDEO_STR);
 }
 
 static void
@@ -546,24 +556,11 @@ gst_gl_base_filter_find_gl_context_unlocked (GstGLBaseFilter * filter)
     return FALSE;
   }
 
-  if (!filter->context) {
-    GST_OBJECT_LOCK (filter->display);
-    do {
-      if (filter->context)
-        gst_object_unref (filter->context);
-      /* just get a GL context.  we don't care */
-      filter->context =
-          gst_gl_display_get_gl_context_for_thread (filter->display, NULL);
-      if (!filter->context) {
-        if (!gst_gl_display_create_context (filter->display,
-                filter->priv->other_context, &filter->context, &error)) {
-          GST_OBJECT_UNLOCK (filter->display);
-          goto context_error;
-        }
-      }
-    } while (!gst_gl_display_add_context (filter->display, filter->context));
-    GST_OBJECT_UNLOCK (filter->display);
+  if (!gst_gl_display_ensure_context (filter->display,
+          filter->priv->other_context, &filter->context, &error)) {
+    goto context_error;
   }
+
   GST_INFO_OBJECT (filter, "found OpenGL context %" GST_PTR_FORMAT,
       filter->context);
 
@@ -615,6 +612,24 @@ error:
         ("Subclass failed to initialize."), (NULL));
     return FALSE;
   }
+}
+
+static gboolean
+gst_gl_base_filter_transform_meta (GstBaseTransform * trans, GstBuffer * outbuf,
+    GstMeta * meta, GstBuffer * inbuf)
+{
+  const GstMetaInfo *info = meta->info;
+  const gchar *const *tags;
+
+  tags = gst_meta_api_type_get_tags (info->api);
+
+  if (!tags || (g_strv_length ((gchar **) tags) == 1
+          && gst_meta_api_type_has_tag (info->api, META_TAG_VIDEO))) {
+    return TRUE;
+  }
+
+  return GST_BASE_TRANSFORM_CLASS (parent_class)->transform_meta (trans, outbuf,
+      meta, inbuf);
 }
 
 /**

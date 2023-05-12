@@ -10,7 +10,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: gst-plugins-good 1.19.2\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2021-10-25 01:02+0100\n"
+"POT-Creation-Date: 2023-02-22 11:52+0000\n"
 "PO-Revision-Date: 2021-10-02 17:43+0200\n"
 "Last-Translator: Alexander Shopov <ash@kambanaria.org>\n"
 "Language-Team: Bulgarian <dict@ludost.net>\n"
@@ -98,6 +98,12 @@ msgstr "Този файл е повреден и не може да бъде и�
 
 msgid "Invalid atom size."
 msgstr "Неправилен размер на атом."
+
+msgid "Cannot query file size"
+msgstr ""
+
+msgid "Cannot demux file"
+msgstr ""
 
 msgid "This file is incomplete and cannot be played."
 msgstr "Този файл е непълен и не може да бъде изпълнен."
@@ -423,10 +429,10 @@ msgstr ""
 msgid "Failed to set output %u on device %s."
 msgstr "Неуспешно задаване на изход %u на устройство „%s“."
 
-msgid "Changing resolution at runtime is not yet supported."
-msgstr ""
-"Промяната на разделителната способност по време на работа все още не се "
-"поддържа."
-
 msgid "Cannot operate without a clock"
 msgstr "Работата без часовник е невъзможна."
+
+#~ msgid "Changing resolution at runtime is not yet supported."
+#~ msgstr ""
+#~ "Промяната на разделителната способност по време на работа все още не се "
+#~ "поддържа."

@@ -65,6 +65,7 @@ ges_sources = files([
     'ges-structured-interface.c',
     'ges-structure-parser.c',
     'ges-marker-list.c',
+    'ges-discoverer-manager.c',
     'gstframepositioner.c'
 ])
 
@@ -129,7 +130,8 @@ ges_headers = files([
     'ges-effect-asset.h',
     'ges-utils.h',
     'ges-group.h',
-    'ges-marker-list.h'
+    'ges-marker-list.h',
+    'ges-discoverer-manager.h',
 ])
 
 if libxml_dep.found()
@@ -218,6 +220,7 @@ if build_gir
     if not static_build
       gir += {'sources': ges_sources + ges_headers + files('ges-image-source.h')}
       ges_gir = gnome.generate_gir(libges, kwargs: gir)
+      library_def += {'gir_targets':  library_def.get('gir_targets', []) + [ges_gir]}
       ges_gen_sources += [ges_gir]
     endif
 endif

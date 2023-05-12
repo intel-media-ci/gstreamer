@@ -1346,7 +1346,7 @@ gst_x264_enc_queue_frame (GstX264Enc * enc, GstVideoCodecFrame * frame,
   if (!gst_video_frame_map (&vframe, info, frame->input_buffer, GST_MAP_READ))
     return NULL;
 
-  fdata = g_slice_new (FrameData);
+  fdata = g_new (FrameData, 1);
   fdata->frame = gst_video_codec_frame_ref (frame);
   fdata->vframe = vframe;
 
@@ -1368,7 +1368,7 @@ gst_x264_enc_dequeue_frame (GstX264Enc * enc, GstVideoCodecFrame * frame)
 
     gst_video_frame_unmap (&fdata->vframe);
     gst_video_codec_frame_unref (fdata->frame);
-    g_slice_free (FrameData, fdata);
+    g_free (fdata);
 
     enc->pending_frames = g_list_delete_link (enc->pending_frames, l);
     return;
@@ -1385,7 +1385,7 @@ gst_x264_enc_dequeue_all_frames (GstX264Enc * enc)
 
     gst_video_frame_unmap (&fdata->vframe);
     gst_video_codec_frame_unref (fdata->frame);
-    g_slice_free (FrameData, fdata);
+    g_free (fdata);
   }
   g_list_free (enc->pending_frames);
   enc->pending_frames = NULL;
@@ -2332,7 +2332,13 @@ gst_x264_enc_set_format (GstVideoEncoder * video_enc,
     if (info->finfo->format == old->finfo->format
         && info->width == old->width && info->height == old->height
         && info->fps_n == old->fps_n && info->fps_d == old->fps_d
-        && info->par_n == old->par_n && info->par_d == old->par_d) {
+        && info->par_n == old->par_n && info->par_d == old->par_d
+        && info->interlace_mode == old->interlace_mode
+        && gst_video_colorimetry_is_equal (&info->colorimetry,
+            &old->colorimetry)
+        && GST_VIDEO_INFO_CHROMA_SITE (info) == GST_VIDEO_INFO_CHROMA_SITE (old)
+        && GST_VIDEO_INFO_MULTIVIEW_MODE (info) ==
+        GST_VIDEO_INFO_MULTIVIEW_MODE (old)) {
       gst_video_codec_state_unref (encoder->input_state);
       encoder->input_state = gst_video_codec_state_ref (state);
       return TRUE;

@@ -1645,12 +1645,16 @@ ensure_context (GstVaapiDecoderH264 * decoder, GstH264SPS * sps)
     return GST_VAAPI_DECODER_STATUS_SUCCESS;
 
   /* XXX: fix surface size when cropping is implemented */
-  info.profile = priv->profile;
-  info.entrypoint = priv->entrypoint;
-  info.chroma_type = priv->chroma_type;
-  info.width = sps->width;
-  info.height = sps->height;
-  info.ref_frames = dpb_size;
+  /* *INDENT-OFF* */
+  info = (GstVaapiContextInfo) {
+    .profile = priv->profile,
+    .entrypoint = priv->entrypoint,
+    .chroma_type = priv->chroma_type,
+    .width = sps->width,
+    .height = sps->height,
+    .ref_frames = dpb_size,
+  };
+  /* *INDENT-ON* */
 
   if (!gst_vaapi_decoder_ensure_context (GST_VAAPI_DECODER (decoder), &info))
     return GST_VAAPI_DECODER_STATUS_ERROR_UNKNOWN;
@@ -2053,7 +2057,7 @@ decode_sei_frame_packing (GstVaapiDecoderH264 * decoder,
         priv->stereo_info.mode = GST_VIDEO_MULTIVIEW_MODE_SIDE_BY_SIDE;
       }
       break;
-    case GST_H264_FRMAE_PACKING_TOP_BOTTOM:
+    case GST_H264_FRAME_PACKING_TOP_BOTTOM:
       priv->stereo_info.mode = GST_VIDEO_MULTIVIEW_MODE_TOP_BOTTOM;
       break;
     case GST_H264_FRAME_PACKING_TEMPORAL_INTERLEAVING:
@@ -2097,7 +2101,7 @@ decode_sei_frame_packing (GstVaapiDecoderH264 * decoder,
       priv->stereo_info.flags |= GST_VIDEO_MULTIVIEW_FLAGS_RIGHT_FLOPPED;
     }
   }
-  if (frame_packing->frame_packing_type == GST_H264_FRMAE_PACKING_TOP_BOTTOM
+  if (frame_packing->frame_packing_type == GST_H264_FRAME_PACKING_TOP_BOTTOM
       && frame_packing->spatial_flipping_flag !=
       ((priv->stereo_info.flags &
               GST_VIDEO_MULTIVIEW_FLAGS_RIGHT_VIEW_FIRST) != 0)) {

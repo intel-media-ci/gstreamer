@@ -89,11 +89,11 @@ static gboolean gst_image_freeze_src_query (GstPad * pad, GstObject * parent,
 static GstStaticPadTemplate sink_pad_template = GST_STATIC_PAD_TEMPLATE ("sink",
     GST_PAD_SINK,
     GST_PAD_ALWAYS,
-    GST_STATIC_CAPS ("video/x-raw(ANY)"));
+    GST_STATIC_CAPS ("video/x-raw(ANY); video/x-bayer(ANY)"));
 
 static GstStaticPadTemplate src_pad_template =
-GST_STATIC_PAD_TEMPLATE ("src", GST_PAD_SRC, GST_PAD_ALWAYS,
-    GST_STATIC_CAPS ("video/x-raw(ANY)"));
+    GST_STATIC_PAD_TEMPLATE ("src", GST_PAD_SRC, GST_PAD_ALWAYS,
+    GST_STATIC_CAPS ("video/x-raw(ANY); video/x-bayer(ANY)"));
 
 GST_DEBUG_CATEGORY_STATIC (gst_image_freeze_debug);
 #define GST_CAT_DEFAULT gst_image_freeze_debug
@@ -696,7 +696,7 @@ gst_image_freeze_src_event (GstPad * pad, GstObject * parent, GstEvent * event)
           &stop_type, &stop);
       gst_event_unref (event);
 
-      flush = ! !(flags & GST_SEEK_FLAG_FLUSH);
+      flush = !!(flags & GST_SEEK_FLAG_FLUSH);
 
       if (format != GST_FORMAT_TIME && format != GST_FORMAT_DEFAULT) {
         GST_ERROR_OBJECT (pad, "Seek in invalid format: %s",

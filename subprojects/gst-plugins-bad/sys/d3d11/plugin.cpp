@@ -75,6 +75,9 @@
 #include "gstd3d11av1dec.h"
 #include "gstd3d11deinterlace.h"
 #include "gstd3d11testsrc.h"
+#include "gstd3d11overlay.h"
+#include "gstd3d11ipcsink.h"
+#include "gstd3d11ipcsrc.h"
 
 #if !GST_D3D11_WINAPI_ONLY_APP
 #include "gstd3d11screencapturesrc.h"
@@ -192,8 +195,10 @@ plugin_init (GstPlugin * plugin)
         gst_d3d11_h265_dec_register (plugin, device, GST_RANK_PRIMARY + 1);
         gst_d3d11_vp9_dec_register (plugin, device, GST_RANK_PRIMARY);
         gst_d3d11_vp8_dec_register (plugin, device, GST_RANK_PRIMARY);
-        gst_d3d11_av1_dec_register (plugin, device, GST_RANK_PRIMARY);
-        gst_d3d11_mpeg2_dec_register (plugin, device, GST_RANK_SECONDARY);
+        /* rust dav1ddec has "primary" rank */
+        gst_d3d11_av1_dec_register (plugin, device, GST_RANK_PRIMARY + 1);
+        /* avdec_mpeg2video has primary rank */
+        gst_d3d11_mpeg2_dec_register (plugin, device, GST_RANK_PRIMARY + 1);
       }
 
       gst_d3d11_deinterlace_register (plugin, device, GST_RANK_MARGINAL);
@@ -233,6 +238,12 @@ plugin_init (GstPlugin * plugin)
       "d3d11compositor", GST_RANK_SECONDARY, GST_TYPE_D3D11_COMPOSITOR);
   gst_element_register (plugin,
       "d3d11testsrc", GST_RANK_NONE, GST_TYPE_D3D11_TEST_SRC);
+  gst_element_register (plugin,
+      "d3d11overlay", GST_RANK_NONE, GST_TYPE_D3D11_OVERLAY);
+  gst_element_register (plugin,
+      "d3d11ipcsink", GST_RANK_NONE, GST_TYPE_D3D11_IPC_SINK);
+  gst_element_register (plugin,
+      "d3d11ipcsrc", GST_RANK_NONE, GST_TYPE_D3D11_IPC_SRC);
 
 #if !GST_D3D11_WINAPI_ONLY_APP
   if (gst_d3d11_is_windows_8_or_greater ()) {

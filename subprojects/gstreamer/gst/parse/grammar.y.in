@@ -65,7 +65,7 @@ link_t *__gst_parse_link_new (void)
 {
   link_t *ret;
   __links++;
-  ret = g_slice_new0 (link_t);
+  ret = g_new0 (link_t, 1);
   /* g_print ("ALLOCATED LINK  (%3u): %p\n", __links, ret); */
   return ret;
 }
@@ -74,7 +74,7 @@ __gst_parse_link_free (link_t *data)
 {
   if (data) {
     /* g_print ("FREEING LINK    (%3u): %p\n", __links - 1, data); */
-    g_slice_free (link_t, data);
+    g_free (data);
     g_return_if_fail (__links > 0);
     __links--;
   }
@@ -84,7 +84,7 @@ __gst_parse_chain_new (void)
 {
   chain_t *ret;
   __chains++;
-  ret = g_slice_new0 (chain_t);
+  ret = g_new0 (chain_t, 1);
   /* g_print ("@%p: ALLOCATED CHAIN (%3u):\n", ret, __chains); */
   return ret;
 }
@@ -92,7 +92,7 @@ void
 __gst_parse_chain_free (chain_t *data)
 {
   /* g_print ("@%p: FREEING CHAIN   (%3u):\n", data, __chains - 1); */
-  g_slice_free (chain_t, data);
+  g_free (data);
   g_return_if_fail (__chains > 0);
   __chains--;
 }
@@ -102,7 +102,7 @@ __gst_parse_element_new (void)
 {
   element_t *ret;
   __elements++;
-  ret = g_slice_new0 (element_t);
+  ret = g_new0 (element_t, 1);
   /* g_print ("@%p: ALLOCATED ELEMENT (%3u):\n", ret, __elements); */
   return ret;
 }
@@ -110,7 +110,7 @@ void
 __gst_parse_element_free (element_t *data)
 {
   /* g_print ("@%p: FREEING ELEMENT   (%3u):\n", data, __elements - 1); */
-  g_slice_free (element_t, data);
+  g_free (data);
   g_return_if_fail (__elements > 0);
   __elements--;
 }
@@ -225,6 +225,66 @@ static void  add_missing_element(graph_t *graph,gchar *name){
     }
 }
 
+static gchar *
+str_unwrap (const gchar * s)
+{
+  gchar *ret;
+  gchar *read, *write;
+
+  /* NULL string returns NULL */
+  if (s == NULL)
+    return NULL;
+
+  /* make copy of original string to hold the result. This
+   * string will always be smaller than the original */
+  ret = g_strdup (s);
+  read = ret;
+  write = ret;
+
+  while (*read) {
+    if (GST_ASCII_IS_STRING (*read)) {
+      /* normal chars are just copied */
+      *write++ = *read++;
+    } else if (*read == '\\') {
+      /* got an escape char, move to next position to read a tripplet
+       * of octal numbers */
+      read++;
+      /* is the next char a possible first octal number? */
+      if (*read >= '0' && *read <= '3') {
+        /* parse other 2 numbers, if one of them is not in the range of
+         * an octal number, we error. We also catch the case where a zero
+         * byte is found here. */
+        if (read[1] < '0' || read[1] > '7' || read[2] < '0' || read[2] > '7')
+          goto beach;
+
+        /* now convert the octal number to a byte again. */
+        *write++ = ((read[0] - '0') << 6) +
+            ((read[1] - '0') << 3) + (read[2] - '0');
+
+        read += 3;
+      } else {
+        /* if we run into a \0 here, we definitely won't get a quote later */
+        if (*read == 0)
+          goto beach;
+        /* else copy \X sequence */
+        *write++ = *read++;
+      }
+    } else if (*read == '\0') {
+      goto beach;
+    } else {
+      *write++ = *read++;
+    }
+  }
+
+  /* null terminate result string and return */
+  *write = '\0';
+  return ret;
+
+beach:
+  g_free (ret);
+  return NULL;
+}
+
 
 /*******************************************************************************************
 *** helpers for pipeline-setup
@@ -282,7 +342,7 @@ static void gst_parse_free_delayed_set (DelayedSet *set)
 {
   g_free(set->name);
   g_free(set->value_str);
-  g_slice_free(DelayedSet, set);
+  g_free(set);
 }
 
 static void gst_parse_new_child(GstChildProxy *child_proxy, GObject *object,
@@ -290,7 +350,7 @@ static void gst_parse_new_child(GstChildProxy *child_proxy, GObject *object,
 
 static void gst_parse_add_delayed_set (GstElement *element, gchar *name, gchar *value_str)
 {
-  DelayedSet *data = g_slice_new0 (DelayedSet);
+  DelayedSet *data = g_new0 (DelayedSet, 1);
 
   GST_CAT_LOG_OBJECT (GST_CAT_PIPELINE, element, "delaying property set %s to %s",
     name, value_str);
@@ -549,7 +609,7 @@ typedef struct
 
 static void
 proxied_property_free (proxied_property_t *pp) {
-  g_slice_free (proxied_property_t, pp);
+  g_free (pp);
 }
 
 static GstElement * gst_parse_element_make (graph_t *graph, element_t *data) {
@@ -589,7 +649,7 @@ static GstElement * gst_parse_element_make (graph_t *graph, element_t *data) {
     gchar *value = gst_parse_split_assignment (tmp->data);
 
     if (is_proxy && strstr (name, "::") != NULL) {
-      proxied_property_t *pp = g_slice_new (proxied_property_t);
+      proxied_property_t *pp = g_new (proxied_property_t, 1);
       pp->name = name;
       pp->value = value;
       proxied = g_slist_prepend (proxied, pp);
@@ -835,7 +895,7 @@ static void gst_parse_free_delayed_link (DelayedLink *link)
   g_free (link->src_pad);
   g_free (link->sink_pad);
   if (link->caps) gst_caps_unref (link->caps);
-  g_slice_free (DelayedLink, link);
+  g_free (link);
 }
 
 #define PRETTY_PAD_NAME_FMT "%s %s of %s named %s"
@@ -901,7 +961,7 @@ gst_parse_perform_delayed_link (GstElement *src, const gchar *src_pad,
     if ((GST_PAD_TEMPLATE_DIRECTION (templ) == GST_PAD_SRC) &&
         (GST_PAD_TEMPLATE_PRESENCE(templ) == GST_PAD_SOMETIMES))
     {
-      DelayedLink *data = g_slice_new (DelayedLink);
+      DelayedLink *data = g_new (DelayedLink, 1);
 
       data->all_pads = all_pads;
 
@@ -1271,7 +1331,9 @@ openchain:
 link:	LINK				      { $$ = gst_parse_link_new ();
 						$$->all_pads = FALSE;
 						if ($1) {
-						  $$->caps = gst_caps_from_string ($1);
+						  gchar *str = str_unwrap ($1);
+						  $$->caps = gst_caps_from_string (str);
+						  g_free (str);
 						  if ($$->caps == NULL)
 						    SET_ERROR (graph->error, GST_PARSE_ERROR_LINK, _("could not parse caps \"%s\""), $1);
 						  gst_parse_strfree ($1);
@@ -1280,7 +1342,9 @@ link:	LINK				      { $$ = gst_parse_link_new ();
 	| LINK_ALL		              { $$ = gst_parse_link_new ();
 						$$->all_pads = TRUE;
 						if ($1) {
-						  $$->caps = gst_caps_from_string ($1);
+						  gchar *str = str_unwrap ($1);
+						  $$->caps = gst_caps_from_string (str);
+						  g_free (str);
 						  if ($$->caps == NULL)
 						    SET_ERROR (graph->error, GST_PARSE_ERROR_LINK, _("could not parse caps \"%s\""), $1);
 						  gst_parse_strfree ($1);

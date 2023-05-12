@@ -77,6 +77,8 @@ enum
 #define DEFAULT_TIMEOUT          10000000
 #define DEFAULT_LATENCY_MS       200
 #define DEFAULT_REDIRECT         TRUE
+#define DEFAULT_RTCP_MODE        GST_SDP_DEMUX_RTCP_MODE_SENDRECV
+#define DEFAULT_MEDIA            NULL
 
 enum
 {
@@ -84,7 +86,9 @@ enum
   PROP_DEBUG,
   PROP_TIMEOUT,
   PROP_LATENCY,
-  PROP_REDIRECT
+  PROP_REDIRECT,
+  PROP_RTCP_MODE,
+  PROP_MEDIA,
 };
 
 static void gst_sdp_demux_finalize (GObject * object);
@@ -106,7 +110,26 @@ static gboolean gst_sdp_demux_sink_event (GstPad * pad, GstObject * parent,
 static GstFlowReturn gst_sdp_demux_sink_chain (GstPad * pad, GstObject * parent,
     GstBuffer * buffer);
 
-/*static guint gst_sdp_demux_signals[LAST_SIGNAL] = { 0 }; */
+#define GST_TYPE_SDP_DEMUX_RTCP_MODE gst_sdp_demux_rtcp_mode_get_type()
+static GType
+gst_sdp_demux_rtcp_mode_get_type (void)
+{
+  static GType rtcp_mode_type = 0;
+  static const GEnumValue enums[] = {
+    {GST_SDP_DEMUX_RTCP_MODE_SENDRECV, "sendrecv", "Send + Receive RTCP"},
+    {GST_SDP_DEMUX_RTCP_MODE_RECVONLY, "recvonly",
+        "Receive RTCP sender reports"},
+    {GST_SDP_DEMUX_RTCP_MODE_SENDONLY, "sendonly",
+        "Send RTCP receiver reports"},
+    {GST_SDP_DEMUX_RTCP_MODE_INACTIVE, "inactivate", "Disable RTCP"},
+    {0, NULL, NULL},
+  };
+
+  if (!rtcp_mode_type) {
+    rtcp_mode_type = g_enum_register_static ("GstSDPDemuxRTCPMode", enums);
+  }
+  return rtcp_mode_type;
+}
 
 #define gst_sdp_demux_parent_class parent_class
 G_DEFINE_TYPE (GstSDPDemux, gst_sdp_demux, GST_TYPE_BIN);
@@ -152,6 +175,33 @@ gst_sdp_demux_class_init (GstSDPDemuxClass * klass)
           DEFAULT_REDIRECT,
           G_PARAM_READWRITE | G_PARAM_CONSTRUCT | G_PARAM_STATIC_STRINGS));
 
+  /**
+   * GstSDPDemux:rtcp-mode:
+   *
+   * RTCP mode: enable or disable receiving of Sender Reports and
+   * sending of Receiver Reports.
+   *
+   * Since: 1.24
+   */
+  g_object_class_install_property (gobject_class, PROP_RTCP_MODE,
+      g_param_spec_enum ("rtcp-mode", "RTCP Mode",
+          "Enable or disable receiving of RTCP sender reports and sending of "
+          "RTCP receiver reports", GST_TYPE_SDP_DEMUX_RTCP_MODE,
+          DEFAULT_RTCP_MODE,
+          G_PARAM_READWRITE | G_PARAM_CONSTRUCT | G_PARAM_STATIC_STRINGS));
+
+  /**
+   * GstSDPDemux:media:
+   *
+   * Media to use, e.g. audio or video (NULL=allow all).
+   *
+   * Since: 1.24
+   */
+  g_object_class_install_property (gobject_class, PROP_MEDIA,
+      g_param_spec_string ("media", "Media",
+          "Media to use, e.g. audio or video (NULL = all)", DEFAULT_MEDIA,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
   gst_element_class_add_static_pad_template (gstelement_class, &sinktemplate);
   gst_element_class_add_static_pad_template (gstelement_class, &rtptemplate);
 
@@ -165,6 +215,8 @@ gst_sdp_demux_class_init (GstSDPDemuxClass * klass)
   gstbin_class->handle_message = gst_sdp_demux_handle_message;
 
   GST_DEBUG_CATEGORY_INIT (sdpdemux_debug, "sdpdemux", 0, "SDP demux");
+
+  gst_type_mark_as_plugin_api (GST_TYPE_SDP_DEMUX_RTCP_MODE, 0);
 }
 
 static void
@@ -182,6 +234,9 @@ gst_sdp_demux_init (GstSDPDemux * demux)
   g_rec_mutex_init (&demux->stream_rec_lock);
 
   demux->adapter = gst_adapter_new ();
+
+  demux->rtcp_mode = DEFAULT_RTCP_MODE;
+  demux->media = DEFAULT_MEDIA;
 }
 
 static void
@@ -220,6 +275,15 @@ gst_sdp_demux_set_property (GObject * object, guint prop_id,
     case PROP_REDIRECT:
       demux->redirect = g_value_get_boolean (value);
       break;
+    case PROP_RTCP_MODE:
+      demux->rtcp_mode = g_value_get_enum (value);
+      break;
+    case PROP_MEDIA:
+      GST_OBJECT_LOCK (demux);
+      /* g_intern_string() is NULL-safe */
+      demux->media = g_intern_string (g_value_get_string (value));
+      GST_OBJECT_UNLOCK (demux);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -246,6 +310,14 @@ gst_sdp_demux_get_property (GObject * object, guint prop_id, GValue * value,
       break;
     case PROP_REDIRECT:
       g_value_set_boolean (value, demux->redirect);
+      break;
+    case PROP_RTCP_MODE:
+      g_value_set_enum (value, demux->rtcp_mode);
+      break;
+    case PROP_MEDIA:
+      GST_OBJECT_LOCK (demux);
+      g_value_set_string (value, demux->media);
+      GST_OBJECT_UNLOCK (demux);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -349,6 +421,9 @@ gst_sdp_demux_stream_free (GstSDPDemux * demux, GstSDPStream * stream)
     }
     stream->srcpad = NULL;
   }
+
+  g_free (stream->src_list);
+  g_free (stream->src_incl_list);
   g_free (stream);
 }
 
@@ -383,10 +458,154 @@ out:
   return ret;
 }
 
+/* RTC 4570 Session Description Protocol (SDP) Source Filters
+ * syntax:
+ * a=source-filter: <filter-mode> <filter-spec>
+ *
+ * where
+ * <filter-mode>: "incl" or "excl"
+ *
+ * <filter-spec>:
+ * <nettype> <address-types> <dest-address> <src-list>
+ *
+ */
+static gboolean
+gst_sdp_demux_parse_source_filter (GstSDPDemux * self,
+    const gchar * source_filter, const gchar * dst_addr, GString * source_list,
+    GString * source_incl_list)
+{
+  const gchar *str;
+  guint remaining;
+  gchar *del;
+  gsize size;
+  guint min_size;
+  gboolean is_incl;
+  gchar *dst;
+
+  if (!source_filter || !dst_addr)
+    return FALSE;
+
+  str = source_filter;
+  remaining = strlen (str);
+  min_size = strlen ("incl IN IP4 * *");
+  if (remaining < min_size)
+    return FALSE;
+
+#define LSTRIP(s) G_STMT_START { \
+  while (g_ascii_isspace (*(s))) { \
+    (s)++; \
+    remaining--; \
+  } \
+  if (*(s) == '\0') \
+    return FALSE; \
+} G_STMT_END
+
+#define SKIP_N_LSTRIP(s, n) G_STMT_START { \
+  if (remaining < n) \
+    return FALSE; \
+  (s) += n; \
+  if (*(s) == '\0') \
+    return FALSE; \
+  remaining -= n; \
+  LSTRIP(s); \
+} G_STMT_END
+
+  LSTRIP (str);
+  if (remaining < min_size)
+    return FALSE;
+
+  if (g_str_has_prefix (str, "incl ")) {
+    is_incl = TRUE;
+  } else if (g_str_has_prefix (str, "excl ")) {
+    is_incl = FALSE;
+  } else {
+    GST_WARNING_OBJECT (self, "Unexpected filter type");
+    return FALSE;
+  }
+
+  SKIP_N_LSTRIP (str, 4);
+  /* XXX: <nettype>, internet only for now */
+  if (!g_str_has_prefix (str, "IN "))
+    return FALSE;
+
+  SKIP_N_LSTRIP (str, 3);
+  /* Should care the address type here? */
+  if (g_str_has_prefix (str, "* ")) {
+    /* dest and src are both FQDN */
+    SKIP_N_LSTRIP (str, 2);
+  } else if (g_str_has_prefix (str, "IP4 ")) {
+    SKIP_N_LSTRIP (str, 4);
+  } else if (g_str_has_prefix (str, "IP6 ")) {
+    SKIP_N_LSTRIP (str, 4);
+  } else {
+    return FALSE;
+  }
+
+  del = strchr (str, ' ');
+  if (!del) {
+    GST_WARNING_OBJECT (self, "Unexpected dest-address format");
+    return FALSE;
+  }
+
+  size = del - str;
+  dst = g_strndup (str, size);
+  if (g_strcmp0 (dst, dst_addr) != 0 && g_strcmp0 (dst, "*") != 0) {
+    g_free (dst);
+    return FALSE;
+  }
+  g_free (dst);
+
+  SKIP_N_LSTRIP (str, size);
+
+  do {
+    del = strchr (str, ' ');
+    if (del) {
+      size = del - str;
+      if (is_incl) {
+        g_string_append_c (source_list, '+');
+        g_string_append_len (source_list, str, size);
+
+        g_string_append_c (source_incl_list, '+');
+        g_string_append_len (source_incl_list, str, size);
+      } else {
+        g_string_append_c (source_list, '-');
+        g_string_append_len (source_list, str, size);
+      }
+
+      str += size;
+      while (g_ascii_isspace (*str)) {
+        str++;
+      }
+
+      /* this was the last source but with trailing space */
+      if (*str == '\0')
+        return TRUE;
+    } else {
+      if (is_incl) {
+        g_string_append_c (source_list, '+');
+        g_string_append (source_list, str);
+
+        g_string_append_c (source_incl_list, '+');
+        g_string_append (source_incl_list, str);
+      } else {
+        g_string_append_c (source_list, '-');
+        g_string_append (source_list, str);
+      }
+
+      return TRUE;
+    }
+  } while (TRUE);
+
+#undef LSTRIP
+#undef SKIP_N
+  return TRUE;
+}
+
 static GstSDPStream *
 gst_sdp_demux_create_stream (GstSDPDemux * demux, GstSDPMessage * sdp, gint idx)
 {
   GstSDPStream *stream;
+  const gchar *media_filter;
   const gchar *payload;
   const GstSDPMedia *media;
   const GstSDPConnection *conn;
@@ -395,6 +614,16 @@ gst_sdp_demux_create_stream (GstSDPDemux * demux, GstSDPMessage * sdp, gint idx)
   media = gst_sdp_message_get_media (sdp, idx);
   if (media == NULL)
     return NULL;
+
+  GST_OBJECT_LOCK (demux);
+  media_filter = demux->media;
+  GST_OBJECT_UNLOCK (demux);
+
+  if (media_filter != NULL && !g_str_equal (media_filter, media->media)) {
+    GST_INFO_OBJECT (demux, "Skipping media %s (filter: %s)", media->media,
+        media_filter);
+    return NULL;
+  }
 
   stream = g_new0 (GstSDPStream, 1);
   stream->parent = demux;
@@ -448,9 +677,55 @@ gst_sdp_demux_create_stream (GstSDPDemux * demux, GstSDPMessage * sdp, gint idx)
   stream->destination = conn->address;
   stream->ttl = conn->ttl;
   stream->multicast = is_multicast_address (stream->destination);
+  if (stream->multicast) {
+    GString *source_list = g_string_new (NULL);
+    GString *source_incl_list = g_string_new (NULL);
+    guint i;
+    gboolean source_filter_in_media = FALSE;
+
+    for (i = 0; i < media->attributes->len; i++) {
+      GstSDPAttribute *attr = &g_array_index (media->attributes,
+          GstSDPAttribute, i);
+
+      if (g_strcmp0 (attr->key, "source-filter") == 0) {
+        source_filter_in_media = TRUE;
+        gst_sdp_demux_parse_source_filter (demux, attr->value,
+            stream->destination, source_list, source_incl_list);
+      }
+    }
+
+    /* Try session level source filter if media level filter is unspecified */
+    if (source_list->len == 0 && !source_filter_in_media) {
+      for (i = 0; i < sdp->attributes->len; i++) {
+        GstSDPAttribute *attr = &g_array_index (sdp->attributes,
+            GstSDPAttribute, i);
+
+        if (g_strcmp0 (attr->key, "source-filter") == 0) {
+          gst_sdp_demux_parse_source_filter (demux, attr->value,
+              stream->destination, source_list, source_incl_list);
+        }
+      }
+    }
+
+    if (source_list->len > 0) {
+      stream->src_list = g_string_free (source_list, FALSE);
+      stream->src_incl_list = g_string_free (source_incl_list, FALSE);
+
+      GST_DEBUG_OBJECT (demux,
+          "Have source-filter: \"%s\", positive-only: \"%s\"",
+          stream->src_list, GST_STR_NULL (stream->src_incl_list));
+    } else {
+      g_string_free (source_list, TRUE);
+      g_string_free (source_incl_list, TRUE);
+    }
+  }
 
   stream->rtp_port = gst_sdp_media_get_port (media);
-  if (gst_sdp_media_get_attribute_val (media, "rtcp")) {
+
+  if (demux->rtcp_mode == GST_SDP_DEMUX_RTCP_MODE_INACTIVE) {
+    GST_INFO_OBJECT (demux, "RTCP disabled");
+    stream->rtcp_port = -1;
+  } else if (gst_sdp_media_get_attribute_val (media, "rtcp")) {
     /* FIXME, RFC 3605 */
     stream->rtcp_port = stream->rtp_port + 1;
   } else {
@@ -779,7 +1054,13 @@ gst_sdp_demux_stream_configure_udp (GstSDPDemux * demux, GstSDPStream * stream)
     GST_DEBUG_OBJECT (demux, "receiving RTP from %s:%d", destination,
         stream->rtp_port);
 
-    uri = g_strdup_printf ("udp://%s:%d", destination, stream->rtp_port);
+    if (stream->src_list) {
+      uri = g_strdup_printf ("udp://%s:%d?multicast-source=%s",
+          destination, stream->rtp_port, stream->src_list);
+    } else {
+      uri = g_strdup_printf ("udp://%s:%d", destination, stream->rtp_port);
+    }
+
     stream->udpsrc[0] =
         gst_element_make_from_uri (GST_URI_SRC, uri, NULL, NULL);
     g_free (uri);
@@ -817,10 +1098,18 @@ gst_sdp_demux_stream_configure_udp (GstSDPDemux * demux, GstSDPStream * stream)
   }
 
   /* creating another UDP source */
-  if (stream->rtcp_port != -1) {
+  if (stream->rtcp_port != -1
+      && (demux->rtcp_mode == GST_SDP_DEMUX_RTCP_MODE_SENDRECV
+          || demux->rtcp_mode == GST_SDP_DEMUX_RTCP_MODE_RECVONLY)) {
     GST_DEBUG_OBJECT (demux, "receiving RTCP from %s:%d", destination,
         stream->rtcp_port);
-    uri = g_strdup_printf ("udp://%s:%d", destination, stream->rtcp_port);
+    /* rfc4570 3.2.1. Source-Specific Multicast Example */
+    if (stream->src_incl_list) {
+      uri = g_strdup_printf ("udp://%s:%d?multicast-source=%s",
+          destination, stream->rtcp_port, stream->src_incl_list);
+    } else {
+      uri = g_strdup_printf ("udp://%s:%d", destination, stream->rtcp_port);
+    }
     stream->udpsrc[1] =
         gst_element_make_from_uri (GST_URI_SRC, uri, NULL, NULL);
     g_free (uri);
@@ -862,6 +1151,12 @@ gst_sdp_demux_stream_configure_udp_sink (GstSDPDemux * demux,
   gint port;
   GSocket *socket;
   gchar *destination, *uri, *name;
+
+  if (demux->rtcp_mode == GST_SDP_DEMUX_RTCP_MODE_INACTIVE
+      || demux->rtcp_mode == GST_SDP_DEMUX_RTCP_MODE_RECVONLY) {
+    GST_INFO_OBJECT (demux, "RTCP feedback disabled, not sending RRs");
+    return TRUE;
+  }
 
   /* get destination and port */
   port = stream->rtcp_port;
@@ -1204,7 +1499,8 @@ gst_sdp_demux_start (GstSDPDemux * demux)
 
       /* configure target state on udp sources */
       gst_element_set_state (stream->udpsrc[0], demux->target);
-      gst_element_set_state (stream->udpsrc[1], demux->target);
+      if (stream->udpsrc[1] != NULL)
+        gst_element_set_state (stream->udpsrc[1], demux->target);
     }
   }
   GST_SDP_STREAM_UNLOCK (demux);

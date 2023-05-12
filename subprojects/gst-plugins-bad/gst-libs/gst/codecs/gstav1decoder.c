@@ -119,6 +119,7 @@ gst_av1_decoder_init (GstAV1Decoder * self)
   GstAV1DecoderPrivate *priv;
 
   gst_video_decoder_set_packetized (GST_VIDEO_DECODER (self), TRUE);
+  gst_video_decoder_set_needs_format (GST_VIDEO_DECODER (self), TRUE);
 
   self->priv = priv = gst_av1_decoder_get_instance_private (self);
 
@@ -403,6 +404,8 @@ gst_av1_decoder_process_sequence (GstAV1Decoder * self, GstAV1OBU * obu)
         _floor_log2 (priv->parser->state.operating_point_idc >> 8);
     GST_INFO_OBJECT (self, "set highest spatial layer to %d",
         self->highest_spatial_layer);
+  } else {
+    self->highest_spatial_layer = 0;
   }
 
   ret = klass->new_sequence (self, &seq_header,
@@ -693,6 +696,11 @@ gst_av1_decoder_handle_frame (GstVideoDecoder * decoder,
   while (total_consumed < map.size) {
     res = gst_av1_parser_identify_one_obu (priv->parser,
         map.data + total_consumed, map.size, &obu, &consumed);
+    if (res == GST_AV1_PARSER_DROP) {
+      total_consumed += consumed;
+      continue;
+    }
+
     if (res != GST_AV1_PARSER_OK) {
       ret = GST_FLOW_ERROR;
       goto out;
@@ -712,11 +720,11 @@ gst_av1_decoder_handle_frame (GstVideoDecoder * decoder,
     goto out;
   }
 
-  if (priv->current_picture->temporal_id > self->highest_spatial_layer) {
+  if (priv->current_picture->spatial_id > self->highest_spatial_layer) {
     ret = GST_FLOW_ERROR;
     GST_VIDEO_DECODER_ERROR (self, 1, STREAM, DECODE,
-        ("current picture temporal_id %d should not be higher than "
-            "highest spatial layer %d", priv->current_picture->temporal_id,
+        ("current picture spatial_id %d should not be higher than "
+            "highest spatial layer %d", priv->current_picture->spatial_id,
             self->highest_spatial_layer), (NULL), ret);
     goto out;
   }

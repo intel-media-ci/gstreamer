@@ -795,7 +795,7 @@ gst_h264_slice_parse_pred_weight_table (GstH264SliceHdr * slice,
       p->chroma_weight_l0[i][1] = default_chroma_weight;
     }
     if (GST_H264_IS_B_SLICE (slice)) {
-      for (i = 0; i <= slice->num_ref_idx_l0_active_minus1; i++) {
+      for (i = 0; i <= slice->num_ref_idx_l1_active_minus1; i++) {
         p->chroma_weight_l1[i][0] = default_chroma_weight;
         p->chroma_weight_l1[i][1] = default_chroma_weight;
       }
@@ -986,7 +986,7 @@ gst_h264_parser_parse_pic_timing (GstH264NalParser * nalparser,
       hrd = &vui->vcl_hrd_parameters;
     }
 
-    tim->CpbDpbDelaysPresentFlag = ! !hrd;
+    tim->CpbDpbDelaysPresentFlag = !!hrd;
     tim->pic_struct_present_flag = vui->pic_struct_present_flag;
 
     if (tim->CpbDpbDelaysPresentFlag) {
@@ -1432,7 +1432,7 @@ gst_h264_nal_parser_new (void)
 {
   GstH264NalParser *nalparser;
 
-  nalparser = g_slice_new0 (GstH264NalParser);
+  nalparser = g_new0 (GstH264NalParser, 1);
 
   return nalparser;
 }
@@ -1452,7 +1452,7 @@ gst_h264_nal_parser_free (GstH264NalParser * nalparser)
     gst_h264_sps_clear (&nalparser->sps[i]);
   for (i = 0; i < GST_H264_MAX_PPS_COUNT; i++)
     gst_h264_pps_clear (&nalparser->pps[i]);
-  g_slice_free (GstH264NalParser, nalparser);
+  g_free (nalparser);
 
   nalparser = NULL;
 }
@@ -1507,9 +1507,9 @@ gst_h264_parser_identify_nalu_unchecked (GstH264NalParser * nalparser,
   nalu->size = size - nalu->offset;
 
   if (!gst_h264_parse_nalu_header (nalu)) {
-    GST_WARNING ("error parsing \"NAL unit header\"");
+    GST_DEBUG ("not enough data to parse \"NAL unit header\"");
     nalu->size = 0;
-    return GST_H264_PARSER_BROKEN_DATA;
+    return GST_H264_PARSER_NO_NAL;
   }
 
   nalu->valid = TRUE;

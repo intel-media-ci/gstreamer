@@ -46,6 +46,10 @@
 #include <io.h>
 #endif
 
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
+
 /* "R" : support color
  * "X" : do not clear the screen when leaving the pager
  * "F" : skip the pager if content fit into the screen
@@ -428,6 +432,7 @@ print_object_properties_info (GObject * obj, GObjectClass * obj_class,
       (GCompareDataFunc) sort_gparamspecs, NULL);
 
   n_print ("%s%s%s:\n", HEADING_COLOR, desc, RESET_COLOR);
+  n_print ("\n");
 
   push_indent ();
 
@@ -451,7 +456,7 @@ print_object_properties_info (GObject * obj, GObjectClass * obj_class,
 
     first_flag = TRUE;
     n_print ("%sflags%s: ", PROP_ATTR_NAME_COLOR, RESET_COLOR);
-    readable = ! !(param->flags & G_PARAM_READABLE);
+    readable = !!(param->flags & G_PARAM_READABLE);
     if (readable && obj != NULL) {
       g_object_get_property (obj, param->name, &value);
     } else {
@@ -776,6 +781,8 @@ print_object_properties_info (GObject * obj, GObjectClass * obj_class,
     pop_indent_n (11);
 
     g_value_reset (&value);
+
+    n_print ("\n");
   }
   if (num_properties == 0)
     n_print ("%snone%s\n", PROP_VALUE_COLOR, RESET_COLOR);
@@ -808,7 +815,7 @@ gst_static_pad_compare_func (gconstpointer p1, gconstpointer p2)
 static void
 print_pad_templates_info (GstElement * element, GstElementFactory * factory)
 {
-  GList *pads;
+  GList *pads, *tmp;
   GstStaticPadTemplate *padtemplate;
   GstPadTemplate *tmpl;
 
@@ -824,9 +831,9 @@ print_pad_templates_info (GstElement * element, GstElementFactory * factory)
   pads = g_list_copy ((GList *)
       gst_element_factory_get_static_pad_templates (factory));
   pads = g_list_sort (pads, gst_static_pad_compare_func);
-  while (pads) {
-    padtemplate = (GstStaticPadTemplate *) (pads->data);
-    pads = g_list_next (pads);
+
+  for (tmp = pads; tmp; tmp = tmp->next) {
+    padtemplate = (GstStaticPadTemplate *) (tmp->data);
 
     if (padtemplate->direction == GST_PAD_SRC)
       n_print ("%sSRC template%s: %s'%s'%s\n", PROP_NAME_COLOR, RESET_COLOR,
@@ -883,7 +890,7 @@ print_pad_templates_info (GstElement * element, GstElementFactory * factory)
 
     pop_indent ();
 
-    if (pads != NULL)
+    if (tmp->next)
       n_print ("\n");
   }
   g_list_free (pads);
@@ -1061,6 +1068,21 @@ gtype_needs_ptr_marker (GType type)
   return FALSE;
 }
 
+static const gchar *
+pretty_type_name (GType type, const gchar ** p_pmark)
+{
+  if (type == G_TYPE_STRING) {
+    *p_pmark = " * ";
+    return "gchar";
+  } else if (type == G_TYPE_STRV) {
+    *p_pmark = " ** ";
+    return "gchar";
+  } else {
+    *p_pmark = gtype_needs_ptr_marker (type) ? " * " : " ";
+    return g_type_name (type);
+  }
+}
+
 static void
 print_signal_info (GstElement * element)
 {
@@ -1073,11 +1095,13 @@ print_signal_info (GstElement * element)
   GSList *found_signals, *l;
 
   for (k = 0; k < 2; k++) {
+    gboolean want_actions = (k == 1);
+
     found_signals = NULL;
 
     /* For elements that have sometimes pads, also list a few useful GstElement
      * signals. Put these first, so element-specific ones come later. */
-    if (k == 0 && has_sometimes_template (element)) {
+    if (!want_actions && has_sometimes_template (element)) {
       query = g_new0 (GSignalQuery, 1);
       g_signal_query (g_signal_lookup ("pad-added", GST_TYPE_ELEMENT), query);
       found_signals = g_slist_append (found_signals, query);
@@ -1102,8 +1126,8 @@ print_signal_info (GstElement * element)
         query = g_new0 (GSignalQuery, 1);
         g_signal_query (signals[i], query);
 
-        if ((k == 0 && !(query->signal_flags & G_SIGNAL_ACTION)) ||
-            (k == 1 && (query->signal_flags & G_SIGNAL_ACTION)))
+        if ((!want_actions && !(query->signal_flags & G_SIGNAL_ACTION)) ||
+            (want_actions && (query->signal_flags & G_SIGNAL_ACTION)))
           found_signals = g_slist_append (found_signals, query);
         else
           g_free (query);
@@ -1114,10 +1138,11 @@ print_signal_info (GstElement * element)
 
     if (found_signals) {
       n_print ("\n");
-      if (k == 0)
+      if (!want_actions)
         n_print ("%sElement Signals%s:\n", HEADING_COLOR, RESET_COLOR);
       else
         n_print ("%sElement Actions%s:\n", HEADING_COLOR, RESET_COLOR);
+      n_print ("\n");
     } else {
       continue;
     }
@@ -1125,47 +1150,65 @@ print_signal_info (GstElement * element)
     for (l = found_signals; l; l = l->next) {
       gchar *indent;
       const gchar *pmark;
+      const gchar *retval_type_name;
       int indent_len;
 
       query = (GSignalQuery *) l->data;
-      indent_len = strlen (query->signal_name) +
-          strlen (g_type_name (query->return_type)) + 24;
+      retval_type_name = pretty_type_name (query->return_type, &pmark);
 
-      if (gtype_needs_ptr_marker (query->return_type)) {
-        pmark = "* ";
-        indent_len += 2;
-      } else {
-        pmark = " ";
-      }
+      indent_len = strlen (query->signal_name) + strlen (retval_type_name);
+      indent_len += strlen (pmark) - 1;
+      indent_len += (want_actions) ? 36 : 24;
 
       indent = g_new0 (gchar, indent_len + 1);
       memset (indent, ' ', indent_len);
 
-      n_print ("  %s\"%s\"%s :  %s%s%s%suser_function%s (%s%s%s* object%s",
-          PROP_NAME_COLOR, query->signal_name, RESET_COLOR,
-          DATATYPE_COLOR, g_type_name (query->return_type), PROP_VALUE_COLOR,
-          pmark, RESET_COLOR, DATATYPE_COLOR, g_type_name (type),
-          PROP_VALUE_COLOR, RESET_COLOR);
-
-      for (j = 0; j < query->n_params; j++) {
-        const gchar *type_name, *asterisk;
-
-        type_name = g_type_name (query->param_types[j]);
-        asterisk = gtype_needs_ptr_marker (query->param_types[j]) ? "*" : "";
-
-        g_print (",\n");
-        n_print ("%s%s%s%s%s arg%d%s", indent, DATATYPE_COLOR, type_name,
-            PROP_VALUE_COLOR, asterisk, j, RESET_COLOR);
+      if (want_actions) {
+        n_print
+            ("  %s\"%s\"%s -> %s%s%s %s:  g_signal_emit_by_name%s (%selement%s, %s\"%s\"%s",
+            PROP_NAME_COLOR, query->signal_name, RESET_COLOR, DATATYPE_COLOR,
+            retval_type_name, PROP_VALUE_COLOR, pmark,
+            RESET_COLOR, PROP_VALUE_COLOR, RESET_COLOR, PROP_NAME_COLOR,
+            query->signal_name, RESET_COLOR);
+      } else {
+        n_print ("  %s\"%s\"%s :  %s%s%s%suser_function%s (%s%s%s * object%s",
+            PROP_NAME_COLOR, query->signal_name, RESET_COLOR,
+            DATATYPE_COLOR, retval_type_name, PROP_VALUE_COLOR,
+            pmark, RESET_COLOR, DATATYPE_COLOR, g_type_name (type),
+            PROP_VALUE_COLOR, RESET_COLOR);
       }
 
-      if (k == 0) {
+      for (j = 0; j < query->n_params; j++) {
+        const gchar *type_name, *asterisk, *const_prefix;
+
+        type_name = pretty_type_name (query->param_types[j], &asterisk);
+
+        /* Add const prefix for string and string array arguments */
+        if (g_str_equal (type_name, "gchar") && strchr (asterisk, '*')) {
+          const_prefix = "const ";
+        } else {
+          const_prefix = "";
+        }
+
+        g_print (",\n");
+        n_print ("%s%s%s%s%s%sarg%d%s", indent, DATATYPE_COLOR, const_prefix,
+            type_name, PROP_VALUE_COLOR, asterisk, j, RESET_COLOR);
+      }
+
+      if (!want_actions) {
         g_print (",\n");
         n_print ("%s%sgpointer %suser_data%s);\n", indent, DATATYPE_COLOR,
             PROP_VALUE_COLOR, RESET_COLOR);
-      } else
-        g_print (");\n");
-
+      } else if (query->return_type == G_TYPE_NONE) {
+        n_print ("%s);\n", RESET_COLOR);
+      } else {
+        g_print (",\n");
+        n_print ("%s%s%s%s *%sp_return_value%s);\n", indent, DATATYPE_COLOR,
+            g_type_name (query->return_type), PROP_VALUE_COLOR, pmark,
+            RESET_COLOR);
+      }
       g_free (indent);
+      g_print ("\n");
     }
 
     if (found_signals) {
@@ -1880,11 +1923,13 @@ print_plugin_automatic_install_info_codecs (GstElementFactory * factory)
 
   if (strstr (klass, "Demuxer") ||
       strstr (klass, "Decoder") ||
+      strstr (klass, "Decryptor") ||
       strstr (klass, "Depay") || strstr (klass, "Parser")) {
     type_name = "decoder";
     direction = GST_PAD_SINK;
   } else if (strstr (klass, "Muxer") ||
-      strstr (klass, "Encoder") || strstr (klass, "Pay")) {
+      strstr (klass, "Encoder") ||
+      strstr (klass, "Encryptor") || strstr (klass, "Pay")) {
     type_name = "encoder";
     direction = GST_PAD_SRC;
   } else {
@@ -2087,8 +2132,8 @@ _parse_sort_type (const gchar * option_name, const gchar * optarg,
   return FALSE;
 }
 
-int
-main (int argc, char *argv[])
+static int
+real_main (int argc, char *argv[])
 {
   gboolean print_all = FALSE;
   gboolean do_print_blacklist = FALSE;
@@ -2167,7 +2212,12 @@ main (int argc, char *argv[])
   ctx = g_option_context_new ("[ELEMENT-NAME | PLUGIN-NAME]");
   g_option_context_add_main_entries (ctx, options, GETTEXT_PACKAGE);
   g_option_context_add_group (ctx, gst_init_get_option_group ());
-  if (!g_option_context_parse (ctx, &argc, &argv, &err)) {
+#if defined(G_OS_WIN32) && !defined(GST_CHECK_MAIN)
+  if (!g_option_context_parse_strv (ctx, &argv, &err))
+#else
+  if (!g_option_context_parse (ctx, &argc, &argv, &err))
+#endif
+  {
     g_printerr ("Error initializing: %s\n", err->message);
     g_clear_error (&err);
     g_option_context_free (ctx);
@@ -2176,6 +2226,10 @@ main (int argc, char *argv[])
   g_option_context_free (ctx);
 #else
   gst_init (&argc, &argv);
+#endif
+
+#if defined(G_OS_WIN32) && !defined(GST_CHECK_MAIN)
+  argc = g_strv_length (argv);
 #endif
 
   gst_tools_print_version ();
@@ -2329,4 +2383,27 @@ done:
 #endif
 
   return exit_code;
+}
+
+int
+main (int argc, char *argv[])
+{
+  int ret;
+
+  /* gstinspect.c calls this function */
+#if defined(G_OS_WIN32) && !defined(GST_CHECK_MAIN)
+  argv = g_win32_get_command_line ();
+#endif
+
+#if defined(__APPLE__) && TARGET_OS_MAC && !TARGET_OS_IPHONE
+  ret = gst_macos_main ((GstMainFunc) real_main, argc, argv, NULL);
+#else
+  ret = real_main (argc, argv);
+#endif
+
+#if defined(G_OS_WIN32) && !defined(GST_CHECK_MAIN)
+  g_strfreev (argv);
+#endif
+
+  return ret;
 }

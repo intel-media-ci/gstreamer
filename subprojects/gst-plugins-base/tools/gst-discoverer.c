@@ -29,6 +29,10 @@
 #include <gst/pbutils/pbutils.h>
 #include <gst/audio/audio.h>
 
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
+
 #define MAX_INDENT 40
 
 /* *INDENT-OFF* */
@@ -633,8 +637,8 @@ _discoverer_finished (GstDiscoverer * dc, GMainLoop * ml)
   g_main_loop_quit (ml);
 }
 
-int
-main (int argc, char **argv)
+static int
+real_main (int argc, char **argv)
 {
   GError *err = NULL;
   GstDiscoverer *dc;
@@ -667,7 +671,12 @@ main (int argc, char **argv)
   g_option_context_add_main_entries (ctx, options, NULL);
   g_option_context_add_group (ctx, gst_init_get_option_group ());
 
-  if (!g_option_context_parse (ctx, &argc, &argv, &err)) {
+#ifdef G_OS_WIN32
+  if (!g_option_context_parse_strv (ctx, &argv, &err))
+#else
+  if (!g_option_context_parse (ctx, &argc, &argv, &err))
+#endif
+  {
     g_print ("Error initializing: %s\n", err->message);
     g_option_context_free (ctx);
     g_clear_error (&err);
@@ -675,6 +684,10 @@ main (int argc, char **argv)
   }
 
   g_option_context_free (ctx);
+
+#ifdef G_OS_WIN32
+  argc = g_strv_length (argv);
+#endif
 
   if (argc < 2) {
     g_print ("usage: %s <uris>\n", argv[0]);
@@ -729,4 +742,26 @@ main (int argc, char **argv)
   g_object_unref (dc);
 
   return 0;
+}
+
+int
+main (int argc, char *argv[])
+{
+  int ret;
+
+#ifdef G_OS_WIN32
+  argv = g_win32_get_command_line ();
+#endif
+
+#if defined(__APPLE__) && TARGET_OS_MAC && !TARGET_OS_IPHONE
+  ret = gst_macos_main ((GstMainFunc) real_main, argc, argv, NULL);
+#else
+  ret = real_main (argc, argv);
+#endif
+
+#ifdef G_OS_WIN32
+  g_strfreev (argv);
+#endif
+
+  return ret;
 }

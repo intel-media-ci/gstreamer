@@ -50,6 +50,13 @@ gst_adaptive_demux2_stream_update_current_bitrate (GstAdaptiveDemux2Stream *
     stream);
 static void gst_adaptive_demux2_stream_update_track_ids (GstAdaptiveDemux2Stream
     * stream);
+static GstFlowReturn
+gst_adaptive_demux2_stream_submit_request_default (GstAdaptiveDemux2Stream *
+    stream, DownloadRequest * download_req);
+static void
+gst_adaptive_demux2_stream_start_default (GstAdaptiveDemux2Stream * stream);
+static void
+gst_adaptive_demux2_stream_stop_default (GstAdaptiveDemux2Stream * stream);
 
 #define gst_adaptive_demux2_stream_parent_class parent_class
 G_DEFINE_ABSTRACT_TYPE (GstAdaptiveDemux2Stream, gst_adaptive_demux2_stream,
@@ -62,8 +69,11 @@ gst_adaptive_demux2_stream_class_init (GstAdaptiveDemux2StreamClass * klass)
 
   gobject_class->finalize = gst_adaptive_demux2_stream_finalize;
 
+  klass->start = gst_adaptive_demux2_stream_start_default;
+  klass->stop = gst_adaptive_demux2_stream_stop_default;
   klass->data_received = gst_adaptive_demux2_stream_data_received_default;
   klass->finish_fragment = gst_adaptive_demux2_stream_finish_fragment_default;
+  klass->submit_request = gst_adaptive_demux2_stream_submit_request_default;
 }
 
 static GType tsdemux_type = 0;
@@ -76,10 +86,15 @@ gst_adaptive_demux2_stream_init (GstAdaptiveDemux2Stream * stream)
   stream->last_ret = GST_FLOW_OK;
   stream->next_input_wakeup_time = GST_CLOCK_STIME_NONE;
 
+  stream->recommended_buffering_threshold = GST_CLOCK_TIME_NONE;
+
   stream->fragment_bitrates =
       g_malloc0 (sizeof (guint64) * NUM_LOOKBACK_FRAGMENTS);
 
   stream->start_position = stream->current_position = GST_CLOCK_TIME_NONE;
+
+  g_mutex_init (&stream->prepare_lock);
+  g_cond_init (&stream->prepare_cond);
 
   gst_segment_init (&stream->parse_segment, GST_FORMAT_TIME);
 }
@@ -135,8 +150,11 @@ gst_adaptive_demux2_stream_finalize (GObject * object)
   if (stream->pending_caps)
     gst_caps_unref (stream->pending_caps);
 
-  g_clear_pointer (&stream->pending_tags, gst_tag_list_unref);
+  gst_clear_tag_list (&stream->pending_tags);
   g_clear_pointer (&stream->stream_collection, gst_object_unref);
+
+  g_mutex_clear (&stream->prepare_lock);
+  g_cond_clear (&stream->prepare_cond);
 
   G_OBJECT_CLASS (parent_class)->finalize (object);
 }
@@ -155,10 +173,9 @@ gst_adaptive_demux2_stream_add_track (GstAdaptiveDemux2Stream * stream,
 {
   g_return_val_if_fail (track != NULL, FALSE);
 
-  GST_DEBUG_OBJECT (stream->demux, "stream:%p track:%s", stream,
-      track->stream_id);
+  GST_DEBUG_OBJECT (stream, "track:%s", track->stream_id);
   if (g_list_find (stream->tracks, track)) {
-    GST_DEBUG_OBJECT (stream->demux,
+    GST_DEBUG_OBJECT (stream,
         "track '%s' already handled by this stream", track->stream_id);
     return FALSE;
   }
@@ -193,9 +210,8 @@ static void
 gst_adaptive_demux2_stream_handle_playlist_eos (GstAdaptiveDemux2Stream *
     stream);
 static GstFlowReturn
-gst_adaptive_demux2_stream_begin_download_uri (GstAdaptiveDemux * demux,
-    GstAdaptiveDemux2Stream * stream, const gchar * uri, gint64 start,
-    gint64 end);
+gst_adaptive_demux2_stream_begin_download_uri (GstAdaptiveDemux2Stream * stream,
+    const gchar * uri, gint64 start, gint64 end);
 
 #ifndef GST_DISABLE_GST_DEBUG
 static const char *
@@ -213,7 +229,6 @@ uritype (GstAdaptiveDemux2Stream * s)
 static gboolean
 schedule_another_chunk (GstAdaptiveDemux2Stream * stream)
 {
-  GstAdaptiveDemux *demux = stream->demux;
   DownloadRequest *request = stream->download_request;
   GstFlowReturn ret;
 
@@ -256,7 +271,7 @@ schedule_another_chunk (GstAdaptiveDemux2Stream * stream)
       " chunk_size %" G_GINT64_FORMAT, uri, range_start, chunk_end, chunk_size);
 
   ret =
-      gst_adaptive_demux2_stream_begin_download_uri (demux, stream, uri,
+      gst_adaptive_demux2_stream_begin_download_uri (stream, uri,
       range_start, chunk_end);
   if (ret != GST_FLOW_OK) {
     GST_DEBUG_OBJECT (stream,
@@ -999,9 +1014,8 @@ match_parsebin_to_track (GstAdaptiveDemux2Stream * stream, GstPad * pad)
   stream_type = gst_stream_get_stream_type (gst_stream);
 
   GST_DEBUG_OBJECT (pad,
-      "Trying to match pad from parsebin with internal streamid %s and caps %"
-      GST_PTR_FORMAT, GST_STR_NULL (internal_stream_id),
-      gst_stream_get_caps (gst_stream));
+      "Trying to match pad from parsebin with internal streamid %s and stream %"
+      GST_PTR_FORMAT, GST_STR_NULL (internal_stream_id), gst_stream);
 
   /* Try to match directly by the track's pending upstream_stream_id */
   for (tmp = stream->tracks; tmp; tmp = tmp->next) {
@@ -1187,60 +1201,57 @@ on_download_error (DownloadRequest * request, DownloadRequestState state,
   stream->download_active = FALSE;
   stream->last_status_code = last_status_code;
 
-  GST_DEBUG_OBJECT (stream,
-      "Download finished with error, request state %d http status %u, dc %d",
-      request->state, last_status_code, stream->download_error_count);
-
   live = gst_adaptive_demux_is_live (demux);
-  if (((last_status_code / 100 == 4 && live)
+
+  GST_DEBUG_OBJECT (stream,
+      "Download finished with error, request state %d http status %u, dc %d "
+      "live %d retried %d",
+      request->state, last_status_code,
+      stream->download_error_count, live, stream->download_error_retry);
+
+  if (!stream->download_error_retry && ((last_status_code / 100 == 4 && live)
           || last_status_code / 100 == 5)) {
     /* 4xx/5xx */
     /* if current position is before available start, switch to next */
-    if (!gst_adaptive_demux2_stream_has_next_fragment (stream))
-      goto flushing;
-
     if (live) {
       gint64 range_start, range_stop;
 
-      if (!gst_adaptive_demux_get_live_seek_range (demux, &range_start,
-              &range_stop))
-        goto flushing;
-
-      if (demux->segment.position < range_start) {
-        GstFlowReturn ret;
-
-        GST_DEBUG_OBJECT (stream, "Retrying once with next segment");
-        gst_adaptive_demux2_stream_finish_download (stream, GST_FLOW_EOS, NULL);
-
-        GST_DEBUG_OBJECT (demux, "Calling update_fragment_info");
-
-        ret = gst_adaptive_demux2_stream_update_fragment_info (stream);
-        GST_DEBUG_OBJECT (stream, "update_fragment_info ret: %s",
-            gst_flow_get_name (ret));
-
-        if (ret == GST_FLOW_OK)
-          goto again;
-
-      } else if (demux->segment.position > range_stop) {
-        /* wait a bit to be in range, we don't have any locks at that point */
-        GstClockTime wait_time =
-            gst_adaptive_demux2_stream_get_fragment_waiting_time (stream);
-        if (wait_time > 0) {
-          GST_DEBUG_OBJECT (stream,
-              "Download waiting for %" GST_TIME_FORMAT,
-              GST_TIME_ARGS (wait_time));
-          g_assert (stream->pending_cb_id == 0);
-          GST_LOG_OBJECT (stream, "Scheduling delayed load_a_fragment() call");
-          stream->pending_cb_id =
-              gst_adaptive_demux_loop_call_delayed (demux->priv->scheduler_task,
-              wait_time,
-              (GSourceFunc) gst_adaptive_demux2_stream_load_a_fragment,
-              gst_object_ref (stream), (GDestroyNotify) gst_object_unref);
+      if (gst_adaptive_demux_get_live_seek_range (demux, &range_start,
+              &range_stop)) {
+        if (demux->segment.position < range_start) {
+          /* This should advance into the valid playlist range */
+          GST_DEBUG_OBJECT (stream, "Retrying once with next segment");
+          stream->download_error_retry = TRUE;
+          gst_adaptive_demux2_stream_finish_download (stream, GST_FLOW_OK,
+              NULL);
+          return;
+        } else if (demux->segment.position > range_stop) {
+          /* wait a bit to be in range */
+          GstClockTime wait_time =
+              gst_adaptive_demux2_stream_get_fragment_waiting_time (stream);
+          if (wait_time > 0) {
+            GST_DEBUG_OBJECT (stream,
+                "Download waiting for %" GST_TIME_FORMAT,
+                GST_TIME_ARGS (wait_time));
+            g_assert (stream->pending_cb_id == 0);
+            GST_LOG_OBJECT (stream,
+                "Scheduling delayed load_a_fragment() call");
+            stream->pending_cb_id =
+                gst_adaptive_demux_loop_call_delayed (demux->
+                priv->scheduler_task, wait_time,
+                (GSourceFunc) gst_adaptive_demux2_stream_load_a_fragment,
+                gst_object_ref (stream), (GDestroyNotify) gst_object_unref);
+            return;
+          }
+        } else {
+          GST_LOG_OBJECT (stream,
+              "Failed segment is inside the live range, retrying");
         }
+      } else {
+        GST_LOG_OBJECT (stream, "Could not get live seek range after error");
       }
     }
 
-  flushing:
     if (stream->download_error_count >= MAX_DOWNLOAD_ERROR_COUNT) {
       /* looks like there is no way of knowing when a live stream has ended
        * Have to assume we are falling behind and cause a manifest reload */
@@ -1325,7 +1336,8 @@ on_download_progress (DownloadRequest * request, DownloadRequestState state,
         G_GUINT64_FORMAT " bytes", gst_buffer_get_size (buffer),
         request->content_received, request->content_length);
 
-    /* Drop the request lock when parsing data. FIXME: Check and comment why this is needed */
+    /* Drop the request lock when parsing data. That allows the DownloadHelper to
+     * add more data while we're parsing (if more arrives) */
     download_request_unlock (request);
     ret = gst_adaptive_demux2_stream_parse_buffer (stream, buffer);
     download_request_lock (request);
@@ -1360,6 +1372,7 @@ on_download_complete (DownloadRequest * request, DownloadRequestState state,
   GstBuffer *buffer;
 
   stream->download_active = FALSE;
+  stream->download_error_retry = FALSE;
 
   if (stream->state != GST_ADAPTIVE_DEMUX2_STREAM_STATE_DOWNLOADING) {
     GST_DEBUG_OBJECT (stream, "Stream state changed to %d. Aborting",
@@ -1390,18 +1403,40 @@ on_download_complete (DownloadRequest * request, DownloadRequestState state,
   gst_adaptive_demux2_stream_finish_download (stream, ret, NULL);
 }
 
+static GstFlowReturn
+gst_adaptive_demux2_stream_submit_request_default (GstAdaptiveDemux2Stream *
+    stream, DownloadRequest * download_req)
+{
+  GstAdaptiveDemux *demux = stream->demux;
+
+  if (!downloadhelper_submit_request (demux->download_helper,
+          NULL, DOWNLOAD_FLAG_NONE, download_req, NULL))
+    return GST_FLOW_ERROR;
+
+  return GST_FLOW_OK;
+}
+
+static GstFlowReturn
+gst_adaptive_demux2_stream_submit_request (GstAdaptiveDemux2Stream * stream,
+    DownloadRequest * download_req)
+{
+  GstAdaptiveDemux2StreamClass *klass =
+      GST_ADAPTIVE_DEMUX2_STREAM_GET_CLASS (stream);
+  g_assert (klass->submit_request != NULL);
+  return klass->submit_request (stream, download_req);
+}
+
 /* must be called from the scheduler context
  *
  * Will submit the request only, which will complete asynchronously
  */
 static GstFlowReturn
-gst_adaptive_demux2_stream_begin_download_uri (GstAdaptiveDemux * demux,
-    GstAdaptiveDemux2Stream * stream, const gchar * uri, gint64 start,
-    gint64 end)
+gst_adaptive_demux2_stream_begin_download_uri (GstAdaptiveDemux2Stream * stream,
+    const gchar * uri, gint64 start, gint64 end)
 {
   DownloadRequest *request = stream->download_request;
 
-  GST_DEBUG_OBJECT (demux,
+  GST_DEBUG_OBJECT (stream,
       "Downloading %s uri: %s, range:%" G_GINT64_FORMAT " - %" G_GINT64_FORMAT,
       uritype (stream), uri, start, end);
 
@@ -1425,13 +1460,15 @@ gst_adaptive_demux2_stream_begin_download_uri (GstAdaptiveDemux * demux,
         (DownloadRequestEventCallback) on_download_progress, stream);
   }
 
-  if (!downloadhelper_submit_request (demux->download_helper,
-          demux->manifest_uri, DOWNLOAD_FLAG_NONE, request, NULL))
-    return GST_FLOW_ERROR;
 
   stream->download_active = TRUE;
+  GstFlowReturn ret =
+      gst_adaptive_demux2_stream_submit_request (stream, request);
+  if (ret != GST_FLOW_OK) {
+    stream->download_active = FALSE;
+  }
 
-  return GST_FLOW_OK;
+  return ret;
 }
 
 /* must be called from the scheduler context */
@@ -1470,7 +1507,7 @@ gst_adaptive_demux2_stream_download_fragment (GstAdaptiveDemux2Stream * stream)
 
     stream->downloading_header = TRUE;
 
-    return gst_adaptive_demux2_stream_begin_download_uri (demux, stream,
+    return gst_adaptive_demux2_stream_begin_download_uri (stream,
         stream->fragment.header_uri, stream->fragment.header_range_start,
         stream->fragment.header_range_end);
   }
@@ -1484,7 +1521,7 @@ gst_adaptive_demux2_stream_download_fragment (GstAdaptiveDemux2Stream * stream)
 
     stream->downloading_index = TRUE;
 
-    return gst_adaptive_demux2_stream_begin_download_uri (demux, stream,
+    return gst_adaptive_demux2_stream_begin_download_uri (stream,
         stream->fragment.index_uri, stream->fragment.index_range_start,
         stream->fragment.index_range_end);
   }
@@ -1517,14 +1554,14 @@ gst_adaptive_demux2_stream_download_fragment (GstAdaptiveDemux2Stream * stream)
     GST_DEBUG_OBJECT (stream,
         "Starting chunked download %s %" G_GINT64_FORMAT "-%" G_GINT64_FORMAT,
         url, range_start, chunk_end);
-    return gst_adaptive_demux2_stream_begin_download_uri (demux, stream, url,
+    return gst_adaptive_demux2_stream_begin_download_uri (stream, url,
         range_start, chunk_end);
   }
 
   /* regular single chunk download */
   stream->fragment.chunk_size = 0;
 
-  return gst_adaptive_demux2_stream_begin_download_uri (demux, stream, url,
+  return gst_adaptive_demux2_stream_begin_download_uri (stream, url,
       stream->fragment.range_start, stream->fragment.range_end);
 
 no_url_error:
@@ -1733,6 +1770,71 @@ gst_adaptive_demux2_stream_on_manifest_update (GstAdaptiveDemux2Stream * stream)
       gst_object_ref (stream), (GDestroyNotify) gst_object_unref);
 }
 
+void
+gst_adaptive_demux2_stream_on_can_download_fragments (GstAdaptiveDemux2Stream *
+    stream)
+{
+  GstAdaptiveDemux *demux = stream->demux;
+
+  if (stream->state != GST_ADAPTIVE_DEMUX2_STREAM_STATE_WAITING_BEFORE_DOWNLOAD)
+    return;
+
+  g_assert (stream->pending_cb_id == 0);
+
+  GST_LOG_OBJECT (stream, "Scheduling load_a_fragment() call");
+  stream->pending_cb_id =
+      gst_adaptive_demux_loop_call (demux->priv->scheduler_task,
+      (GSourceFunc) gst_adaptive_demux2_stream_load_a_fragment,
+      gst_object_ref (stream), (GDestroyNotify) gst_object_unref);
+}
+
+/*
+ * Called by a subclass that has returned GST_ADAPTIVE_DEMUX_FLOW_BUSY
+ * from update_fragment_info() to indicate that it is ready to continue
+ * downloading now.
+ *
+ * Called from the scheduler task
+ */
+void
+gst_adaptive_demux2_stream_mark_prepared (GstAdaptiveDemux2Stream * stream)
+{
+  GstAdaptiveDemux *demux = stream->demux;
+
+  /* hlsdemux calls this method whenever a playlist is updated, so also
+   * use it to wake up a stream that's waiting at the live edge */
+  if (stream->state == GST_ADAPTIVE_DEMUX2_STREAM_STATE_WAITING_MANIFEST_UPDATE) {
+    gst_adaptive_demux2_stream_on_manifest_update (stream);
+  }
+
+  g_cond_broadcast (&stream->prepare_cond);
+  if (stream->state != GST_ADAPTIVE_DEMUX2_STREAM_STATE_WAITING_PREPARE)
+    return;
+
+  g_assert (stream->pending_cb_id == 0);
+
+  GST_LOG_OBJECT (stream, "Scheduling load_a_fragment() call");
+  stream->pending_cb_id =
+      gst_adaptive_demux_loop_call (demux->priv->scheduler_task,
+      (GSourceFunc) gst_adaptive_demux2_stream_load_a_fragment,
+      gst_object_ref (stream), (GDestroyNotify) gst_object_unref);
+}
+
+/* Called by external threads (manifest input on sinkpad, and seek handling)
+ * when it requires the stream to be prepared before they can continue
+ * Must be held with the SCHEDULER lock held */
+gboolean
+gst_adaptive_demux2_stream_wait_prepared (GstAdaptiveDemux2Stream * stream)
+{
+  GstAdaptiveDemux *demux = stream->demux;
+
+  g_mutex_lock (&stream->prepare_lock);
+  GST_ADAPTIVE_SCHEDULER_UNLOCK (demux);
+  g_cond_wait (&stream->prepare_cond, &stream->prepare_lock);
+  g_mutex_unlock (&stream->prepare_lock);
+
+  return GST_ADAPTIVE_SCHEDULER_LOCK (demux);
+}
+
 static void
 gst_adaptive_demux2_stream_handle_playlist_eos (GstAdaptiveDemux2Stream *
     stream)
@@ -1774,17 +1876,23 @@ gst_adaptive_demux2_stream_load_a_fragment (GstAdaptiveDemux2Stream * stream)
   switch (stream->state) {
     case GST_ADAPTIVE_DEMUX2_STREAM_STATE_RESTART:
     case GST_ADAPTIVE_DEMUX2_STREAM_STATE_START_FRAGMENT:
+    case GST_ADAPTIVE_DEMUX2_STREAM_STATE_WAITING_PREPARE:
     case GST_ADAPTIVE_DEMUX2_STREAM_STATE_WAITING_LIVE:
     case GST_ADAPTIVE_DEMUX2_STREAM_STATE_WAITING_OUTPUT_SPACE:
     case GST_ADAPTIVE_DEMUX2_STREAM_STATE_WAITING_MANIFEST_UPDATE:
+    case GST_ADAPTIVE_DEMUX2_STREAM_STATE_WAITING_BEFORE_DOWNLOAD:
       /* Get information about the fragment to download */
       GST_DEBUG_OBJECT (demux, "Calling update_fragment_info");
       ret = gst_adaptive_demux2_stream_update_fragment_info (stream);
       GST_DEBUG_OBJECT (stream,
           "Fragment info update result: %d %s", ret, gst_flow_get_name (ret));
 
-      if (ret == GST_FLOW_OK)
+      if (ret == GST_FLOW_OK) {
+        /* Wake anyone that's waiting for this stream to get prepared */
+        if (stream->state == GST_ADAPTIVE_DEMUX2_STREAM_STATE_WAITING_PREPARE)
+          g_cond_broadcast (&stream->prepare_cond);
         stream->starting_fragment = TRUE;
+      }
       break;
     case GST_ADAPTIVE_DEMUX2_STREAM_STATE_DOWNLOADING:
       break;
@@ -1799,6 +1907,18 @@ gst_adaptive_demux2_stream_load_a_fragment (GstAdaptiveDemux2Stream * stream)
       GST_ERROR_OBJECT (stream, "Unexpected stream state %d", stream->state);
       g_assert_not_reached ();
       break;
+  }
+
+  if (ret == GST_ADAPTIVE_DEMUX_FLOW_BUSY) {
+    GST_LOG_OBJECT (stream,
+        "Sub-class returned BUSY flow return. Waiting in PREPARE state");
+    /* Need to take the prepare lock specifically when switching
+     * to WAITING_PREPARE state, to avoid a race in _wait_prepared();
+     */
+    g_mutex_lock (&stream->prepare_lock);
+    stream->state = GST_ADAPTIVE_DEMUX2_STREAM_STATE_WAITING_PREPARE;
+    g_mutex_unlock (&stream->prepare_lock);
+    return FALSE;
   }
 
   if (ret == GST_FLOW_OK) {
@@ -1831,10 +1951,12 @@ gst_adaptive_demux2_stream_load_a_fragment (GstAdaptiveDemux2Stream * stream)
         return FALSE;
       }
     }
+  }
 
-    if (gst_adaptive_demux2_stream_download_fragment (stream) != GST_FLOW_OK) {
-      GST_ERROR_OBJECT (demux,
-          "Failed to begin fragment download for stream %p", stream);
+  if (ret == GST_FLOW_OK) {
+    if (!demux->priv->streams_can_download_fragments) {
+      GST_LOG_OBJECT (stream, "Waiting for fragment downloads to be unblocked");
+      stream->state = GST_ADAPTIVE_DEMUX2_STREAM_STATE_WAITING_BEFORE_DOWNLOAD;
       return FALSE;
     }
   }
@@ -1843,7 +1965,13 @@ gst_adaptive_demux2_stream_load_a_fragment (GstAdaptiveDemux2Stream * stream)
    * GST_ADAPTIVE_DEMUX_FLOW_LOST_SYNC is not in the GstFlowReturn enum */
   switch ((int) ret) {
     case GST_FLOW_OK:
-      break;                    /* all is good, let's go */
+      /* all is good, let's go */
+      if (gst_adaptive_demux2_stream_download_fragment (stream) != GST_FLOW_OK) {
+        GST_ERROR_OBJECT (demux,
+            "Failed to begin fragment download for stream %p", stream);
+        return FALSE;
+      }
+      break;
     case GST_FLOW_EOS:
       GST_DEBUG_OBJECT (stream, "EOS, checking to stop download loop");
       stream->last_ret = ret;
@@ -1852,6 +1980,7 @@ gst_adaptive_demux2_stream_load_a_fragment (GstAdaptiveDemux2Stream * stream)
     case GST_ADAPTIVE_DEMUX_FLOW_LOST_SYNC:
       GST_DEBUG_OBJECT (stream, "Lost sync, asking reset to current position");
       stream->state = GST_ADAPTIVE_DEMUX2_STREAM_STATE_STOPPED;
+      g_cond_broadcast (&stream->prepare_cond);
       gst_adaptive_demux_handle_lost_sync (demux);
       return FALSE;
     case GST_FLOW_NOT_LINKED:
@@ -1983,32 +2112,18 @@ gst_adaptive_demux2_stream_next_download (GstAdaptiveDemux2Stream * stream)
   return gst_adaptive_demux2_stream_load_a_fragment (stream);
 }
 
-static gboolean
-gst_adaptive_demux2_stream_can_start (GstAdaptiveDemux2Stream * stream)
-{
-  GstAdaptiveDemux2StreamClass *klass =
-      GST_ADAPTIVE_DEMUX2_STREAM_GET_CLASS (stream);
-
-  if (!klass->can_start)
-    return TRUE;
-  return klass->can_start (stream);
-}
-
 /**
  * gst_adaptive_demux2_stream_start:
  * @stream: a #GstAdaptiveDemux2Stream
  *
- * Start the given @stream. Should be called by subclasses that previously
- * returned %FALSE in `GstAdaptiveDemux::stream_can_start()`
+ * Start the given @stream. Can be called by subclasses that previously
+ * returned %FALSE in `GstAdaptiveDemux2Stream::start()`, or from
+ * the demuxer when a stream should start downloading.
  */
 void
 gst_adaptive_demux2_stream_start (GstAdaptiveDemux2Stream * stream)
 {
-  GstAdaptiveDemux *demux;
-
   g_return_if_fail (stream && stream->demux);
-
-  demux = stream->demux;
 
   if (stream->pending_cb_id != 0 || stream->download_active) {
     /* There is already something active / pending on this stream */
@@ -2016,12 +2131,16 @@ gst_adaptive_demux2_stream_start (GstAdaptiveDemux2Stream * stream)
     return;
   }
 
-  /* Some streams require a delayed start, i.e. they need more information
-   * before they can actually be started */
-  if (!gst_adaptive_demux2_stream_can_start (stream)) {
-    GST_LOG_OBJECT (stream, "Stream will be started asynchronously");
-    return;
-  }
+  GstAdaptiveDemux2StreamClass *klass =
+      GST_ADAPTIVE_DEMUX2_STREAM_GET_CLASS (stream);
+
+  klass->start (stream);
+}
+
+static void
+gst_adaptive_demux2_stream_start_default (GstAdaptiveDemux2Stream * stream)
+{
+  GstAdaptiveDemux *demux = stream->demux;
 
   if (stream->state == GST_ADAPTIVE_DEMUX2_STREAM_STATE_EOS) {
     GST_LOG_OBJECT (stream, "Stream is EOS already");
@@ -2048,10 +2167,20 @@ gst_adaptive_demux2_stream_start (GstAdaptiveDemux2Stream * stream)
 void
 gst_adaptive_demux2_stream_stop (GstAdaptiveDemux2Stream * stream)
 {
+  GstAdaptiveDemux2StreamClass *klass =
+      GST_ADAPTIVE_DEMUX2_STREAM_GET_CLASS (stream);
+
+  klass->stop (stream);
+}
+
+static void
+gst_adaptive_demux2_stream_stop_default (GstAdaptiveDemux2Stream * stream)
+{
   GstAdaptiveDemux *demux = stream->demux;
 
   GST_DEBUG_OBJECT (stream, "Stopping stream (from state %d)", stream->state);
   stream->state = GST_ADAPTIVE_DEMUX2_STREAM_STATE_STOPPED;
+  g_cond_broadcast (&stream->prepare_cond);
 
   if (stream->pending_cb_id != 0) {
     gst_adaptive_demux_loop_cancel_call (demux->priv->scheduler_task,
@@ -2066,6 +2195,8 @@ gst_adaptive_demux2_stream_stop (GstAdaptiveDemux2Stream * stream)
   stream->downloading_header = stream->downloading_index = FALSE;
   stream->download_request = download_request_new ();
   stream->download_active = FALSE;
+  stream->download_error_retry = FALSE;
+  stream->download_error_count = 0;
 
   stream->next_input_wakeup_time = GST_CLOCK_STIME_NONE;
 }
@@ -2082,6 +2213,8 @@ gst_adaptive_demux2_stream_is_running (GstAdaptiveDemux2Stream * stream)
   return TRUE;
 }
 
+/* Returns TRUE if the stream has at least one selected track.
+ * Must be called with the TRACKS_LOCK held */
 gboolean
 gst_adaptive_demux2_stream_is_selected_locked (GstAdaptiveDemux2Stream * stream)
 {
@@ -2427,6 +2560,8 @@ can_handle_collection (GstAdaptiveDemux2Stream * stream,
       default:
         break;
     }
+    if (tags)
+      gst_tag_list_unref (tags);
   }
 
   /* Check that we either have at most 1 of each track type, or that
@@ -2561,7 +2696,7 @@ gst_adaptive_demux2_stream_update_current_bitrate (GstAdaptiveDemux2Stream *
    * fraction of the measured download rate */
   target_download_rate =
       CLAMP (stream->current_download_rate, 0,
-      G_MAXUINT) * demux->bandwidth_target_ratio;
+      G_MAXUINT) * (gdouble) demux->bandwidth_target_ratio;
 
   GST_DEBUG_OBJECT (stream, "Bitrate after target ratio limit (%0.2f): %u",
       demux->bandwidth_target_ratio, target_download_rate);

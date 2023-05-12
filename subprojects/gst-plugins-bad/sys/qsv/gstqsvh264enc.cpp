@@ -95,11 +95,10 @@ gst_qsv_h264_enc_sei_insert_mode_get_type (void)
     {0, nullptr, nullptr}
   };
 
-  if (g_once_init_enter (&sei_insert_mode_type)) {
-    GType type =
+  GST_QSV_CALL_ONCE_BEGIN {
+    sei_insert_mode_type =
         g_enum_register_static ("GstQsvH264EncSeiInsertMode", insert_modes);
-    g_once_init_leave (&sei_insert_mode_type, type);
-  }
+  } GST_QSV_CALL_ONCE_END;
 
   return sei_insert_mode_type;
 }
@@ -188,11 +187,10 @@ gst_qsv_h264_enc_rate_control_get_type (void)
     {0, nullptr, nullptr}
   };
 
-  if (g_once_init_enter (&rate_control_type)) {
-    GType type =
+  GST_QSV_CALL_ONCE_BEGIN {
+    rate_control_type =
         g_enum_register_static ("GstQsvH264EncRateControl", rate_controls);
-    g_once_init_leave (&rate_control_type, type);
-  }
+  } GST_QSV_CALL_ONCE_END;
 
   return rate_control_type;
 }
@@ -240,13 +238,67 @@ gst_qsv_h264_enc_rc_lookahead_ds_get_type (void)
     {0, nullptr, nullptr}
   };
 
-  if (g_once_init_enter (&rc_lookahead_ds_type)) {
-    GType type =
+  GST_QSV_CALL_ONCE_BEGIN {
+    rc_lookahead_ds_type =
         g_enum_register_static ("GstQsvH264EncRCLookAheadDS", rc_lookahead_ds);
-    g_once_init_leave (&rc_lookahead_ds_type, type);
-  }
+  } GST_QSV_CALL_ONCE_END;
 
   return rc_lookahead_ds_type;
+}
+
+/**
+ * GstQsvH264Trellis:
+ *
+ * Since: 1.24
+ */
+#define GST_TYPE_QSV_H264_ENC_TRELLIS (gst_qsv_h264_enc_trellis_get_type ())
+static GType
+gst_qsv_h264_enc_trellis_get_type (void)
+{
+  static GType trellis_type = 0;
+  static const GFlagsValue trellis[] = {
+    /**
+     * GstQsvH264Trellis::unknown
+     *
+     * Since: 1.22
+     */
+    {MFX_TRELLIS_UNKNOWN, "Unknown", "unknown"},
+
+    /**
+     * GstQsvH264Trellis::off
+     *
+     * Since: 1.24
+     */
+    {MFX_TRELLIS_OFF, "Disable for all frame types", "off"},
+
+    /**
+     * GstQsvH264Trellis::i
+     *
+     * Since: 1.24
+     */
+    {MFX_TRELLIS_I, "Enable for I frames", "i"},
+
+    /**
+     * GstQsvH264Trellis::p
+     *
+     * Since: 1.24
+     */
+    {MFX_TRELLIS_P, "Enable for P frames", "p"},
+
+    /**
+     * GstQsvH264Trellis::b
+     *
+     * Since: 1.24
+     */
+    {MFX_TRELLIS_B, "Enable for B frames", "b"},
+    {0, nullptr, nullptr}
+  };
+
+  GST_QSV_CALL_ONCE_BEGIN {
+    trellis_type = g_flags_register_static ("GstQsvH264Trellis", trellis);
+  } GST_QSV_CALL_ONCE_END;
+
+  return trellis_type;
 }
 
 enum
@@ -277,6 +329,15 @@ enum
   PROP_QVBR_QUALITY,
   PROP_DISABLE_HRD_CONFORMANCE,
   PROP_CC_INSERT,
+  PROP_TRELLIS,
+  PROP_MAX_FRAME_SIZE,
+  PROP_MAX_FRAME_SIZE_I,
+  PROP_MAX_FRAME_SIZE_P,
+  PROP_MAX_SLICE_SIZE,
+  PROP_NUM_SLICE,
+  PROP_NUM_SLICE_I,
+  PROP_NUM_SLICE_P,
+  PROP_NUM_SLICE_B,
 };
 
 #define DEFAULT_CABAC MFX_CODINGOPTION_UNKNOWN
@@ -296,6 +357,10 @@ enum
 #define DEFAULT_QVBR_QUALITY 0
 #define DEFAULT_DISABLE_HRD_CONFORMANCE FALSE
 #define DEFAULT_CC_INSERT GST_QSV_H264_ENC_SEI_INSERT
+#define DEFAULT_TRELLIS MFX_TRELLIS_UNKNOWN
+#define DEFAULT_MAX_FRAME_SIZE 0
+#define DEFAULT_MAX_SLICE_SIZE 0
+#define DEFAULT_NUM_SLICE 0
 
 #define DOC_SINK_CAPS_COMM \
     "format = (string) NV12, " \
@@ -367,6 +432,15 @@ typedef struct _GstQsvH264Enc
   guint qvbr_quality;
   gboolean disable_hrd_conformance;
   GstQsvH264EncSeiInsertMode cc_insert;
+  mfxU16 trellis;
+  guint max_frame_size;
+  guint max_frame_size_i;
+  guint max_frame_size_p;
+  guint max_slice_size;
+  guint num_slice;
+  guint num_slice_i;
+  guint num_slice_p;
+  guint num_slice_b;
 } GstQsvH264Enc;
 
 typedef struct _GstQsvH264EncClass
@@ -556,6 +630,110 @@ gst_qsv_h264_enc_class_init (GstQsvH264EncClass * klass, gpointer data)
           "Only CEA-708 RAW format is supported for now",
           GST_TYPE_QSV_H264_ENC_SEI_INSERT_MODE, DEFAULT_CC_INSERT,
           (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+  /**
+   * GstQsvH264Enc:trellis:
+   *
+   * Since: 1.24
+   */
+  g_object_class_install_property (object_class, PROP_TRELLIS,
+      g_param_spec_flags ("trellis", "Trellis",
+          "Trellis quantization mode",
+          GST_TYPE_QSV_H264_ENC_TRELLIS, DEFAULT_TRELLIS,
+          (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+
+  /**
+   * GstQsvH264Enc:max-frame-size:
+   *
+   * Since: 1.24
+   */
+  g_object_class_install_property (object_class, PROP_MAX_FRAME_SIZE,
+      g_param_spec_uint ("max-frame-size", "Max Frame Size",
+          "Maximum encoded frame size in bytes, "
+          "used for VBR based bitrate control modes",
+          0, G_MAXUINT32, DEFAULT_MAX_FRAME_SIZE, (GParamFlags)
+          (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+
+  /**
+   * GstQsvH264Enc:max-frame-size-i:
+   *
+   * Since: 1.24
+   */
+  g_object_class_install_property (object_class, PROP_MAX_FRAME_SIZE_I,
+      g_param_spec_uint ("max-frame-size-i", "Max Frame Size I",
+          "Maximum encoded I frame size in bytes, "
+          "used for VBR based bitrate control modes",
+          0, G_MAXUINT32, DEFAULT_MAX_FRAME_SIZE, (GParamFlags)
+          (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+
+  /**
+   * GstQsvH264Enc:max-frame-size-p:
+   *
+   * Since: 1.24
+   */
+  g_object_class_install_property (object_class, PROP_MAX_FRAME_SIZE_P,
+      g_param_spec_uint ("max-frame-size-p", "Max Frame Size P",
+          "Maximum encoded P and B frame size in bytes, "
+          "used for VBR based bitrate control modes. "
+          "\"max-frame-size-i\" must be non-zero, "
+          "otherwise this propert will be ignored",
+          0, G_MAXUINT32, DEFAULT_MAX_FRAME_SIZE, (GParamFlags)
+          (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+
+  /**
+   * GstQsvH264Enc:max-slice-size:
+   *
+   * Since: 1.24
+   */
+  g_object_class_install_property (object_class, PROP_MAX_SLICE_SIZE,
+      g_param_spec_uint ("max-slice-size", "Max Slice Size",
+          "Maximum slice size in bytes. If this parameter is specified other "
+          "controls over number of slices are ignored",
+          0, G_MAXUINT32, DEFAULT_MAX_SLICE_SIZE, (GParamFlags)
+          (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+
+  /**
+   * GstQsvH264Enc:num-slice:
+   *
+   * Since: 1.24
+   */
+  g_object_class_install_property (object_class, PROP_NUM_SLICE,
+      g_param_spec_uint ("num-slice", "Num Slice",
+          "Number of slices in each video frame",
+          0, G_MAXUINT16, DEFAULT_NUM_SLICE, (GParamFlags)
+          (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+
+  /**
+   * GstQsvH264Enc:num-slice-i:
+   *
+   * Since: 1.24
+   */
+  g_object_class_install_property (object_class, PROP_NUM_SLICE_I,
+      g_param_spec_uint ("num-slice-i", "Num Slice I",
+          "Number of slices for I frame",
+          0, G_MAXUINT16, DEFAULT_NUM_SLICE, (GParamFlags)
+          (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+
+  /**
+   * GstQsvH264Enc:num-slice-p:
+   *
+   * Since: 1.24
+   */
+  g_object_class_install_property (object_class, PROP_NUM_SLICE_P,
+      g_param_spec_uint ("num-slice-p", "Num Slice P",
+          "Number of slices for P frame",
+          0, G_MAXUINT16, DEFAULT_NUM_SLICE, (GParamFlags)
+          (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+
+  /**
+   * GstQsvH264Enc:num-slice-b:
+   *
+   * Since: 1.24
+   */
+  g_object_class_install_property (object_class, PROP_NUM_SLICE_B,
+      g_param_spec_uint ("num-slice-b", "Num Slice B",
+          "Number of slices for B frame",
+          0, G_MAXUINT16, DEFAULT_NUM_SLICE, (GParamFlags)
+          (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
 
   parent_class = (GstElementClass *) g_type_class_peek_parent (klass);
 
@@ -610,6 +788,8 @@ gst_qsv_h264_enc_class_init (GstQsvH264EncClass * klass, gpointer data)
       (GstPluginAPIFlags) 0);
   gst_type_mark_as_plugin_api (GST_TYPE_QSV_H264_ENC_RC_LOOKAHEAD_DS,
       (GstPluginAPIFlags) 0);
+  gst_type_mark_as_plugin_api (GST_TYPE_QSV_H264_ENC_TRELLIS,
+      (GstPluginAPIFlags) 0);
 
   gst_caps_unref (cdata->sink_caps);
   gst_caps_unref (cdata->src_caps);
@@ -645,6 +825,15 @@ gst_qsv_h264_enc_init (GstQsvH264Enc * self)
   self->qvbr_quality = DEFAULT_QVBR_QUALITY;
   self->disable_hrd_conformance = DEFAULT_DISABLE_HRD_CONFORMANCE;
   self->cc_insert = DEFAULT_CC_INSERT;
+  self->trellis = DEFAULT_TRELLIS;
+  self->max_frame_size = DEFAULT_MAX_FRAME_SIZE;
+  self->max_frame_size_i = DEFAULT_MAX_FRAME_SIZE;
+  self->max_frame_size_p = DEFAULT_MAX_FRAME_SIZE;
+  self->max_slice_size = DEFAULT_MAX_SLICE_SIZE;
+  self->num_slice = DEFAULT_NUM_SLICE;
+  self->num_slice_i = DEFAULT_NUM_SLICE;
+  self->num_slice_p = DEFAULT_NUM_SLICE;
+  self->num_slice_b = DEFAULT_NUM_SLICE;
 
   g_mutex_init (&self->prop_lock);
 
@@ -669,13 +858,11 @@ gst_qsv_h264_enc_check_update_uint (GstQsvH264Enc * self, guint * old_val,
   if (*old_val == new_val)
     return;
 
-  g_mutex_lock (&self->prop_lock);
   *old_val = new_val;
   if (is_bitrate_param)
     self->bitrate_updated = TRUE;
   else
     self->property_updated = TRUE;
-  g_mutex_unlock (&self->prop_lock);
 }
 
 static void
@@ -685,10 +872,8 @@ gst_qsv_h264_enc_check_update_enum (GstQsvH264Enc * self, mfxU16 * old_val,
   if (*old_val == (mfxU16) new_val)
     return;
 
-  g_mutex_lock (&self->prop_lock);
   *old_val = (mfxU16) new_val;
   self->property_updated = TRUE;
-  g_mutex_unlock (&self->prop_lock);
 }
 
 static void
@@ -698,10 +883,8 @@ gst_qsv_h264_enc_check_update_boolean (GstQsvH264Enc * self, gboolean * old_val,
   if (*old_val == new_val)
     return;
 
-  g_mutex_lock (&self->prop_lock);
   *old_val = new_val;
   self->property_updated = TRUE;
-  g_mutex_unlock (&self->prop_lock);
 }
 
 static void
@@ -710,6 +893,7 @@ gst_qsv_h264_enc_set_property (GObject * object, guint prop_id,
 {
   GstQsvH264Enc *self = GST_QSV_H264_ENC (object);
 
+  g_mutex_lock (&self->prop_lock);
   switch (prop_id) {
     case PROP_CABAC:
       gst_qsv_h264_enc_check_update_enum (self, &self->cabac,
@@ -812,10 +996,47 @@ gst_qsv_h264_enc_set_property (GObject * object, guint prop_id,
       /* This property is unrelated to encoder-reset */
       self->cc_insert = (GstQsvH264EncSeiInsertMode) g_value_get_enum (value);
       break;
+    case PROP_TRELLIS:
+      gst_qsv_h264_enc_check_update_enum (self, &self->trellis,
+          g_value_get_flags (value));
+      break;
+    case PROP_MAX_FRAME_SIZE:
+      gst_qsv_h264_enc_check_update_uint (self, &self->max_frame_size,
+          g_value_get_uint (value), FALSE);
+      break;
+    case PROP_MAX_FRAME_SIZE_I:
+      gst_qsv_h264_enc_check_update_uint (self, &self->max_frame_size_i,
+          g_value_get_uint (value), FALSE);
+      break;
+    case PROP_MAX_FRAME_SIZE_P:
+      gst_qsv_h264_enc_check_update_uint (self, &self->max_frame_size_p,
+          g_value_get_uint (value), FALSE);
+      break;
+    case PROP_MAX_SLICE_SIZE:
+      gst_qsv_h264_enc_check_update_uint (self, &self->max_slice_size,
+          g_value_get_uint (value), FALSE);
+      break;
+    case PROP_NUM_SLICE:
+      gst_qsv_h264_enc_check_update_uint (self, &self->num_slice,
+          g_value_get_uint (value), FALSE);
+      break;
+    case PROP_NUM_SLICE_I:
+      gst_qsv_h264_enc_check_update_uint (self, &self->num_slice,
+          g_value_get_uint (value), FALSE);
+      break;
+    case PROP_NUM_SLICE_P:
+      gst_qsv_h264_enc_check_update_uint (self, &self->num_slice_p,
+          g_value_get_uint (value), FALSE);
+      break;
+    case PROP_NUM_SLICE_B:
+      gst_qsv_h264_enc_check_update_uint (self, &self->num_slice_b,
+          g_value_get_uint (value), FALSE);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
   }
+  g_mutex_unlock (&self->prop_lock);
 }
 
 static void
@@ -824,6 +1045,7 @@ gst_qsv_h264_enc_get_property (GObject * object, guint prop_id, GValue * value,
 {
   GstQsvH264Enc *self = GST_QSV_H264_ENC (object);
 
+  g_mutex_lock (&self->prop_lock);
   switch (prop_id) {
     case PROP_CABAC:
       g_value_set_enum (value, self->cabac);
@@ -900,10 +1122,38 @@ gst_qsv_h264_enc_get_property (GObject * object, guint prop_id, GValue * value,
     case PROP_DISABLE_HRD_CONFORMANCE:
       g_value_set_boolean (value, self->disable_hrd_conformance);
       break;
+    case PROP_TRELLIS:
+      g_value_set_flags (value, self->trellis);
+      break;
+    case PROP_MAX_FRAME_SIZE:
+      g_value_set_uint (value, self->max_frame_size);
+      break;
+    case PROP_MAX_FRAME_SIZE_I:
+      g_value_set_uint (value, self->max_frame_size_i);
+      break;
+    case PROP_MAX_FRAME_SIZE_P:
+      g_value_set_uint (value, self->max_frame_size_p);
+      break;
+    case PROP_MAX_SLICE_SIZE:
+      g_value_set_uint (value, self->max_slice_size);
+      break;
+    case PROP_NUM_SLICE:
+      g_value_set_uint (value, self->num_slice);
+      break;
+    case PROP_NUM_SLICE_I:
+      g_value_set_uint (value, self->num_slice_i);
+      break;
+    case PROP_NUM_SLICE_P:
+      g_value_set_uint (value, self->num_slice_p);
+      break;
+    case PROP_NUM_SLICE_B:
+      g_value_set_uint (value, self->num_slice_b);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
   }
+  g_mutex_unlock (&self->prop_lock);
 }
 
 static gboolean
@@ -1378,6 +1628,7 @@ gst_qsv_h264_enc_set_format (GstQsvEncoder * encoder,
   param->mfx.GopPicSize = self->gop_size;
   param->mfx.IdrInterval = self->idr_interval;
   param->mfx.RateControlMethod = self->rate_control;
+  param->mfx.NumSlice = self->num_slice;
   param->mfx.NumRefFrame = self->ref_frames;
 
   gst_qsv_h264_enc_set_bitrate (self, param);
@@ -1458,6 +1709,17 @@ gst_qsv_h264_enc_set_format (GstQsvEncoder * encoder,
 
   if (param->mfx.RateControlMethod == MFX_RATECONTROL_QVBR)
     option3->QVBRQuality = self->qvbr_quality;
+
+  option2->Trellis = self->trellis;
+
+  option2->MaxFrameSize = self->max_frame_size;
+  option3->MaxFrameSizeI = self->max_frame_size_i;
+  if (self->max_frame_size_p && self->max_frame_size_i)
+    option3->MaxFrameSizeP = self->max_frame_size_p;
+
+  option3->NumSliceI = self->num_slice_i;
+  option3->NumSliceP = self->num_slice_p;
+  option3->NumSliceB = self->num_slice_b;
 
   if (signal_info)
     g_ptr_array_add (extra_params, signal_info);
@@ -1755,7 +2017,11 @@ gst_qsv_h264_enc_create_output_buffer (GstQsvEncoder * encoder,
     buf = gst_buffer_new_memdup (bitstream->Data + bitstream->DataOffset,
         bitstream->DataLength);
   } else {
-    buf = gst_buffer_new ();
+    std::vector < GstH264NalUnit > nalu_list;
+    gsize total_size = 0;
+    GstMapInfo info;
+    guint8 *data;
+
     rst = gst_h264_parser_identify_nalu (self->parser,
         bitstream->Data + bitstream->DataOffset, 0, bitstream->DataLength,
         &nalu);
@@ -1763,16 +2029,8 @@ gst_qsv_h264_enc_create_output_buffer (GstQsvEncoder * encoder,
       rst = GST_H264_PARSER_OK;
 
     while (rst == GST_H264_PARSER_OK) {
-      GstMemory *mem;
-      guint8 *data;
-
-      data = (guint8 *) g_malloc0 (nalu.size + 4);
-      GST_WRITE_UINT32_BE (data, nalu.size);
-      memcpy (data + 4, nalu.data + nalu.offset, nalu.size);
-
-      mem = gst_memory_new_wrapped ((GstMemoryFlags) 0, data, nalu.size + 4,
-          0, nalu.size + 4, data, (GDestroyNotify) g_free);
-      gst_buffer_append_memory (buf, mem);
+      nalu_list.push_back (nalu);
+      total_size += nalu.size + 4;
 
       rst = gst_h264_parser_identify_nalu (self->parser,
           bitstream->Data + bitstream->DataOffset, nalu.offset + nalu.size,
@@ -1781,6 +2039,21 @@ gst_qsv_h264_enc_create_output_buffer (GstQsvEncoder * encoder,
       if (rst == GST_H264_PARSER_NO_NAL_END)
         rst = GST_H264_PARSER_OK;
     }
+
+    buf = gst_buffer_new_and_alloc (total_size);
+    gst_buffer_map (buf, &info, GST_MAP_WRITE);
+    data = (guint8 *) info.data;
+
+    /* *INDENT-OFF* */
+    for (const auto & it : nalu_list) {
+      GST_WRITE_UINT32_BE (data, it.size);
+      data += 4;
+      memcpy (data, it.data + it.offset, it.size);
+      data += it.size;
+    }
+    /* *INDENT-ON* */
+
+    gst_buffer_unmap (buf, &info);
   }
 
   /* This buffer must be the end of a frame boundary */

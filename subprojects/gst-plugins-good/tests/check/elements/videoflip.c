@@ -268,6 +268,214 @@ GST_START_TEST (test_stress_change_method)
 
 GST_END_TEST;
 
+// push a buffer to retrieve the new caps from videoflip and check if the frame is rotated or not
+static void
+caps_update (GstHarness * flip, GstVideoInfo * in_info, gboolean rotate)
+{
+  GstEvent *e;
+  GstBuffer *buf;
+  GstCaps *out_caps;
+  GstVideoInfo out_info;
+
+  // push a buffer to get the new caps
+  buf = create_test_video_buffer_rgba8 (in_info);
+  fail_unless (gst_harness_push (flip, buf) == GST_FLOW_OK);
+
+  e = gst_harness_pull_event (flip);
+  gst_event_parse_caps (e, &out_caps);
+  gst_caps_ref (out_caps);
+  gst_event_unref (e);
+
+  buf = gst_harness_pull (flip);
+  fail_unless (buf != NULL);
+  gst_buffer_unref (buf);
+
+  fail_unless (gst_video_info_from_caps (&out_info, out_caps));
+
+  if (rotate) {
+    fail_unless_equals_int (GST_VIDEO_INFO_WIDTH (in_info),
+        GST_VIDEO_INFO_HEIGHT (&out_info));
+    fail_unless_equals_int (GST_VIDEO_INFO_HEIGHT (in_info),
+        GST_VIDEO_INFO_WIDTH (&out_info));
+  } else {
+    fail_unless_equals_int (GST_VIDEO_INFO_WIDTH (in_info),
+        GST_VIDEO_INFO_WIDTH (&out_info));
+    fail_unless_equals_int (GST_VIDEO_INFO_HEIGHT (in_info),
+        GST_VIDEO_INFO_HEIGHT (&out_info));
+  }
+
+  gst_caps_unref (out_caps);
+}
+
+static void
+send_orientation_tag (GstHarness * flip, const gchar * orientation,
+    GstTagScope scope)
+{
+  GstTagList *tags;
+  gchar *tmp;
+  GstEvent *e;
+
+  if (orientation) {
+    tmp = g_strdup_printf ("taglist,image-orientation=%s", orientation);
+  } else {
+    tmp = g_strdup ("taglist");
+  }
+
+  tags = gst_tag_list_new_from_string (tmp);
+  g_free (tmp);
+  fail_unless (tags != NULL);
+  gst_tag_list_set_scope (tags, scope);
+  gst_harness_push_event (flip, gst_event_new_tag (tags));
+
+  e = gst_harness_pull_event (flip);
+  fail_unless_equals_int (GST_EVENT_TYPE (e), GST_EVENT_TAG);
+  gst_event_unref (e);
+}
+
+// set orientation from tags with videoflip in auto mode
+GST_START_TEST (test_orientation_tag)
+{
+  GstHarness *flip = gst_harness_new ("videoflip");
+  GstVideoInfo in_info, out_info;
+  GstCaps *in_caps, *out_caps;
+  GstEvent *e;
+
+  g_object_set (flip->element, "video-direction", 8 /* auto */ , NULL);
+
+  // downstream accept any resolution
+  gst_harness_set_sink_caps_str (flip, "video/x-raw");
+
+  gst_video_info_set_format (&in_info, GST_VIDEO_FORMAT_RGBA, 4, 9);
+  in_caps = gst_video_info_to_caps (&in_info);
+  gst_harness_set_src_caps (flip, in_caps);
+
+  e = gst_harness_pull_event (flip);
+  fail_unless_equals_int (GST_EVENT_TYPE (e), GST_EVENT_STREAM_START);
+  gst_event_unref (e);
+  e = gst_harness_pull_event (flip);
+  fail_unless_equals_int (GST_EVENT_TYPE (e), GST_EVENT_CAPS);
+  gst_event_parse_caps (e, &out_caps);
+  fail_unless (gst_video_info_from_caps (&out_info, out_caps));
+  fail_unless_equals_int (GST_VIDEO_INFO_WIDTH (&in_info),
+      GST_VIDEO_INFO_WIDTH (&out_info));
+  fail_unless_equals_int (GST_VIDEO_INFO_HEIGHT (&in_info),
+      GST_VIDEO_INFO_HEIGHT (&out_info));
+  gst_event_unref (e);
+
+  e = gst_harness_pull_event (flip);
+  fail_unless_equals_int (GST_EVENT_TYPE (e), GST_EVENT_SEGMENT);
+  gst_event_unref (e);
+
+  send_orientation_tag (flip, "rotate-90", GST_TAG_SCOPE_STREAM);
+
+  // caps is updated as the frame is now rotated
+  caps_update (flip, &in_info, TRUE);
+
+  // orientation is reset on STREAM_START
+  gst_harness_push_event (flip, gst_event_new_stream_start ("2"));
+
+  e = gst_harness_pull_event (flip);
+  fail_unless_equals_int (GST_EVENT_TYPE (e), GST_EVENT_STREAM_START);
+  gst_event_unref (e);
+
+  caps_update (flip, &in_info, FALSE);
+
+  gst_harness_teardown (flip);
+}
+
+GST_END_TEST;
+
+// send a buffer and ensure caps have not been updated
+static void
+caps_not_updated (GstHarness * flip, GstVideoInfo * in_info)
+{
+  GstBuffer *buf;
+  GstEvent *e;
+
+  buf = create_test_video_buffer_rgba8 (in_info);
+  buf = gst_harness_push_and_pull (flip, buf);
+  fail_unless (buf != NULL);
+  gst_buffer_unref (buf);
+
+  // caps is not updated
+  e = gst_harness_try_pull_event (flip);
+  fail_unless (e == NULL);
+}
+
+// receive orientation updates from tags with the global and stream scopes
+GST_START_TEST (test_orientation_tag_scopes)
+{
+  GstHarness *flip = gst_harness_new ("videoflip");
+  GstVideoInfo in_info, out_info;
+  GstCaps *in_caps, *out_caps;
+  GstEvent *e;
+
+  g_object_set (flip->element, "video-direction", 8 /* auto */ , NULL);
+
+  // downstream accept any resolution
+  gst_harness_set_sink_caps_str (flip, "video/x-raw");
+
+  gst_video_info_set_format (&in_info, GST_VIDEO_FORMAT_RGBA, 4, 9);
+  in_caps = gst_video_info_to_caps (&in_info);
+  gst_harness_set_src_caps (flip, in_caps);
+
+  e = gst_harness_pull_event (flip);
+  fail_unless_equals_int (GST_EVENT_TYPE (e), GST_EVENT_STREAM_START);
+  gst_event_unref (e);
+  e = gst_harness_pull_event (flip);
+  fail_unless_equals_int (GST_EVENT_TYPE (e), GST_EVENT_CAPS);
+  gst_event_parse_caps (e, &out_caps);
+  fail_unless (gst_video_info_from_caps (&out_info, out_caps));
+  fail_unless_equals_int (GST_VIDEO_INFO_WIDTH (&in_info),
+      GST_VIDEO_INFO_WIDTH (&out_info));
+  fail_unless_equals_int (GST_VIDEO_INFO_HEIGHT (&in_info),
+      GST_VIDEO_INFO_HEIGHT (&out_info));
+  gst_event_unref (e);
+
+  e = gst_harness_pull_event (flip);
+  fail_unless_equals_int (GST_EVENT_TYPE (e), GST_EVENT_SEGMENT);
+  gst_event_unref (e);
+
+  // send orientation global tag (global: 90, stream: /)
+  send_orientation_tag (flip, "rotate-90", GST_TAG_SCOPE_GLOBAL);
+  // caps is updated as the frame is now rotated
+  caps_update (flip, &in_info, TRUE);
+
+  // send orientation stream tag, overriding the global one (global: 90, stream: 0)
+  send_orientation_tag (flip, "rotate-0", GST_TAG_SCOPE_STREAM);
+  // caps is updated as the frame is no longer rotated
+  caps_update (flip, &in_info, FALSE);
+
+  // resend orientation global tag, which won't change the orientation as the stream tag takes precedence (global: 90, stream: 0)
+  send_orientation_tag (flip, "rotate-90", GST_TAG_SCOPE_GLOBAL);
+  caps_not_updated (flip, &in_info);
+
+  // actually update the orientation with the stream tag (global: 90, stream: 90)
+  send_orientation_tag (flip, "rotate-90", GST_TAG_SCOPE_STREAM);
+  // caps is updated as the frame is now rotated
+  caps_update (flip, &in_info, TRUE);
+
+  // sending a stream tag without orientation switch back to the global one, so no orientation change (global: 90, stream: /)
+  send_orientation_tag (flip, NULL, GST_TAG_SCOPE_STREAM);
+  caps_not_updated (flip, &in_info);
+
+  // remove orientation from global tag, restoring identity (global: /, stream: /)
+  send_orientation_tag (flip, NULL, GST_TAG_SCOPE_GLOBAL);
+  caps_update (flip, &in_info, FALSE);
+
+  // send rotation in stream tag (global: /, stream: 90)
+  send_orientation_tag (flip, "rotate-90", GST_TAG_SCOPE_STREAM);
+  caps_update (flip, &in_info, TRUE);
+
+  // sending a global tag without orientation does not change the rotation (global: /, stream: 90)
+  send_orientation_tag (flip, NULL, GST_TAG_SCOPE_GLOBAL);
+  caps_not_updated (flip, &in_info);
+
+  gst_harness_teardown (flip);
+}
+
+GST_END_TEST;
+
 static Suite *
 videoflip_suite (void)
 {
@@ -280,6 +488,8 @@ videoflip_suite (void)
   tcase_add_test (tc_chain,
       test_change_method_twice_same_caps_different_method);
   tcase_add_test (tc_chain, test_stress_change_method);
+  tcase_add_test (tc_chain, test_orientation_tag);
+  tcase_add_test (tc_chain, test_orientation_tag_scopes);
 
   return s;
 }

@@ -34,8 +34,12 @@ G_BEGIN_DECLS
 
 typedef struct _GstHLSMediaPlaylist GstHLSMediaPlaylist;
 typedef struct _GstHLSTimeMap GstHLSTimeMap;
+typedef struct _GstM3U8SeekResult GstM3U8SeekResult;
 typedef struct _GstM3U8MediaSegment GstM3U8MediaSegment;
+typedef struct _GstM3U8PartialSegment GstM3U8PartialSegment;
 typedef struct _GstM3U8InitFile GstM3U8InitFile;
+typedef enum _GstM3U8PreloadHintType GstM3U8PreloadHintType;
+typedef struct _GstM3U8PreloadHint GstM3U8PreloadHint;
 typedef struct _GstHLSRenditionStream GstHLSRenditionStream;
 typedef struct _GstM3U8Client GstM3U8Client;
 typedef struct _GstHLSVariantStream GstHLSVariantStream;
@@ -43,6 +47,7 @@ typedef struct _GstHLSMasterPlaylist GstHLSMasterPlaylist;
 
 #define GST_HLS_MEDIA_PLAYLIST(m) ((GstHLSMediaPlaylist*)m)
 #define GST_M3U8_MEDIA_SEGMENT(f) ((GstM3U8MediaSegment*)f)
+#define GST_M3U8_PARTIAL_SEGMENT(p) ((GstM3U8PartialSegment*)p)
 
 #define GST_HLS_MEDIA_PLAYLIST_LOCK(m) g_mutex_lock (&m->lock);
 #define GST_HLS_MEDIA_PLAYLIST_UNLOCK(m) g_mutex_unlock (&m->lock);
@@ -61,6 +66,21 @@ typedef enum {
   GST_HLS_PLAYLIST_TYPE_VOD,
 } GstHLSPlaylistType;
 
+/* Extra seek flag extensions for partial segment handling
+ * Values are chosen to avoid collision with the core GST_SEEK_FLAG_*
+ * flags */
+#define GST_HLS_M3U8_SEEK_FLAG_ALLOW_PARTIAL (1 << 16)  /* Allow seeking to a partial segment */
+
+struct _GstM3U8SeekResult {
+  /* stream time of the segment or partial segment */
+  GstClockTimeDiff stream_time;
+
+  GstM3U8MediaSegment	*segment;
+
+  gboolean found_partial_segment;
+  guint part_idx;
+};
+
 /**
  * GstHLSMediaPlaylist:
  *
@@ -77,11 +97,16 @@ struct _GstHLSMediaPlaylist
   gchar *uri;                   /* actually downloaded URI */
   gchar *base_uri;              /* URI to use as base for resolving relative URIs.
                                  * This will be different to uri in case of redirects */
+  GstClockTime playlist_ts;     /* Monotonic clock time estimate for this playlist's validity from download time and cached Age */
+  GstClockTime request_time;	/* Time at which this playlist was requested in monotonic clock time. */
+
   /* Base Tag */
   gint version;                 /* EXT-X-VERSION (default 1) */
 
   /* Media Playlist Tags */
   GstClockTime targetduration;  /* EXT-X-TARGETDURATION, default GST_CLOCK_TIME_NONE */
+  GstClockTime partial_targetduration;  /* EXT-X-PART-INF, default GST_CLOCK_TIME_NONE */
+
   gint64 media_sequence;	/* EXT-X-MEDIA-SEQUENCE, MSN of the first Media
 				   Segment in the playlist. */
   gint64 discont_sequence;	/* EXT-X-DISCONTINUITY-SEQUENCE. Default : 0 */
@@ -101,12 +126,27 @@ struct _GstHLSMediaPlaylist
 
   GPtrArray *segments;		/* Array of GstM3U8MediaSegment */
 
+  GPtrArray *preload_hints;		/* Array of GstM3U8PreloadHint */
+
   /* Generated information */
   GstClockTime duration;	/* The estimated total duration of all segments
 				   contained in this playlist */
 
   gboolean reloaded;		/* If TRUE, this indicates that this playlist
 				 * was reloaded but had identical content */
+
+  /* Server-Control directive values */
+  GstClockTime skip_boundary;   /* Skip Boundary from CAN-SKIP-UNTIL */
+  gboolean can_skip_dateranges; /* TRUE if CAN-SKIP-DATERANGES was YES */
+
+  GstClockTime hold_back;       /* Hold-Back value, if provided (or CLOCK_TIME_NONE) */
+  GstClockTime part_hold_back;  /* Part-Hold-Back value, if provided (or CLOCK_TIME_NONE */
+  gboolean can_block_reload;    /* TRUE if CAN-BLOCK-RELOAD was YES */
+
+  /* Delta playlist info from EXT-X-SKIP tag */
+  gint skipped_segments;
+  gint num_removed_date_ranges;
+  gchar **removed_date_ranges;
 
   /*< private > */
   GMutex lock;
@@ -128,6 +168,66 @@ GstHLSMediaPlaylist * gst_hls_media_playlist_ref (GstHLSMediaPlaylist * m3u8);
 void                  gst_hls_media_playlist_unref (GstHLSMediaPlaylist * m3u8);
 
 /**
+ * GstM3U8PartialSegment:
+ *
+ * Official term in RFC : "Partial Segment"
+ *
+ */
+struct _GstM3U8PartialSegment
+{
+  gboolean is_gap; /* TRUE if this part is a gap */
+  gboolean independent; /* TRUE if there is an I-frame in the partial segment */
+  gchar *uri;
+  gint64 offset, size;
+
+  GstClockTimeDiff stream_time;	/* Computed stream time */
+  GstClockTime duration;
+
+  gint ref_count;               /* ATOMIC */
+};
+
+GstM3U8PartialSegment *
+gst_m3u8_partial_segment_ref   (GstM3U8PartialSegment *part);
+
+void
+gst_m3u8_partial_segment_unref (GstM3U8PartialSegment *part);
+
+/* Set up as flags, so we can form a bitmask
+ * of seen hint types */
+enum _GstM3U8PreloadHintType {
+  M3U8_PRELOAD_HINT_NONE = (0 << 0),
+  M3U8_PRELOAD_HINT_MAP = (1 << 0),
+  M3U8_PRELOAD_HINT_PART = (1 << 1),
+};
+
+#define M3U8_PRELOAD_HINT_ALL (M3U8_PRELOAD_HINT_PART | M3U8_PRELOAD_HINT_MAP)
+
+/**
+ * GstM3U8PreloadHint:
+ *
+ * Official term in RFC : "Preload Hint"
+ *
+ */
+struct _GstM3U8PreloadHint
+{
+  GstM3U8PreloadHintType hint_type;
+
+  gchar *uri;
+  gint64 offset, size;
+
+  gint ref_count;               /* ATOMIC */
+};
+
+GstM3U8PreloadHint *
+gst_m3u8_preload_hint_ref  (GstM3U8PreloadHint *hint);
+
+void
+gst_m3u8_preload_hint_unref (GstM3U8PreloadHint *hint);
+
+gboolean
+gst_m3u8_preload_hint_equal (GstM3U8PreloadHint *hint1, GstM3U8PreloadHint *hint2);
+
+/**
  * GstM3U8MediaSegment:
  *
  * Official term in RFC : "Media Segment"
@@ -137,6 +237,7 @@ void                  gst_hls_media_playlist_unref (GstHLSMediaPlaylist * m3u8);
 struct _GstM3U8MediaSegment
 {
   gboolean is_gap; /* TRUE if EXT-X-GAP was present for this segment */
+  gboolean partial_only; /* TRUE if this is the last segment in a playlist consisting of only EXT-X-PART and no full URL */
 
   gchar *title;
   GstClockTimeDiff stream_time;	/* Computed stream time */
@@ -148,9 +249,12 @@ struct _GstM3U8MediaSegment
   gchar *key;
   guint8 iv[16];
   gint64 offset, size;
-  gint ref_count;               /* ATOMIC */
   GstM3U8InitFile *init_file;   /* Media Initialization (hold ref) */
   GDateTime *datetime;		/* EXT-X-PROGRAM-DATE-TIME */
+
+  GPtrArray *partial_segments; /* If there are Partial Segments for this Media Segment */
+
+  gint ref_count;               /* ATOMIC */
 };
 
 struct _GstM3U8InitFile
@@ -170,19 +274,27 @@ gst_m3u8_media_segment_ref   (GstM3U8MediaSegment * mfile);
 void
 gst_m3u8_media_segment_unref (GstM3U8MediaSegment * mfile);
 
-
 gboolean
 gst_hls_media_playlist_has_same_data (GstHLSMediaPlaylist * m3u8,
 				      gchar   * playlist_data);
 
 GstHLSMediaPlaylist *
 gst_hls_media_playlist_parse (gchar        * data,
+			      GstClockTime playlist_ts,
 			      const gchar  * uri,
 			      const gchar  * base_uri);
+
+gboolean
+gst_hls_media_playlist_sync_skipped_segments (GstHLSMediaPlaylist * m3u8,
+					   GstHLSMediaPlaylist * reference);
 
 void
 gst_hls_media_playlist_recalculate_stream_time (GstHLSMediaPlaylist *playlist,
 						GstM3U8MediaSegment *anchor);
+
+void
+gst_hls_media_playlist_recalculate_stream_time_from_part (GstHLSMediaPlaylist *playlist,
+						GstM3U8MediaSegment *anchor, guint part_idx);
 
 GstM3U8MediaSegment *
 gst_hls_media_playlist_sync_to_segment      (GstHLSMediaPlaylist * m3u8,
@@ -202,11 +314,20 @@ gst_hls_media_playlist_advance_fragment     (GstHLSMediaPlaylist * m3u8,
 					     GstM3U8MediaSegment * current,
 					     gboolean  forward);
 
-GstM3U8MediaSegment *
-gst_hls_media_playlist_get_starting_segment (GstHLSMediaPlaylist *self);
+gboolean
+gst_hls_media_playlist_get_starting_segment (GstHLSMediaPlaylist *self, 
+					     GstM3U8SeekResult *seek_result);
+
+GstClockTime
+gst_hls_media_playlist_get_end_stream_time  (GstHLSMediaPlaylist * m3u8);
 
 GstClockTime
 gst_hls_media_playlist_get_duration         (GstHLSMediaPlaylist * m3u8);
+
+void
+gst_hls_media_playlist_get_next_msn_and_part (GstHLSMediaPlaylist * m3u8,
+					      gint64 *next_msn,
+					      gint64 *next_part);
 
 gchar *
 gst_hls_media_playlist_get_uri              (GstHLSMediaPlaylist * m3u8);
@@ -223,16 +344,23 @@ gboolean
 gst_hls_media_playlist_has_lost_sync        (GstHLSMediaPlaylist * m3u8,
 					     GstClockTime position);
 
-GstM3U8MediaSegment *
-gst_hls_media_playlist_seek                 (GstHLSMediaPlaylist *playlist,
+gboolean
+gst_hls_media_playlist_seek (GstHLSMediaPlaylist *playlist,
 					     gboolean forward,
 					     GstSeekFlags flags,
-					     GstClockTimeDiff ts);
+					     GstClockTimeDiff ts,
+					     GstM3U8SeekResult *seek_result);
+
+gboolean
+gst_hls_media_playlist_find_position (GstHLSMediaPlaylist *playlist,
+               GstClockTimeDiff ts, gboolean in_partial_segments,
+               GstM3U8SeekResult *seek_result);
+
 void
 gst_hls_media_playlist_dump                 (GstHLSMediaPlaylist* self);
 
 GstClockTime
-gst_hls_media_playlist_recommended_buffering_threshold (GstHLSMediaPlaylist *playlist);
+gst_hls_media_playlist_recommended_buffering_threshold (GstHLSMediaPlaylist * playlist);
 
 typedef enum
 {
@@ -367,9 +495,10 @@ GstHLSMasterPlaylist * hls_master_playlist_new_from_data (gchar       * data,
 
 #define gst_hls_master_playlist_get_variant_for_bitrate hls_master_playlist_get_variant_for_bitrate
 GstHLSVariantStream *  hls_master_playlist_get_variant_for_bitrate (GstHLSMasterPlaylist * playlist,
-								    GstHLSVariantStream  * current_variant,
-								    guint                  bitrate,
-								    guint                  min_bitrate);
+								    gboolean  iframe_variant,
+								    guint     bitrate,
+								    guint     min_bitrate,
+                    GList   * failed_variants);
 
 #define gst_hls_master_playlist_get_common_caps hls_master_playlist_get_common_caps
 GstCaps *              hls_master_playlist_get_common_caps (GstHLSMasterPlaylist *playlist);

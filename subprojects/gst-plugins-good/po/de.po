@@ -14,7 +14,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: gst-plugins-good 1.19.2\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2021-09-23 01:33+0100\n"
+"POT-Creation-Date: 2023-02-22 11:52+0000\n"
 "PO-Revision-Date: 2021-11-06 23:20+0100\n"
 "Last-Translator: Christian Kirbach <christian.kirbach@gmail.com>\n"
 "Language-Team: German <translation-team-de@lists.sourceforge.net>\n"
@@ -109,6 +109,12 @@ msgstr "Diese Datei ist beschädigt und kann nicht wiedergegeben werden."
 
 msgid "Invalid atom size."
 msgstr "Ungültige Atom-Größe."
+
+msgid "Cannot query file size"
+msgstr ""
+
+msgid "Cannot demux file"
+msgstr ""
 
 msgid "This file is incomplete and cannot be played."
 msgstr "Diese Datei ist unvollständig und kann nicht wiedergegeben werden."
@@ -446,12 +452,12 @@ msgstr ""
 msgid "Failed to set output %u on device %s."
 msgstr "Festlegen der Ausgabe »%u« des Geräts »%s« schlug fehl."
 
-msgid "Changing resolution at runtime is not yet supported."
-msgstr "Ein Wechsel der Auflösung zur Laufzeit wird noch nicht unterstützt."
-
 # Taktgeber klingt gut.
 msgid "Cannot operate without a clock"
 msgstr "Es kann nicht ohne einen Taktgeber gearbeitet werden."
+
+#~ msgid "Changing resolution at runtime is not yet supported."
+#~ msgstr "Ein Wechsel der Auflösung zur Laufzeit wird noch nicht unterstützt."
 
 #~ msgid "This file contains too many streams. Only playing first %d"
 #~ msgstr ""

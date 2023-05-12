@@ -443,15 +443,15 @@ gst_gl_base_src_fill (GstPushSrc * psrc, GstBuffer * buffer)
 gl_error:
   {
     g_rec_mutex_unlock (&src->priv->context_lock);
-    GST_ELEMENT_ERROR (src, RESOURCE, NOT_FOUND, (_("failed to draw pattern")),
-        (_("A GL error occurred")));
+    GST_ELEMENT_ERROR (src, RESOURCE, NOT_FOUND,
+        (_("An OpenGL error occurred")), ("failed to fill GL memory"));
     return GST_FLOW_NOT_NEGOTIATED;
   }
 not_negotiated:
   {
     g_rec_mutex_unlock (&src->priv->context_lock);
     GST_ELEMENT_ERROR (src, CORE, NEGOTIATION, (NULL),
-        (_("format wasn't negotiated before get function")));
+        ("format wasn't negotiated before get function"));
     return GST_FLOW_NOT_NEGOTIATED;
   }
 eos:
@@ -555,25 +555,9 @@ gst_gl_base_src_find_gl_context_unlocked (GstGLBaseSrc * src)
 
   _find_local_gl_context_unlocked (src);
 
-  if (!src->context) {
-    GST_OBJECT_LOCK (src->display);
-    do {
-      if (src->context) {
-        gst_object_unref (src->context);
-        src->context = NULL;
-      }
-      /* just get a GL context.  we don't care */
-      src->context =
-          gst_gl_display_get_gl_context_for_thread (src->display, NULL);
-      if (!src->context) {
-        if (!gst_gl_display_create_context (src->display,
-                src->priv->other_context, &src->context, &error)) {
-          GST_OBJECT_UNLOCK (src->display);
-          goto context_error;
-        }
-      }
-    } while (!gst_gl_display_add_context (src->display, src->context));
-    GST_OBJECT_UNLOCK (src->display);
+  if (!gst_gl_display_ensure_context (src->display, src->priv->other_context,
+          &src->context, &error)) {
+    goto context_error;
   }
   GST_INFO_OBJECT (src, "found OpenGL context %" GST_PTR_FORMAT, src->context);
 
@@ -602,8 +586,9 @@ unsupported_gl_api:
     gchar *supported_gl_api_str =
         gst_gl_api_to_string (klass->supported_gl_api);
     GST_ELEMENT_ERROR (src, RESOURCE, BUSY,
-        ("GL API's not compatible context: %s supported: %s", gl_api_str,
-            supported_gl_api_str), (NULL));
+        (_("The GL API is not compatible with the current GL context")),
+        ("Current GL API is %s, supported APIs: %s", gl_api_str,
+            supported_gl_api_str));
 
     g_free (supported_gl_api_str);
     g_free (gl_api_str);
@@ -626,7 +611,7 @@ context_error:
 error:
   {
     GST_ELEMENT_ERROR (src, LIBRARY, INIT,
-        ("Subclass failed to initialize."), (NULL));
+        (_("Subclass failed to initialize.")), (NULL));
     return FALSE;
   }
 }

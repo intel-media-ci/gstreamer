@@ -289,7 +289,7 @@ gst_gl_context_init (GstGLContext * context)
   context->priv = gst_gl_context_get_instance_private (context);
 
   context->window = NULL;
-  context->gl_vtable = g_slice_alloc0 (sizeof (GstGLFuncs));
+  context->gl_vtable = g_new0 (GstGLFuncs, 1);
 
   g_mutex_init (&context->priv->render_lock);
 
@@ -402,7 +402,7 @@ gst_gl_context_new (GstGLDisplay * display)
  *
  * @available_apis must not be %GST_GL_API_NONE or %GST_GL_API_ANY
  *
- * Returns: (transfer full): a #GstGLContext wrapping @handle
+ * Returns: (transfer full) (nullable): a #GstGLContext wrapping @handle
  *
  * Since: 1.4
  */
@@ -430,13 +430,6 @@ gst_gl_context_new_wrapped (GstGLDisplay * display, guintptr handle,
 
   context_wrap = g_object_new (GST_TYPE_GL_WRAPPED_CONTEXT, NULL);
   gst_object_ref_sink (context_wrap);
-
-  if (!context_wrap) {
-    /* subclass returned a NULL context */
-    GST_ERROR ("Could not wrap existing context");
-
-    return NULL;
-  }
 
   context = (GstGLContext *) context_wrap;
 
@@ -734,7 +727,7 @@ gst_gl_context_finalize (GObject * object)
   }
 
   if (context->gl_vtable) {
-    g_slice_free (GstGLFuncs, context->gl_vtable);
+    g_free (context->gl_vtable);
     context->gl_vtable = NULL;
   }
 
@@ -1026,8 +1019,8 @@ gst_gl_context_can_share (GstGLContext * context, GstGLContext * other_context)
 /**
  * gst_gl_context_create:
  * @context: a #GstGLContext:
- * @other_context: (allow-none): a #GstGLContext to share OpenGL objects with
- * @error: (allow-none): a #GError
+ * @other_context: (nullable): a #GstGLContext to share OpenGL objects with
+ * @error: a #GError
  *
  * Creates an OpenGL context with the specified @other_context as a context
  * to share shareable OpenGL objects with.  See the OpenGL specification for
@@ -1201,8 +1194,19 @@ _build_extension_string (GstGLContext * context)
   return ext_g_str;
 }
 
-//gboolean
-//gst_gl_context_create (GstGLContext * context, GstGLContext * other_context, GError ** error)
+typedef struct
+{
+  GError **error;
+  gboolean ret;
+} FillInfoCtx;
+
+static void
+fill_info (GstGLContext * context, gpointer data)
+{
+  FillInfoCtx *ctx = data;
+  ctx->ret = gst_gl_context_fill_info (context, ctx->error);
+}
+
 static gpointer
 gst_gl_context_create_thread (GstGLContext * context)
 {
@@ -1367,9 +1371,14 @@ gst_gl_context_create_thread (GstGLContext * context)
   g_free (display_api_s);
 
   GST_DEBUG_OBJECT (context, "Filling info");
-  if (!gst_gl_context_fill_info (context, error)) {
-    g_assert (error == NULL || *error != NULL);
-    goto failure;
+  {
+    FillInfoCtx ctx = { 0 };
+    ctx.error = error;
+    gst_gl_context_thread_add (context, fill_info, &ctx);
+    if (!ctx.ret) {
+      g_assert (error == NULL || *error != NULL);
+      goto failure;
+    }
   }
 
   context->priv->alive = TRUE;

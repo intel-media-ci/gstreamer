@@ -80,6 +80,18 @@
                     }
                 },
                 "properties": {
+                    "qos": {
+                        "blurb": "Generate Quality-of-Service events upstream",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "false",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gboolean",
+                        "writable": true
+                    },
                     "sync": {
                         "blurb": "Synchronize to pipeline clock",
                         "conditionally-available": false,
@@ -906,6 +918,18 @@
                         "type": "guint",
                         "writable": true
                     },
+                    "file-mode": {
+                        "blurb": "Specify file mode used to open file",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "truncate (1)",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "GstFileSinkFileMode",
+                        "writable": true
+                    },
                     "location": {
                         "blurb": "Location of the file to write",
                         "conditionally-available": false,
@@ -1322,6 +1346,18 @@
                     },
                     "cache-buffers": {
                         "blurb": "Cache buffers for active-pad",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "false",
+                        "mutable": "ready",
+                        "readable": true,
+                        "type": "gboolean",
+                        "writable": true
+                    },
+                    "drop-backwards": {
+                        "blurb": "Drop backwards buffers on pad switch",
                         "conditionally-available": false,
                         "construct": false,
                         "construct-only": false,
@@ -2631,6 +2667,26 @@
                         "desc": "Unbuffered",
                         "name": "unbuffered",
                         "value": "2"
+                    }
+                ]
+            },
+            "GstFileSinkFileMode": {
+                "kind": "enum",
+                "values": [
+                    {
+                        "desc": "Truncate file (mode wb)",
+                        "name": "truncate",
+                        "value": "1"
+                    },
+                    {
+                        "desc": "Append file (mode ab)",
+                        "name": "output",
+                        "value": "2"
+                    },
+                    {
+                        "desc": "Overwrite file without truncating (mode rb+)",
+                        "name": "overwrite",
+                        "value": "3"
                     }
                 ]
             },

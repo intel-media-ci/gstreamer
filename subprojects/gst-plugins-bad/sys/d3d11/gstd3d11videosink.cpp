@@ -170,12 +170,11 @@ struct _GstD3D11VideoSink
   GstD3D11Window *window;
   gint video_width;
   gint video_height;
-
   GstVideoInfo info;
-
   guintptr window_id;
-
   gboolean caps_updated;
+  GstBuffer *prepared_buffer;
+  GstBufferPool *pool;
 
   /* properties */
   gint adapter;
@@ -195,7 +194,6 @@ struct _GstD3D11VideoSink
 
   /* For drawing on user texture */
   gboolean drawing;
-  GstBuffer *current_buffer;
   CRITICAL_SECTION lock;
 
   gchar *title;
@@ -240,6 +238,8 @@ static gboolean gst_d3d11_video_sink_unlock (GstBaseSink * sink);
 static gboolean gst_d3d11_video_sink_unlock_stop (GstBaseSink * sink);
 static gboolean gst_d3d11_video_sink_event (GstBaseSink * sink,
     GstEvent * event);
+static GstFlowReturn gst_d3d11_video_sink_prepare (GstBaseSink * sink,
+    GstBuffer * buffer);
 static GstFlowReturn
 gst_d3d11_video_sink_show_frame (GstVideoSink * sink, GstBuffer * buf);
 static gboolean gst_d3d11_video_sink_prepare_window (GstD3D11VideoSink * self);
@@ -484,6 +484,7 @@ gst_d3d11_video_sink_class_init (GstD3D11VideoSinkClass * klass)
   basesink_class->unlock_stop =
       GST_DEBUG_FUNCPTR (gst_d3d11_video_sink_unlock_stop);
   basesink_class->event = GST_DEBUG_FUNCPTR (gst_d3d11_video_sink_event);
+  basesink_class->prepare = GST_DEBUG_FUNCPTR (gst_d3d11_video_sink_prepare);
 
   videosink_class->show_frame =
       GST_DEBUG_FUNCPTR (gst_d3d11_video_sink_show_frame);
@@ -707,7 +708,7 @@ gst_d3d11_video_sink_set_caps (GstBaseSink * sink, GstCaps * caps)
   return TRUE;
 }
 
-static gboolean
+static GstFlowReturn
 gst_d3d11_video_sink_update_window (GstD3D11VideoSink * self, GstCaps * caps)
 {
   gint video_width, video_height;
@@ -716,10 +717,19 @@ gst_d3d11_video_sink_update_window (GstD3D11VideoSink * self, GstCaps * caps)
   guint num, den;
   GError *error = NULL;
   GstStructure *config;
+  GstD3D11Window *window;
+  GstFlowReturn ret = GST_FLOW_OK;
+  GstD3D11AllocationParams *params;
+  guint bind_flags = D3D11_BIND_SHADER_RESOURCE;
+  GstD3D11Format device_format;
 
   GST_DEBUG_OBJECT (self, "Updating window with caps %" GST_PTR_FORMAT, caps);
 
   self->caps_updated = FALSE;
+  if (self->pool) {
+    gst_buffer_pool_set_active (self->pool, FALSE);
+    gst_clear_object (&self->pool);
+  }
 
   EnterCriticalSection (&self->lock);
   if (!gst_d3d11_video_sink_prepare_window (self)) {
@@ -728,14 +738,14 @@ gst_d3d11_video_sink_update_window (GstD3D11VideoSink * self, GstCaps * caps)
     GST_ELEMENT_ERROR (self, RESOURCE, NOT_FOUND, (nullptr),
         ("Failed to open window."));
 
-    return FALSE;
+    return GST_FLOW_ERROR;
   }
 
   if (!gst_video_info_from_caps (&self->info, caps)) {
     GST_DEBUG_OBJECT (self,
         "Could not locate image format from caps %" GST_PTR_FORMAT, caps);
     LeaveCriticalSection (&self->lock);
-    return FALSE;
+    return GST_FLOW_ERROR;
   }
 
   video_width = GST_VIDEO_INFO_WIDTH (&self->info);
@@ -754,7 +764,7 @@ gst_d3d11_video_sink_update_window (GstD3D11VideoSink * self, GstCaps * caps)
 
     GST_ELEMENT_ERROR (self, CORE, NEGOTIATION, (nullptr),
         ("Error calculating the output display ratio of the video."));
-    return FALSE;
+    return GST_FLOW_ERROR;
   }
 
   GST_DEBUG_OBJECT (self,
@@ -797,7 +807,7 @@ gst_d3d11_video_sink_update_window (GstD3D11VideoSink * self, GstCaps * caps)
 
     GST_ELEMENT_ERROR (self, CORE, NEGOTIATION, (nullptr),
         ("Error calculating the output display ratio of the video."));
-    return FALSE;
+    return GST_FLOW_ERROR;
   }
 
   if (self->pending_render_rect) {
@@ -813,30 +823,68 @@ gst_d3d11_video_sink_update_window (GstD3D11VideoSink * self, GstCaps * caps)
       GST_D3D11_CONVERTER_OPT_PRIMARIES_MODE,
       GST_TYPE_VIDEO_PRIMARIES_MODE, self->primaries_mode, nullptr);
 
-  if (!gst_d3d11_window_prepare (self->window, GST_VIDEO_SINK_WIDTH (self),
-          GST_VIDEO_SINK_HEIGHT (self), caps, config, self->display_format,
-          &error)) {
+  window = (GstD3D11Window *) gst_object_ref (self->window);
+  LeaveCriticalSection (&self->lock);
+
+  ret = gst_d3d11_window_prepare (window, GST_VIDEO_SINK_WIDTH (self),
+      GST_VIDEO_SINK_HEIGHT (self), caps, config, self->display_format, &error);
+  if (ret != GST_FLOW_OK) {
     GstMessage *error_msg;
 
-    LeaveCriticalSection (&self->lock);
+    if (ret == GST_FLOW_FLUSHING) {
+      GstD3D11CSLockGuard lk (&self->lock);
+      GST_WARNING_OBJECT (self, "Couldn't prepare window but we are flushing");
+      gst_d3d11_window_unprepare (self->window);
+      gst_clear_object (&self->window);
+      gst_object_unref (window);
+
+      return GST_FLOW_FLUSHING;
+    }
 
     GST_ERROR_OBJECT (self, "cannot create swapchain");
     error_msg = gst_message_new_error (GST_OBJECT_CAST (self),
         error, "Failed to prepare d3d11window");
     g_clear_error (&error);
     gst_element_post_message (GST_ELEMENT (self), error_msg);
+    gst_object_unref (window);
 
-    return FALSE;
+    return GST_FLOW_ERROR;
   }
 
   if (self->title) {
-    gst_d3d11_window_set_title (self->window, self->title);
+    gst_d3d11_window_set_title (window, self->title);
     g_clear_pointer (&self->title, g_free);
   }
 
-  LeaveCriticalSection (&self->lock);
+  gst_object_unref (window);
 
-  return TRUE;
+  self->pool = gst_d3d11_buffer_pool_new (self->device);
+  config = gst_buffer_pool_get_config (self->pool);
+
+  if (gst_d3d11_device_get_format (self->device,
+          GST_VIDEO_INFO_FORMAT (&self->info), &device_format) &&
+      (device_format.format_support[0] &
+          (guint) D3D11_FORMAT_SUPPORT_RENDER_TARGET) != 0) {
+    bind_flags |= D3D11_BIND_RENDER_TARGET;
+  }
+
+  params = gst_d3d11_allocation_params_new (self->device, &self->info,
+      GST_D3D11_ALLOCATION_FLAG_DEFAULT, bind_flags, 0);
+  gst_buffer_pool_config_set_d3d11_allocation_params (config, params);
+  gst_d3d11_allocation_params_free (params);
+
+  gst_buffer_pool_config_set_params (config, caps, self->info.size, 0, 0);
+  if (!gst_buffer_pool_set_config (self->pool, config) ||
+      !gst_buffer_pool_set_active (self->pool, TRUE)) {
+    GST_ERROR_OBJECT (self, "Couldn't setup buffer pool");
+    gst_clear_object (&self->pool);
+
+    GST_ELEMENT_ERROR (self, RESOURCE, FAILED, (nullptr),
+        ("Couldn't setup buffer pool"));
+    return GST_FLOW_ERROR;
+  }
+
+  return GST_FLOW_OK;
 }
 
 static void
@@ -997,6 +1045,9 @@ done:
   g_signal_connect (self->window, "present",
       G_CALLBACK (gst_d3d11_video_sink_present), self);
 
+  GST_DEBUG_OBJECT (self,
+      "Have prepared window %" GST_PTR_FORMAT, self->window);
+
   return TRUE;
 }
 
@@ -1007,6 +1058,12 @@ gst_d3d11_video_sink_stop (GstBaseSink * sink)
   GstD3D11CSLockGuard lk (&self->lock);
 
   GST_DEBUG_OBJECT (self, "Stop");
+
+  gst_clear_buffer (&self->prepared_buffer);
+  if (self->pool) {
+    gst_buffer_pool_set_active (self->pool, FALSE);
+    gst_clear_object (&self->pool);
+  }
 
   if (self->window)
     gst_d3d11_window_unprepare (self->window);
@@ -1108,7 +1165,7 @@ gst_d3d11_video_sink_propose_allocation (GstBaseSink * sink, GstQuery * query)
    * on window-resize event */
   gst_query_add_allocation_pool (query, pool, size, 2, 0);
   if (pool)
-    g_object_unref (pool);
+    gst_object_unref (pool);
 
   gst_query_add_allocation_meta (query, GST_VIDEO_META_API_TYPE, NULL);
   gst_query_add_allocation_meta (query,
@@ -1290,34 +1347,77 @@ gst_d3d11_video_sink_check_device_update (GstD3D11VideoSink * self,
 }
 
 static GstFlowReturn
-gst_d3d11_video_sink_show_frame (GstVideoSink * sink, GstBuffer * buf)
+gst_d3d11_video_sink_prepare (GstBaseSink * sink, GstBuffer * buffer)
 {
   GstD3D11VideoSink *self = GST_D3D11_VIDEO_SINK (sink);
-  GstFlowReturn ret = GST_FLOW_OK;
+  GstFlowReturn ret;
 
-  gst_d3d11_video_sink_check_device_update (self, buf);
+  gst_clear_buffer (&self->prepared_buffer);
 
+  gst_d3d11_video_sink_check_device_update (self, buffer);
   if (self->caps_updated || !self->window) {
     GstCaps *caps = gst_pad_get_current_caps (GST_BASE_SINK_PAD (sink));
-    gboolean update_ret;
 
     /* shouldn't happen */
     if (!caps)
       return GST_FLOW_NOT_NEGOTIATED;
 
-    update_ret = gst_d3d11_video_sink_update_window (self, caps);
+    ret = gst_d3d11_video_sink_update_window (self, caps);
     gst_caps_unref (caps);
 
-    if (!update_ret)
-      return GST_FLOW_NOT_NEGOTIATED;
+    if (ret != GST_FLOW_OK)
+      return ret;
   }
 
-  gst_d3d11_window_show (self->window);
+  if (!gst_is_d3d11_buffer (buffer)) {
+    GstVideoOverlayCompositionMeta *overlay_meta;
+
+    ret = gst_buffer_pool_acquire_buffer (self->pool, &self->prepared_buffer,
+        nullptr);
+    if (ret != GST_FLOW_OK)
+      return ret;
+
+    gst_d3d11_buffer_copy_into (self->prepared_buffer, buffer, &self->info);
+    /* Upload to default texture */
+    for (guint i = 0; i < gst_buffer_n_memory (self->prepared_buffer); i++) {
+      GstMemory *mem = gst_buffer_peek_memory (self->prepared_buffer, i);
+      GstMapInfo info;
+      if (!gst_memory_map (mem,
+              &info, (GstMapFlags) (GST_MAP_READ | GST_MAP_D3D11))) {
+        GST_ERROR_OBJECT (self, "Couldn't map fallback buffer");
+        gst_clear_buffer (&self->prepared_buffer);
+        return GST_FLOW_ERROR;
+      }
+
+      gst_memory_unmap (mem, &info);
+    }
+
+    overlay_meta = gst_buffer_get_video_overlay_composition_meta (buffer);
+    if (overlay_meta) {
+      gst_buffer_add_video_overlay_composition_meta (self->prepared_buffer,
+          overlay_meta->overlay);
+    }
+  } else {
+    self->prepared_buffer = gst_buffer_ref (buffer);
+  }
+
+  return GST_FLOW_OK;
+}
+
+static GstFlowReturn
+gst_d3d11_video_sink_show_frame (GstVideoSink * sink, GstBuffer * buf)
+{
+  GstD3D11VideoSink *self = GST_D3D11_VIDEO_SINK (sink);
+  GstFlowReturn ret = GST_FLOW_OK;
+
+  if (!self->prepared_buffer) {
+    GST_ERROR_OBJECT (self, "No prepared buffer");
+    return GST_FLOW_ERROR;
+  }
 
   if (self->draw_on_shared_texture) {
     GstD3D11CSLockGuard lk (&self->lock);
 
-    self->current_buffer = buf;
     self->drawing = TRUE;
 
     GST_LOG_OBJECT (self, "Begin drawing");
@@ -1328,9 +1428,9 @@ gst_d3d11_video_sink_show_frame (GstVideoSink * sink, GstBuffer * buf)
 
     GST_LOG_OBJECT (self, "End drawing");
     self->drawing = FALSE;
-    self->current_buffer = nullptr;
   } else {
-    ret = gst_d3d11_window_render (self->window, buf);
+    gst_d3d11_window_show (self->window);
+    ret = gst_d3d11_window_render (self->window, self->prepared_buffer);
   }
 
   if (ret == GST_D3D11_WINDOW_FLOW_CLOSED) {
@@ -1339,6 +1439,8 @@ gst_d3d11_video_sink_show_frame (GstVideoSink * sink, GstBuffer * buf)
 
     ret = GST_FLOW_ERROR;
   }
+
+  gst_clear_buffer (&self->prepared_buffer);
 
   return ret;
 }
@@ -1451,7 +1553,7 @@ gst_d3d11_video_sink_draw_action (GstD3D11VideoSink * self,
   }
 
   GstD3D11CSLockGuard lk (&self->lock);
-  if (!self->drawing || !self->current_buffer) {
+  if (!self->drawing || !self->prepared_buffer) {
     GST_WARNING_OBJECT (self, "Nothing to draw");
     return FALSE;
   }
@@ -1462,7 +1564,7 @@ gst_d3d11_video_sink_draw_action (GstD3D11VideoSink * self,
       release_key);
 
   ret = gst_d3d11_window_render_on_shared_handle (self->window,
-      self->current_buffer, shared_handle, texture_misc_flags, acquire_key,
+      self->prepared_buffer, shared_handle, texture_misc_flags, acquire_key,
       release_key);
 
   return ret == GST_FLOW_OK;

@@ -814,13 +814,8 @@ gst_mxf_demux_update_essence_tracks (GstMXFDemux * demux)
       gboolean new = FALSE;
 
       if (!package->parent.tracks[j]
-          || !MXF_IS_METADATA_TIMELINE_TRACK (package->parent.tracks[j])) {
-        GST_DEBUG_OBJECT (demux,
-            "Skipping non-timeline track (id:%d number:0x%08x)",
-            package->parent.tracks[j]->track_id,
-            package->parent.tracks[j]->track_number);
+          || !MXF_IS_METADATA_TIMELINE_TRACK (package->parent.tracks[j]))
         continue;
-      }
 
       track = MXF_METADATA_TIMELINE_TRACK (package->parent.tracks[j]);
       if ((track->parent.type & 0xf0) != 0x30) {
@@ -1174,16 +1169,21 @@ gst_mxf_demux_show_topology (GstMXFDemux * demux)
   for (tmp = file_packages; tmp; tmp = tmp->next) {
     MXFMetadataMaterialPackage *pack = (MXFMetadataMaterialPackage *) tmp->data;
     MXFMetadataSourcePackage *src = (MXFMetadataSourcePackage *) pack;
+#ifndef GST_DISABLE_GST_DEBUG
     MXFMetadataEssenceContainerData *econt =
         essence_container_for_source_package (storage, src);
     GST_DEBUG_OBJECT (demux,
         "  Package (body_sid:%d index_sid:%d top_level:%d) with %d tracks , UID:%s",
-        econt->body_sid, econt->index_sid, src->top_level, pack->n_tracks,
-        mxf_umid_to_string (&pack->package_uid, str));
+        econt ? econt->body_sid : 0, econt ? econt->index_sid : 0,
+        src->top_level, pack->n_tracks, mxf_umid_to_string (&pack->package_uid,
+            str));
+#endif
     GST_DEBUG_OBJECT (demux, "    Package descriptor : %s",
         g_type_name (G_OBJECT_TYPE (src->descriptor)));
     for (i = 0; i < pack->n_tracks; i++) {
       MXFMetadataTrack *track = pack->tracks[i];
+      if (!track)
+        continue;
       MXFMetadataSequence *sequence = track->sequence;
       guint di, si;
       if (MXF_IS_METADATA_TIMELINE_TRACK (track)) {
@@ -1201,9 +1201,21 @@ gst_mxf_demux_show_topology (GstMXFDemux * demux)
       }
       for (di = 0; di < track->n_descriptor; di++) {
         MXFMetadataFileDescriptor *desc = track->descriptor[di];
+        MXFMetadataGenericDescriptor *generic =
+            (MXFMetadataGenericDescriptor *) desc;
+        guint subdi;
+
         GST_DEBUG_OBJECT (demux, "      Descriptor %s %s",
             g_type_name (G_OBJECT_TYPE (desc)),
             mxf_ul_to_string (&desc->essence_container, str));
+        for (subdi = 0; subdi < generic->n_sub_descriptors; subdi++) {
+          MXFMetadataGenericDescriptor *subdesc =
+              generic->sub_descriptors[subdi];
+          if (subdesc) {
+            GST_DEBUG_OBJECT (demux, "        Sub-Descriptor %s",
+                g_type_name (G_OBJECT_TYPE (subdesc)));
+          }
+        }
       }
       GST_DEBUG_OBJECT (demux,
           "      Sequence duration:%" G_GINT64_FORMAT
@@ -4833,8 +4845,8 @@ gst_mxf_demux_seek_push (GstMXFDemux * demux, GstEvent * event)
   if (format != GST_FORMAT_TIME)
     goto wrong_format;
 
-  flush = ! !(flags & GST_SEEK_FLAG_FLUSH);
-  keyframe = ! !(flags & GST_SEEK_FLAG_KEY_UNIT);
+  flush = !!(flags & GST_SEEK_FLAG_FLUSH);
+  keyframe = !!(flags & GST_SEEK_FLAG_KEY_UNIT);
 
   /* Work on a copy until we are sure the seek succeeded. */
   memcpy (&seeksegment, &demux->segment, sizeof (GstSegment));
@@ -5124,8 +5136,8 @@ gst_mxf_demux_seek_pull (GstMXFDemux * demux, GstEvent * event)
   if (rate <= 0.0)
     goto wrong_rate;
 
-  flush = ! !(flags & GST_SEEK_FLAG_FLUSH);
-  keyframe = ! !(flags & GST_SEEK_FLAG_KEY_UNIT);
+  flush = !!(flags & GST_SEEK_FLAG_FLUSH);
+  keyframe = !!(flags & GST_SEEK_FLAG_KEY_UNIT);
 
   if (!demux->index_table_segments_collected) {
     collect_index_table_segments (demux);

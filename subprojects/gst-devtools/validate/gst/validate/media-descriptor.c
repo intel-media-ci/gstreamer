@@ -19,6 +19,9 @@
  * Free Software Foundation, Inc., 51 Franklin St, Fifth Floor,
  * Boston, MA 02110-1301, USA.
  */
+#ifdef HAVE_CONFIG_H
+#  include "config.h"
+#endif
 
 #include <string.h>
 #include "media-descriptor.h"
@@ -43,7 +46,7 @@ free_tagnode (GstValidateMediaTagNode * tagnode)
   if (tagnode->taglist)
     gst_tag_list_unref (tagnode->taglist);
 
-  g_slice_free (GstValidateMediaTagNode, tagnode);
+  g_free (tagnode);
 }
 
 static inline void
@@ -52,7 +55,7 @@ free_tagsnode (GstValidateMediaTagsNode * tagsnode)
   g_free (tagsnode->str_open);
   g_free (tagsnode->str_close);
   g_list_free_full (tagsnode->tags, (GDestroyNotify) free_tagnode);
-  g_slice_free (GstValidateMediaTagsNode, tagsnode);
+  g_free (tagsnode);
 }
 
 static inline void
@@ -64,7 +67,7 @@ free_framenode (GstValidateMediaFrameNode * framenode)
   if (framenode->buf)
     gst_buffer_unref (framenode->buf);
 
-  g_slice_free (GstValidateMediaFrameNode, framenode);
+  g_free (framenode);
 }
 
 static inline void
@@ -73,7 +76,7 @@ free_segmentnode (GstValidateSegmentNode * segmentnode)
   g_free (segmentnode->str_open);
   g_free (segmentnode->str_close);
 
-  g_slice_free (GstValidateSegmentNode, segmentnode);
+  g_free (segmentnode);
 }
 
 static inline void
@@ -95,7 +98,7 @@ free_streamnode (GstValidateMediaStreamNode * streamnode)
   g_free (streamnode->id);
   g_free (streamnode->str_open);
   g_free (streamnode->str_close);
-  g_slice_free (GstValidateMediaStreamNode, streamnode);
+  g_free (streamnode);
 }
 
 void
@@ -113,7 +116,7 @@ gst_validate_filenode_free (GstValidateMediaFileNode * filenode)
   g_free (filenode->str_open);
   g_free (filenode->str_close);
 
-  g_slice_free (GstValidateMediaFileNode, filenode);
+  g_free (filenode);
 }
 
 gboolean
@@ -159,7 +162,7 @@ static void
 gst_validate_media_descriptor_init (GstValidateMediaDescriptor * self)
 {
   self->priv = gst_validate_media_descriptor_get_instance_private (self);
-  self->priv->filenode = g_slice_new0 (GstValidateMediaFileNode);
+  self->priv->filenode = g_new0 (GstValidateMediaFileNode, 1);
 }
 
 static void

@@ -45,6 +45,10 @@
 #include <mmsystem.h>
 #endif
 
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
+
 #include "gst-play-kb.h"
 
 #define VOLUME_STEPS 20
@@ -117,6 +121,7 @@ typedef struct
   GstPlayTrickMode trick_mode;
   gdouble rate;
   gdouble start_position;
+  gboolean accurate_seeks;
 
   /* keyboard state tracking */
   gboolean shift_pressed;
@@ -170,7 +175,7 @@ static GstPlay *
 play_new (gchar ** uris, const gchar * audio_sink, const gchar * video_sink,
     gboolean gapless, gboolean instant_uri, gdouble initial_volume,
     gboolean verbose, const gchar * flags_string, gboolean use_playbin3,
-    gdouble start_position)
+    gdouble start_position, gboolean no_position, gboolean accurate_seeks)
 {
   GstElement *sink, *playbin;
   GstPlay *play;
@@ -250,8 +255,9 @@ play_new (gchar ** uris, const gchar * audio_sink, const gchar * video_sink,
   play->bus_watch = gst_bus_add_watch (GST_ELEMENT_BUS (play->playbin),
       play_bus_msg, play);
 
-  /* FIXME: make configurable incl. 0 for disable */
-  play->timeout = g_timeout_add (100, play_timeout, play);
+  if (!no_position) {
+    play->timeout = g_timeout_add (100, play_timeout, play);
+  }
 
   play->missing = NULL;
   play->buffering = FALSE;
@@ -276,6 +282,7 @@ play_new (gchar ** uris, const gchar * audio_sink, const gchar * video_sink,
   play->rate = 1.0;
   play->trick_mode = GST_PLAY_TRICK_MODE_NONE;
   play->start_position = start_position;
+  play->accurate_seeks = accurate_seeks;
   return play;
 }
 
@@ -292,7 +299,8 @@ play_free (GstPlay * play)
   gst_object_unref (play->playbin);
 
   g_source_remove (play->bus_watch);
-  g_source_remove (play->timeout);
+  if (play->timeout != 0)
+    g_source_remove (play->timeout);
   g_main_loop_unref (play->loop);
 
   g_strfreev (play->uris);
@@ -1059,14 +1067,17 @@ play_do_seek (GstPlay * play, gint64 pos, gdouble rate, GstPlayTrickMode mode)
 
   /* No instant rate change, need to do a flushing seek */
   seek_flags |= GST_SEEK_FLAG_FLUSH;
+
+  /* Seek to keyframe if not doing accurate seeks */
+  seek_flags |=
+      play->accurate_seeks ? GST_SEEK_FLAG_ACCURATE : GST_SEEK_FLAG_KEY_UNIT;
+
   if (rate >= 0)
-    seek = gst_event_new_seek (rate, GST_FORMAT_TIME,
-        seek_flags | GST_SEEK_FLAG_ACCURATE,
+    seek = gst_event_new_seek (rate, GST_FORMAT_TIME, seek_flags,
         /* start */ GST_SEEK_TYPE_SET, pos,
         /* stop */ GST_SEEK_TYPE_SET, GST_CLOCK_TIME_NONE);
   else
-    seek = gst_event_new_seek (rate, GST_FORMAT_TIME,
-        seek_flags | GST_SEEK_FLAG_ACCURATE,
+    seek = gst_event_new_seek (rate, GST_FORMAT_TIME, seek_flags,
         /* start */ GST_SEEK_TYPE_SET, 0,
         /* stop */ GST_SEEK_TYPE_SET, pos);
 
@@ -1592,8 +1603,8 @@ clear_winmm_timer_resolution (guint resolution)
 }
 #endif
 
-int
-main (int argc, char **argv)
+static int
+real_main (int argc, char **argv)
 {
   GstPlay *play;
   GPtrArray *playlist;
@@ -1605,6 +1616,7 @@ main (int argc, char **argv)
   gboolean shuffle = FALSE;
   gdouble volume = -1;
   gdouble start_position = 0;
+  gboolean accurate_seeks = FALSE;
   gchar **filenames = NULL;
   gchar *audio_sink = NULL;
   gchar *video_sink = NULL;
@@ -1615,6 +1627,7 @@ main (int argc, char **argv)
   GOptionContext *ctx;
   gchar *playlist_file = NULL;
   gboolean use_playbin3 = FALSE;
+  gboolean no_position = FALSE;
 #ifdef HAVE_WINMM
   guint winmm_timer_resolution = 0;
 #endif
@@ -1643,6 +1656,8 @@ main (int argc, char **argv)
         N_("Volume"), NULL},
     {"start-position", 's', 0, G_OPTION_ARG_DOUBLE, &start_position,
         N_("Start position in seconds."), NULL},
+    {"accurate-seeks", 'a', 0, G_OPTION_ARG_NONE, &accurate_seeks,
+        N_("Enable accurate seeking"), NULL},
     {"playlist", 0, 0, G_OPTION_ARG_FILENAME, &playlist_file,
         N_("Playlist file containing input media files"), NULL},
     {"instant-rate-changes", 'i', 0, G_OPTION_ARG_NONE, &instant_rate_changes,
@@ -1652,13 +1667,16 @@ main (int argc, char **argv)
     {"quiet", 'q', 0, G_OPTION_ARG_NONE, &quiet,
         N_("Do not print any output (apart from errors)"), NULL},
     {"use-playbin3", 0, 0, G_OPTION_ARG_NONE, &use_playbin3,
-          N_("Use playbin3 pipeline"
+          N_("Use playbin3 pipeline "
               "(default varies depending on 'USE_PLAYBIN' env variable)"),
         NULL},
     {"wait-on-eos", 0, 0, G_OPTION_ARG_NONE, &wait_on_eos,
           N_
           ("Keep showing the last frame on EOS until quit or playlist change command "
               "(gapless is ignored)"),
+        NULL},
+    {"no-position", 0, 0, G_OPTION_ARG_NONE, &no_position,
+          N_("Do not print current position of pipeline"),
         NULL},
     {G_OPTION_REMAINING, 0, 0, G_OPTION_ARG_FILENAME_ARRAY, &filenames, NULL},
     {NULL}
@@ -1680,13 +1698,22 @@ main (int argc, char **argv)
   ctx = g_option_context_new ("FILE1|URI1 [FILE2|URI2] [FILE3|URI3] ...");
   g_option_context_add_main_entries (ctx, options, GETTEXT_PACKAGE);
   g_option_context_add_group (ctx, gst_init_get_option_group ());
-  if (!g_option_context_parse (ctx, &argc, &argv, &err)) {
+#ifdef G_OS_WIN32
+  if (!g_option_context_parse_strv (ctx, &argv, &err))
+#else
+  if (!g_option_context_parse (ctx, &argc, &argv, &err))
+#endif
+  {
     gst_print ("Error initializing: %s\n", GST_STR_NULL (err->message));
     g_option_context_free (ctx);
     g_clear_error (&err);
     return 1;
   }
   g_option_context_free (ctx);
+
+#ifdef G_OS_WIN32
+  argc = g_strv_length (argv);
+#endif
 
   GST_DEBUG_CATEGORY_INIT (play_debug, "play", 0, "gst-play");
 
@@ -1771,7 +1798,8 @@ main (int argc, char **argv)
   /* prepare */
   play =
       play_new (uris, audio_sink, video_sink, gapless, instant_uri, volume,
-      verbose, flags, use_playbin3, start_position);
+      verbose, flags, use_playbin3, start_position, no_position,
+      accurate_seeks);
 
   if (play == NULL) {
     gst_printerr
@@ -1821,4 +1849,26 @@ main (int argc, char **argv)
   gst_print ("\n");
   gst_deinit ();
   return 0;
+}
+
+int
+main (int argc, char *argv[])
+{
+  int ret;
+
+#ifdef G_OS_WIN32
+  argv = g_win32_get_command_line ();
+#endif
+
+#if defined(__APPLE__) && TARGET_OS_MAC && !TARGET_OS_IPHONE
+  ret = gst_macos_main ((GstMainFunc) real_main, argc, argv, NULL);
+#else
+  ret = real_main (argc, argv);
+#endif
+
+#ifdef G_OS_WIN32
+  g_strfreev (argv);
+#endif
+
+  return ret;
 }

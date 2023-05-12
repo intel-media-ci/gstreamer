@@ -2,6 +2,10 @@
 #include <gst/gst.h>
 #include <gst/pbutils/pbutils.h>
 
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
+
 /* Structure to contain all our information, so we can pass it around */
 typedef struct _CustomData
 {
@@ -181,12 +185,12 @@ on_finished_cb (GstDiscoverer * discoverer, CustomData * data)
 }
 
 int
-main (int argc, char **argv)
+tutorial_main (int argc, char **argv)
 {
   CustomData data;
   GError *err = NULL;
   gchar *uri =
-      "https://www.freedesktop.org/software/gstreamer-sdk/data/media/sintel_trailer-480p.webm";
+      "https://gstreamer.freedesktop.org/data/media/sintel_trailer-480p.webm";
 
   /* if a URI was provided, use it instead of the default one */
   if (argc > 1) {
@@ -237,4 +241,14 @@ main (int argc, char **argv)
   g_main_loop_unref (data.loop);
 
   return 0;
+}
+
+int
+main (int argc, char *argv[])
+{
+#if defined(__APPLE__) && TARGET_OS_MAC && !TARGET_OS_IPHONE
+  return gst_macos_main (tutorial_main, argc, argv, NULL);
+#else
+  return tutorial_main (argc, argv);
+#endif
 }

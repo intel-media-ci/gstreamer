@@ -1,6 +1,10 @@
 #include <stdio.h>
 #include <gst/gst.h>
 
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
+
 /* Structure to contain all our information, so we can pass it around */
 typedef struct _CustomData
 {
@@ -32,7 +36,7 @@ static gboolean handle_keyboard (GIOChannel * source, GIOCondition cond,
     CustomData * data);
 
 int
-main (int argc, char *argv[])
+tutorial_main (int argc, char *argv[])
 {
   CustomData data;
   GstBus *bus;
@@ -53,12 +57,12 @@ main (int argc, char *argv[])
 
   /* Set the URI to play */
   g_object_set (data.playbin, "uri",
-      "https://www.freedesktop.org/software/gstreamer-sdk/data/media/sintel_trailer-480p.ogv",
+      "https://gstreamer.freedesktop.org/data/media/sintel_trailer-480p.ogv",
       NULL);
 
   /* Set the subtitle URI to play and some font description */
   g_object_set (data.playbin, "suburi",
-      "https://www.freedesktop.org/software/gstreamer-sdk/data/media/sintel_trailer_gr.srt",
+      "https://gstreamer.freedesktop.org/data/media/sintel_trailer_gr.srt",
       NULL);
   g_object_set (data.playbin, "subtitle-font-desc", "Sans, 18", NULL);
 
@@ -243,4 +247,14 @@ handle_keyboard (GIOChannel * source, GIOCondition cond, CustomData * data)
   }
   g_free (str);
   return TRUE;
+}
+
+int
+main (int argc, char *argv[])
+{
+#if defined(__APPLE__) && TARGET_OS_MAC && !TARGET_OS_IPHONE
+  return gst_macos_main (tutorial_main, argc, argv, NULL);
+#else
+  return tutorial_main (argc, argv);
+#endif
 }

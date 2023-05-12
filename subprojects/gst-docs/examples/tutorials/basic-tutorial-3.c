@@ -1,5 +1,9 @@
 #include <gst/gst.h>
 
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
+
 /* Structure to contain all our information, so we can pass it to callbacks */
 typedef struct _CustomData
 {
@@ -15,7 +19,7 @@ static void pad_added_handler (GstElement * src, GstPad * pad,
     CustomData * data);
 
 int
-main (int argc, char *argv[])
+tutorial_main (int argc, char *argv[])
 {
   CustomData data;
   GstBus *bus;
@@ -53,7 +57,7 @@ main (int argc, char *argv[])
 
   /* Set the URI to play */
   g_object_set (data.source, "uri",
-      "https://www.freedesktop.org/software/gstreamer-sdk/data/media/sintel_trailer-480p.webm",
+      "https://gstreamer.freedesktop.org/data/media/sintel_trailer-480p.webm",
       NULL);
 
   /* Connect to the pad-added signal */
@@ -165,4 +169,14 @@ exit:
 
   /* Unreference the sink pad */
   gst_object_unref (sink_pad);
+}
+
+int
+main (int argc, char *argv[])
+{
+#if defined(__APPLE__) && TARGET_OS_MAC && !TARGET_OS_IPHONE
+  return gst_macos_main (tutorial_main, argc, argv, NULL);
+#else
+  return tutorial_main (argc, argv);
+#endif
 }

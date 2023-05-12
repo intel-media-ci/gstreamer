@@ -455,8 +455,7 @@ gst_tag_merge_strings_with_comma (GValue * dest, const GValue * src)
   }
 
   g_value_init (dest, G_TYPE_STRING);
-  g_value_take_string (dest, str->str);
-  g_string_free (str, FALSE);
+  g_value_take_string (dest, g_string_free (str, FALSE));
 }
 
 static GstTagInfo *
@@ -549,7 +548,7 @@ gst_tag_register_static (const gchar * name, GstTagFlag flag, GType type,
     return;
   }
 
-  info = g_slice_new (GstTagInfo);
+  info = g_new (GstTagInfo, 1);
   info->flag = flag;
   info->type = type;
   info->name_quark = g_quark_from_static_string (name);
@@ -693,7 +692,7 @@ gst_tag_list_new_internal (GstStructure * s, GstTagScope scope)
 
   g_assert (s != NULL);
 
-  tag_list = (GstTagList *) g_slice_new (GstTagListImpl);
+  tag_list = (GstTagList *) g_new (GstTagListImpl, 1);
 
   gst_mini_object_init (GST_MINI_OBJECT_CAST (tag_list), 0, GST_TYPE_TAG_LIST,
       (GstMiniObjectCopyFunction) __gst_tag_list_copy, NULL,
@@ -724,7 +723,7 @@ __gst_tag_list_free (GstTagList * list)
   memset (list, 0xff, sizeof (GstTagListImpl));
 #endif
 
-  g_slice_free1 (sizeof (GstTagListImpl), list);
+  g_free (list);
 }
 
 static GstTagList *

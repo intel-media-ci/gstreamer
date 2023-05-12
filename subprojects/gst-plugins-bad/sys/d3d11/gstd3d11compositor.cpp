@@ -320,6 +320,7 @@ struct _GstD3D11Compositor
   GstD3D11Device *device;
 
   GstBuffer *fallback_buf;
+  GstCaps *negotiated_caps;
 
   GstD3D11CompositorQuad *checker_background;
   /* black/white/transparent */
@@ -356,6 +357,7 @@ enum
 #define DEFAULT_PAD_GAMMA_MODE GST_VIDEO_GAMMA_MODE_NONE
 #define DEFAULT_PAD_PRIMARIES_MODE GST_VIDEO_PRIMARIES_MODE_NONE
 
+static void gst_d3d11_compositor_pad_dispose (GObject * object);
 static void gst_d3d11_compositor_pad_set_property (GObject * object,
     guint prop_id, const GValue * value, GParamSpec * pspec);
 static void gst_d3d11_compositor_pad_get_property (GObject * object,
@@ -380,6 +382,7 @@ gst_d3d11_compositor_pad_class_init (GstD3D11CompositorPadClass * klass)
   GParamFlags param_flags = (GParamFlags)
       (G_PARAM_READWRITE | GST_PARAM_CONTROLLABLE | G_PARAM_STATIC_STRINGS);
 
+  object_class->dispose = gst_d3d11_compositor_pad_dispose;
   object_class->set_property = gst_d3d11_compositor_pad_set_property;
   object_class->get_property = gst_d3d11_compositor_pad_get_property;
 
@@ -465,6 +468,17 @@ gst_d3d11_compositor_pad_init (GstD3D11CompositorPad * pad)
   pad->desc = blend_templ[DEFAULT_PAD_OPERATOR];
   pad->gamma_mode = DEFAULT_PAD_GAMMA_MODE;
   pad->primaries_mode = DEFAULT_PAD_PRIMARIES_MODE;
+}
+
+static void
+gst_d3d11_compositor_pad_dispose (GObject * object)
+{
+  GstD3D11CompositorPad *self = GST_D3D11_COMPOSITOR_PAD (object);
+
+  gst_clear_object (&self->convert);
+  GST_D3D11_CLEAR_COM (self->blend);
+
+  G_OBJECT_CLASS (parent_pad_class)->dispose (object);
 }
 
 static void
@@ -752,6 +766,9 @@ gst_d3d11_compositor_pad_check_frame_obscured (GstVideoAggregatorPad * pad,
    *     left unscaled)
    */
 
+  if (cpad->alpha == 0)
+    return TRUE;
+
   gst_d3d11_compositor_pad_get_output_size (cpad, GST_VIDEO_INFO_PAR_N (info),
       GST_VIDEO_INFO_PAR_D (info), &width, &height, &x_offset, &y_offset);
 
@@ -825,6 +842,10 @@ gst_d3d11_compositor_pad_setup_converter (GstVideoAggregatorPad * pad,
 
   if (!cpad->convert) {
     GstStructure *config = gst_structure_new ("converter-config",
+        /* XXX: Always use shader, to workaround buggy blending behavior of
+         * vendor implemented converter. Need investigation */
+        GST_D3D11_CONVERTER_OPT_BACKEND, GST_TYPE_D3D11_CONVERTER_BACKEND,
+        GST_D3D11_CONVERTER_BACKEND_SHADER,
         GST_D3D11_CONVERTER_OPT_GAMMA_MODE,
         GST_TYPE_VIDEO_GAMMA_MODE, cpad->gamma_mode,
         GST_D3D11_CONVERTER_OPT_PRIMARIES_MODE,
@@ -945,6 +966,7 @@ enum
   PROP_0,
   PROP_ADAPTER,
   PROP_BACKGROUND,
+  PROP_IGNORE_INACTIVE_PADS,
 };
 
 #define DEFAULT_ADAPTER -1
@@ -1017,6 +1039,26 @@ gst_d3d11_compositor_class_init (GstD3D11CompositorClass * klass)
       g_param_spec_enum ("background", "Background", "Background type",
           GST_TYPE_D3D11_COMPOSITOR_BACKGROUND,
           DEFAULT_BACKGROUND,
+          (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+
+  /**
+   * GstD3D11Compositor:ignore-inactive-pads:
+   *
+   * Don't wait for inactive pads when live. An inactive pad
+   * is a pad that hasn't yet received a buffer, but that has
+   * been waited on at least once.
+   *
+   * The purpose of this property is to avoid aggregating on
+   * timeout when new pads are requested in advance of receiving
+   * data flow, for example the user may decide to connect it later,
+   * but wants to configure it already.
+   *
+   * Since: 1.24
+   */
+  g_object_class_install_property (object_class,
+      PROP_IGNORE_INACTIVE_PADS, g_param_spec_boolean ("ignore-inactive-pads",
+          "Ignore inactive pads",
+          "Avoid timing out waiting for inactive pads", FALSE,
           (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
 
   element_class->request_new_pad =
@@ -1102,6 +1144,10 @@ gst_d3d11_compositor_set_property (GObject * object,
       self->background =
           (GstD3D11CompositorBackground) g_value_get_enum (value);
       break;
+    case PROP_IGNORE_INACTIVE_PADS:
+      gst_aggregator_set_ignore_inactive_pads (GST_AGGREGATOR (object),
+          g_value_get_boolean (value));
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -1120,6 +1166,10 @@ gst_d3d11_compositor_get_property (GObject * object,
       break;
     case PROP_BACKGROUND:
       g_value_set_enum (value, self->background);
+      break;
+    case PROP_IGNORE_INACTIVE_PADS:
+      g_value_set_boolean (value,
+          gst_aggregator_get_ignore_inactive_pads (GST_AGGREGATOR (object)));
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -1204,14 +1254,11 @@ static void
 gst_d3d11_compositor_release_pad (GstElement * element, GstPad * pad)
 {
   GstD3D11Compositor *self = GST_D3D11_COMPOSITOR (element);
-  GstD3D11CompositorPad *cpad = GST_D3D11_COMPOSITOR_PAD (pad);
 
   GST_DEBUG_OBJECT (self, "Releasing pad %s:%s", GST_DEBUG_PAD_NAME (pad));
 
   gst_child_proxy_child_removed (GST_CHILD_PROXY (self), G_OBJECT (pad),
       GST_OBJECT_NAME (pad));
-
-  gst_d3d11_compositor_pad_clear_resource (self, cpad, nullptr);
 
   GST_ELEMENT_CLASS (parent_class)->release_pad (element, pad);
 }
@@ -1247,6 +1294,7 @@ gst_d3d11_compositor_stop (GstAggregator * agg)
 
   g_clear_pointer (&self->checker_background, gst_d3d11_compositor_quad_free);
   gst_clear_object (&self->device);
+  gst_clear_caps (&self->negotiated_caps);
 
   return GST_AGGREGATOR_CLASS (parent_class)->stop (agg);
 }
@@ -1612,6 +1660,11 @@ gst_d3d11_compositor_negotiated_src_caps (GstAggregator * agg, GstCaps * caps)
     return FALSE;
   }
 
+  if (self->negotiated_caps && gst_caps_is_equal (self->negotiated_caps, caps)) {
+    GST_DEBUG_OBJECT (self, "Negotiated caps is not changed");
+    goto done;
+  }
+
   features = gst_caps_get_features (caps, 0);
   if (features
       && gst_caps_features_contains (features,
@@ -1668,6 +1721,9 @@ gst_d3d11_compositor_negotiated_src_caps (GstAggregator * agg, GstCaps * caps)
     gst_object_unref (pool);
   }
 
+  gst_caps_replace (&self->negotiated_caps, caps);
+
+done:
   return GST_AGGREGATOR_CLASS (parent_class)->negotiated_src_caps (agg, caps);
 }
 

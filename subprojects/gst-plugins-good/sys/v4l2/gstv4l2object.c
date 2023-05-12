@@ -525,6 +525,9 @@ gst_v4l2_object_new (GstElement * element,
 
   v4l2object->no_initial_format = FALSE;
 
+  v4l2object->poll = gst_poll_new (TRUE);
+  v4l2object->can_poll_device = TRUE;
+
   /* We now disable libv4l2 by default, but have an env to enable it. */
 #ifdef HAVE_LIBV4L2
   if (g_getenv ("GST_V4L2_USE_LIBV4L2")) {
@@ -550,6 +553,19 @@ gst_v4l2_object_new (GstElement * element,
   return v4l2object;
 }
 
+
+static gboolean
+gst_v4l2_object_clear_format_list (GstV4l2Object * v4l2object)
+{
+  g_slist_foreach (v4l2object->formats, (GFunc) g_free, NULL);
+  g_slist_free (v4l2object->formats);
+  v4l2object->formats = NULL;
+  v4l2object->fmtdesc = NULL;
+
+  return TRUE;
+}
+
+
 void
 gst_v4l2_object_destroy (GstV4l2Object * v4l2object)
 {
@@ -558,6 +574,8 @@ gst_v4l2_object_destroy (GstV4l2Object * v4l2object)
   g_free (v4l2object->videodev);
   g_free (v4l2object->par);
   g_free (v4l2object->channel);
+
+  gst_poll_free (v4l2object->poll);
 
   if (v4l2object->formats) {
     gst_v4l2_object_clear_format_list (v4l2object);
@@ -574,16 +592,6 @@ gst_v4l2_object_destroy (GstV4l2Object * v4l2object)
   g_free (v4l2object);
 }
 
-
-gboolean
-gst_v4l2_object_clear_format_list (GstV4l2Object * v4l2object)
-{
-  g_slist_foreach (v4l2object->formats, (GFunc) g_free, NULL);
-  g_slist_free (v4l2object->formats);
-  v4l2object->formats = NULL;
-
-  return TRUE;
-}
 
 static gint
 gst_v4l2_object_prop_to_cid (guint prop_id)
@@ -897,6 +905,20 @@ gst_v4l2_set_defaults (GstV4l2Object * v4l2object)
   }
 }
 
+static void
+gst_v4l2_object_init_poll (GstV4l2Object * v4l2object)
+{
+  gst_poll_fd_init (&v4l2object->pollfd);
+  v4l2object->pollfd.fd = v4l2object->video_fd;
+  gst_poll_add_fd (v4l2object->poll, &v4l2object->pollfd);
+  if (V4L2_TYPE_IS_OUTPUT (v4l2object->type))
+    gst_poll_fd_ctl_write (v4l2object->poll, &v4l2object->pollfd, TRUE);
+  else
+    gst_poll_fd_ctl_read (v4l2object->poll, &v4l2object->pollfd, TRUE);
+
+  v4l2object->can_poll_device = TRUE;
+}
+
 gboolean
 gst_v4l2_object_open (GstV4l2Object * v4l2object, GstV4l2Error * error)
 {
@@ -905,17 +927,20 @@ gst_v4l2_object_open (GstV4l2Object * v4l2object, GstV4l2Error * error)
   else
     return FALSE;
 
+  gst_v4l2_object_init_poll (v4l2object);
+
   return TRUE;
 }
 
 gboolean
 gst_v4l2_object_open_shared (GstV4l2Object * v4l2object, GstV4l2Object * other)
 {
-  gboolean ret;
+  if (gst_v4l2_dup (v4l2object, other)) {
+    gst_v4l2_object_init_poll (v4l2object);
+    return TRUE;
+  }
 
-  ret = gst_v4l2_dup (v4l2object, other);
-
-  return ret;
+  return FALSE;
 }
 
 gboolean
@@ -1093,6 +1118,7 @@ gst_v4l2_object_format_get_rank (const struct v4l2_fmtdesc *fmt)
       rank = YUV_BASE_RANK + 10;
       break;
     case V4L2_PIX_FMT_YVU420:  /* YV12, 12 bits per pixel */
+    case V4L2_PIX_FMT_YVU420M:
       rank = YUV_BASE_RANK + 6;
       break;
     case V4L2_PIX_FMT_UYVY:    /* UYVY, 16 bits per pixel */
@@ -1375,6 +1401,7 @@ gst_v4l2_object_v4l2fourcc_to_video_format (guint32 fourcc)
       format = GST_VIDEO_FORMAT_YUY2;
       break;
     case V4L2_PIX_FMT_YVU420:
+    case V4L2_PIX_FMT_YVU420M:
       format = GST_VIDEO_FORMAT_YV12;
       break;
     case V4L2_PIX_FMT_UYVY:
@@ -1453,7 +1480,8 @@ gst_v4l2_object_v4l2fourcc_to_bare_struct (guint32 fourcc)
     case V4L2_PIX_FMT_MJPEG:   /* Motion-JPEG */
     case V4L2_PIX_FMT_PJPG:    /* Progressive-JPEG */
     case V4L2_PIX_FMT_JPEG:    /* JFIF JPEG */
-      structure = gst_structure_new_empty ("image/jpeg");
+      structure = gst_structure_new ("image/jpeg",
+          "parsed", G_TYPE_BOOLEAN, TRUE, NULL);
       break;
     case V4L2_PIX_FMT_MPEG1:
       structure = gst_structure_new ("video/mpeg",
@@ -1541,6 +1569,7 @@ gst_v4l2_object_v4l2fourcc_to_bare_struct (guint32 fourcc)
     case V4L2_PIX_FMT_YUV420M:
     case V4L2_PIX_FMT_YUYV:
     case V4L2_PIX_FMT_YVU420:
+    case V4L2_PIX_FMT_YVU420M:
     case V4L2_PIX_FMT_UYVY:
     case V4L2_PIX_FMT_YUV422P:
     case V4L2_PIX_FMT_YVYU:
@@ -1794,6 +1823,7 @@ gst_v4l2_object_get_caps_info (GstV4l2Object * v4l2object, GstCaps * caps,
         break;
       case GST_VIDEO_FORMAT_YV12:
         fourcc = V4L2_PIX_FMT_YVU420;
+        fourcc_nc = V4L2_PIX_FMT_YVU420M;
         break;
       case GST_VIDEO_FORMAT_Y41B:
         fourcc = V4L2_PIX_FMT_YUV411P;
@@ -1979,17 +2009,17 @@ gst_v4l2_object_get_caps_info (GstV4l2Object * v4l2object, GstCaps * caps,
   /* ERRORS */
 invalid_format:
   {
-    GST_DEBUG_OBJECT (v4l2object, "invalid format");
+    GST_DEBUG_OBJECT (v4l2object->dbg_obj, "invalid format");
     return FALSE;
   }
 unhandled_format:
   {
-    GST_DEBUG_OBJECT (v4l2object, "unhandled format");
+    GST_DEBUG_OBJECT (v4l2object->dbg_obj, "unhandled format");
     return FALSE;
   }
 unsupported_format:
   {
-    GST_DEBUG_OBJECT (v4l2object, "unsupported format");
+    GST_DEBUG_OBJECT (v4l2object->dbg_obj, "unsupported format");
     return FALSE;
   }
 }
@@ -2358,7 +2388,8 @@ gst_v4l2_object_add_interlace_mode (GstV4l2Object * v4l2object,
       || gst_value_list_get_size (&interlace_formats) > 0)
     gst_structure_take_value (s, "interlace-mode", &interlace_formats);
   else
-    GST_WARNING_OBJECT (v4l2object, "Failed to determine interlace mode");
+    GST_WARNING_OBJECT (v4l2object->dbg_obj,
+        "Failed to determine interlace mode");
 
   return;
 }
@@ -3172,8 +3203,14 @@ gst_v4l2_object_setup_pool (GstV4l2Object * v4l2object, GstCaps * caps)
   /* Map the buffers */
   GST_LOG_OBJECT (v4l2object->dbg_obj, "initiating buffer pool");
 
-  if (!(v4l2object->pool = gst_v4l2_buffer_pool_new (v4l2object, caps)))
-    goto buffer_pool_new_failed;
+  {
+    GstBufferPool *pool = gst_v4l2_buffer_pool_new (v4l2object, caps);
+    GST_OBJECT_LOCK (v4l2object->element);
+    v4l2object->pool = pool;
+    GST_OBJECT_UNLOCK (v4l2object->element);
+    if (!pool)
+      goto buffer_pool_new_failed;
+  }
 
   GST_V4L2_SET_ACTIVE (v4l2object);
 
@@ -3245,23 +3282,16 @@ gst_v4l2_object_set_stride (GstVideoInfo * info, GstVideoAlignment * align,
   const GstVideoFormatInfo *finfo = info->finfo;
 
   if (GST_VIDEO_FORMAT_INFO_IS_TILED (finfo)) {
-    gint x_tiles, y_tiles, ws, hs, tile_height, padded_height;
+    gint x_tiles, y_tiles, tile_height, padded_height;
 
-    ws = GST_VIDEO_FORMAT_INFO_TILE_WS (finfo);
-    hs = GST_VIDEO_FORMAT_INFO_TILE_HS (finfo);
-
-    /* this only works for what we support, NV12 subsampled tiles */
-    if (GST_VIDEO_FORMAT_INFO_HAS_SUBTILES (finfo) && plane == 1)
-      hs -= 1;
-
-    tile_height = 1 << hs;
+    tile_height = GST_VIDEO_FORMAT_INFO_TILE_HEIGHT (finfo, plane);
 
     padded_height = GST_VIDEO_FORMAT_INFO_SCALE_HEIGHT (finfo, plane,
         info->height + align->padding_top + align->padding_bottom);
-    padded_height = GST_ROUND_UP_N (padded_height, tile_height);
+    padded_height = (padded_height + tile_height - 1) / tile_height;
 
-    x_tiles = stride >> ws;
-    y_tiles = padded_height >> hs;
+    x_tiles = stride / GST_VIDEO_FORMAT_INFO_TILE_STRIDE (finfo, plane);
+    y_tiles = padded_height / tile_height;
     info->stride[plane] = GST_VIDEO_TILE_MAKE_STRIDE (x_tiles, y_tiles);
   } else {
     info->stride[plane] = stride;
@@ -3331,7 +3361,7 @@ gst_v4l2_object_save_format (GstV4l2Object * v4l2object,
     padded_width = stride / pstride;
   } else {
     /* pstride can be 0 for complex formats */
-    GST_WARNING_OBJECT (v4l2object->element,
+    GST_WARNING_OBJECT (v4l2object->dbg_obj,
         "format %s has a pstride of 0, cannot compute padded with",
         gst_video_format_to_string (GST_VIDEO_INFO_FORMAT (info)));
     padded_width = stride;
@@ -3348,12 +3378,9 @@ gst_v4l2_object_save_format (GstV4l2Object * v4l2object,
   padded_height = format->fmt.pix.height;
 
   if (GST_VIDEO_FORMAT_INFO_IS_TILED (finfo)) {
-    guint hs, tile_height;
-
-    hs = GST_VIDEO_FORMAT_INFO_TILE_HS (finfo);
-    tile_height = 1 << hs;
-
-    padded_height = GST_ROUND_UP_N (padded_height, tile_height);
+    guint tile_height;
+    tile_height = GST_VIDEO_FORMAT_INFO_TILE_HEIGHT (finfo, 0);
+    padded_height = (padded_height + tile_height - 1) / tile_height;
   }
 
   align->padding_bottom =
@@ -3504,6 +3531,18 @@ gst_v4l2_video_colorimetry_matches (const GstVideoColorimetry * cinfo,
       && gst_video_colorimetry_is_equal (cinfo, &ci_jpeg))
     return TRUE;
 
+  /* bypass check the below transfer types, because those types are cast to
+   * V4L2_XFER_FUNC_NONE type when try format or set format and V4L2_XFER_FUNC_NONE
+   * type is cast to GST_VIDEO_TRANSFER_GAMMA10 type in gst_v4l2_object_get_colorspace */
+  if ((info.colorimetry.transfer == GST_VIDEO_TRANSFER_GAMMA18) ||
+      (info.colorimetry.transfer == GST_VIDEO_TRANSFER_GAMMA20) ||
+      (info.colorimetry.transfer == GST_VIDEO_TRANSFER_GAMMA22) ||
+      (info.colorimetry.transfer == GST_VIDEO_TRANSFER_GAMMA28)) {
+    info.colorimetry.transfer = GST_VIDEO_TRANSFER_GAMMA10;
+    if (gst_video_colorimetry_is_equal (&info.colorimetry, cinfo))
+      return TRUE;
+  }
+
   return FALSE;
 }
 
@@ -3595,9 +3634,9 @@ gst_v4l2_object_set_format_full (GstV4l2Object * v4l2object, GstCaps * caps,
 
   field = get_v4l2_field_for_info (&info);
   if (field != V4L2_FIELD_NONE)
-    GST_DEBUG_OBJECT (v4l2object->element, "interlaced video");
+    GST_DEBUG_OBJECT (v4l2object->dbg_obj, "interlaced video");
   else
-    GST_DEBUG_OBJECT (v4l2object->element, "progressive video");
+    GST_DEBUG_OBJECT (v4l2object->dbg_obj, "progressive video");
 
   /* We first pick the main colorspace from the primaries */
   switch (info.colorimetry.primaries) {
@@ -3764,8 +3803,8 @@ gst_v4l2_object_set_format_full (GstV4l2Object * v4l2object, GstCaps * caps,
       gint stride = GST_VIDEO_INFO_PLANE_STRIDE (&info, i);
 
       if (GST_VIDEO_FORMAT_INFO_IS_TILED (info.finfo))
-        stride = GST_VIDEO_TILE_X_TILES (stride) <<
-            GST_VIDEO_FORMAT_INFO_TILE_WS (info.finfo);
+        stride = GST_VIDEO_TILE_X_TILES (stride) *
+            GST_VIDEO_FORMAT_INFO_TILE_STRIDE (info.finfo, i);
 
       format.fmt.pix_mp.plane_fmt[i].bytesperline = stride;
     }
@@ -3783,8 +3822,8 @@ gst_v4l2_object_set_format_full (GstV4l2Object * v4l2object, GstCaps * caps,
     format.fmt.pix.field = field;
 
     if (GST_VIDEO_FORMAT_INFO_IS_TILED (info.finfo))
-      stride = GST_VIDEO_TILE_X_TILES (stride) <<
-          GST_VIDEO_FORMAT_INFO_TILE_WS (info.finfo);
+      stride = GST_VIDEO_TILE_X_TILES (stride) *
+          GST_VIDEO_FORMAT_INFO_TILE_STRIDE (info.finfo, i);
 
     /* try to ask our preferred stride */
     format.fmt.pix.bytesperline = stride;
@@ -4372,7 +4411,7 @@ unsupported_format:
  * Returns: %TRUE on success, %FALSE on failure.
  */
 gboolean
-gst_v4l2_object_set_crop (GstV4l2Object * obj, struct v4l2_rect * crop_rect)
+gst_v4l2_object_set_crop (GstV4l2Object * obj, struct v4l2_rect *crop_rect)
 {
   struct v4l2_selection sel = { 0 };
   struct v4l2_crop crop = { 0 };
@@ -4495,14 +4534,13 @@ gst_v4l2_object_get_crop_rect (GstV4l2Object * obj, guint target,
 }
 
 gboolean
-gst_v4l2_object_get_crop_bounds (GstV4l2Object * obj, struct v4l2_rect * result)
+gst_v4l2_object_get_crop_bounds (GstV4l2Object * obj, struct v4l2_rect *result)
 {
   return gst_v4l2_object_get_crop_rect (obj, V4L2_SEL_TGT_CROP_BOUNDS, result);
 }
 
 gboolean
-gst_v4l2_object_get_crop_default (GstV4l2Object * obj,
-    struct v4l2_rect * result)
+gst_v4l2_object_get_crop_default (GstV4l2Object * obj, struct v4l2_rect *result)
 {
   return gst_v4l2_object_get_crop_rect (obj, V4L2_SEL_TGT_CROP_DEFAULT, result);
 }
@@ -4513,17 +4551,19 @@ gst_v4l2_object_caps_equal (GstV4l2Object * v4l2object, GstCaps * caps)
   GstStructure *config;
   GstCaps *oldcaps;
   gboolean ret;
+  GstBufferPool *pool = gst_v4l2_object_get_buffer_pool (v4l2object);
 
-  if (!v4l2object->pool)
+  if (!pool)
     return FALSE;
 
-  config = gst_buffer_pool_get_config (v4l2object->pool);
+  config = gst_buffer_pool_get_config (pool);
   gst_buffer_pool_config_get_params (config, &oldcaps, NULL, NULL, NULL);
 
   ret = oldcaps && gst_caps_is_equal (caps, oldcaps);
 
   gst_structure_free (config);
 
+  gst_object_unref (pool);
   return ret;
 }
 
@@ -4533,17 +4573,19 @@ gst_v4l2_object_caps_is_subset (GstV4l2Object * v4l2object, GstCaps * caps)
   GstStructure *config;
   GstCaps *oldcaps;
   gboolean ret;
+  GstBufferPool *pool = gst_v4l2_object_get_buffer_pool (v4l2object);
 
-  if (!v4l2object->pool)
+  if (!pool)
     return FALSE;
 
-  config = gst_buffer_pool_get_config (v4l2object->pool);
+  config = gst_buffer_pool_get_config (pool);
   gst_buffer_pool_config_get_params (config, &oldcaps, NULL, NULL, NULL);
 
   ret = oldcaps && gst_caps_is_subset (oldcaps, caps);
 
   gst_structure_free (config);
 
+  gst_object_unref (pool);
   return ret;
 }
 
@@ -4552,11 +4594,12 @@ gst_v4l2_object_get_current_caps (GstV4l2Object * v4l2object)
 {
   GstStructure *config;
   GstCaps *oldcaps;
+  GstBufferPool *pool = gst_v4l2_object_get_buffer_pool (v4l2object);
 
-  if (!v4l2object->pool)
+  if (!pool)
     return NULL;
 
-  config = gst_buffer_pool_get_config (v4l2object->pool);
+  config = gst_buffer_pool_get_config (pool);
   gst_buffer_pool_config_get_params (config, &oldcaps, NULL, NULL, NULL);
 
   if (oldcaps)
@@ -4564,6 +4607,7 @@ gst_v4l2_object_get_current_caps (GstV4l2Object * v4l2object)
 
   gst_structure_free (config);
 
+  gst_object_unref (pool);
   return oldcaps;
 }
 
@@ -4571,12 +4615,19 @@ gboolean
 gst_v4l2_object_unlock (GstV4l2Object * v4l2object)
 {
   gboolean ret = TRUE;
+  GstBufferPool *pool = gst_v4l2_object_get_buffer_pool (v4l2object);
 
   GST_LOG_OBJECT (v4l2object->dbg_obj, "start flushing");
 
-  if (v4l2object->pool && gst_buffer_pool_is_active (v4l2object->pool))
-    gst_buffer_pool_set_flushing (v4l2object->pool, TRUE);
+  gst_poll_set_flushing (v4l2object->poll, TRUE);
 
+  if (!pool)
+    return ret;
+
+  if (gst_buffer_pool_is_active (pool))
+    gst_buffer_pool_set_flushing (pool, TRUE);
+
+  gst_object_unref (pool);
   return ret;
 }
 
@@ -4584,18 +4635,26 @@ gboolean
 gst_v4l2_object_unlock_stop (GstV4l2Object * v4l2object)
 {
   gboolean ret = TRUE;
+  GstBufferPool *pool = gst_v4l2_object_get_buffer_pool (v4l2object);
 
   GST_LOG_OBJECT (v4l2object->dbg_obj, "stop flushing");
 
-  if (v4l2object->pool && gst_buffer_pool_is_active (v4l2object->pool))
-    gst_buffer_pool_set_flushing (v4l2object->pool, FALSE);
+  gst_poll_set_flushing (v4l2object->poll, FALSE);
 
+  if (!pool)
+    return ret;
+
+  if (gst_buffer_pool_is_active (pool))
+    gst_buffer_pool_set_flushing (pool, FALSE);
+
+  gst_object_unref (pool);
   return ret;
 }
 
 gboolean
 gst_v4l2_object_stop (GstV4l2Object * v4l2object)
 {
+  GstBufferPool *pool;
   GST_DEBUG_OBJECT (v4l2object->dbg_obj, "stopping");
 
   if (!GST_V4L2_IS_OPEN (v4l2object))
@@ -4603,13 +4662,25 @@ gst_v4l2_object_stop (GstV4l2Object * v4l2object)
   if (!GST_V4L2_IS_ACTIVE (v4l2object))
     goto done;
 
-  if (v4l2object->pool) {
-    if (!gst_v4l2_buffer_pool_orphan (&v4l2object->pool)) {
+  gst_poll_set_flushing (v4l2object->poll, TRUE);
+
+  pool = gst_v4l2_object_get_buffer_pool (v4l2object);
+  if (pool) {
+    if (!gst_v4l2_buffer_pool_orphan (v4l2object)) {
       GST_DEBUG_OBJECT (v4l2object->dbg_obj, "deactivating pool");
-      gst_buffer_pool_set_active (v4l2object->pool, FALSE);
-      gst_object_unref (v4l2object->pool);
+      gst_buffer_pool_set_active (pool, FALSE);
+
+      {
+        GstBufferPool *old_pool;
+        GST_OBJECT_LOCK (v4l2object->element);
+        old_pool = v4l2object->pool;
+        v4l2object->pool = NULL;
+        GST_OBJECT_UNLOCK (v4l2object->element);
+        if (old_pool)
+          gst_object_unref (old_pool);
+      }
     }
-    v4l2object->pool = NULL;
+    gst_object_unref (pool);
   }
 
   GST_V4L2_SET_INACTIVE (v4l2object);
@@ -4624,8 +4695,19 @@ gst_v4l2_object_probe_caps (GstV4l2Object * v4l2object, GstCaps * filter)
   GstCaps *ret;
   GSList *walk;
   GSList *formats;
+  guint32 fourcc = 0;
 
+  if (v4l2object->fmtdesc)
+    fourcc = GST_V4L2_PIXELFORMAT (v4l2object);
+
+  gst_v4l2_object_clear_format_list (v4l2object);
   formats = gst_v4l2_object_get_format_list (v4l2object);
+
+  /* Recover the fmtdesc, it may no longer exist, in which case it will be set
+   * to null */
+  if (fourcc)
+    v4l2object->fmtdesc =
+        gst_v4l2_object_get_format_from_fourcc (v4l2object, fourcc);
 
   ret = gst_caps_new_empty ();
 
@@ -4804,8 +4886,8 @@ gst_v4l2_object_match_buffer_layout (GstV4l2Object * obj, guint n_planes,
         gint plane_stride = stride[i];
 
         if (GST_VIDEO_FORMAT_INFO_IS_TILED (obj->info.finfo))
-          plane_stride = GST_VIDEO_TILE_X_TILES (plane_stride) <<
-              GST_VIDEO_FORMAT_INFO_TILE_WS (obj->info.finfo);
+          plane_stride = GST_VIDEO_TILE_X_TILES (plane_stride) *
+              GST_VIDEO_FORMAT_INFO_TILE_STRIDE (obj->info.finfo, i);
 
         format.fmt.pix_mp.plane_fmt[i].bytesperline = plane_stride;
         format.fmt.pix_mp.height = padded_height;
@@ -4818,8 +4900,8 @@ gst_v4l2_object_match_buffer_layout (GstV4l2Object * obj, guint n_planes,
       GST_DEBUG_OBJECT (obj->dbg_obj, "Wanted stride: %i", plane_stride);
 
       if (GST_VIDEO_FORMAT_INFO_IS_TILED (obj->info.finfo))
-        plane_stride = GST_VIDEO_TILE_X_TILES (plane_stride) <<
-            GST_VIDEO_FORMAT_INFO_TILE_WS (obj->info.finfo);
+        plane_stride = GST_VIDEO_TILE_X_TILES (plane_stride) *
+            GST_VIDEO_FORMAT_INFO_TILE_STRIDE (obj->info.finfo, 0);
 
       format.fmt.pix.bytesperline = plane_stride;
       format.fmt.pix.height = padded_height;
@@ -4956,7 +5038,7 @@ gboolean
 gst_v4l2_object_decide_allocation (GstV4l2Object * obj, GstQuery * query)
 {
   GstCaps *caps;
-  GstBufferPool *pool = NULL, *other_pool = NULL;
+  GstBufferPool *pool = NULL, *other_pool = NULL, *obj_pool = NULL;
   GstStructure *config;
   guint size, min, max, own_min = 0;
   gboolean update;
@@ -4973,8 +5055,12 @@ gst_v4l2_object_decide_allocation (GstV4l2Object * obj, GstQuery * query)
 
   gst_query_parse_allocation (query, &caps, NULL);
 
-  if (obj->pool == NULL) {
+  obj_pool = gst_v4l2_object_get_buffer_pool (obj);
+  if (obj_pool == NULL) {
     if (!gst_v4l2_object_setup_pool (obj, caps))
+      goto pool_failed;
+    obj_pool = gst_v4l2_object_get_buffer_pool (obj);
+    if (obj_pool == NULL)
       goto pool_failed;
   }
 
@@ -5029,7 +5115,7 @@ gst_v4l2_object_decide_allocation (GstV4l2Object * obj, GstQuery * query)
         /* no downstream pool, use our own then */
         GST_DEBUG_OBJECT (obj->dbg_obj,
             "read/write mode: no downstream pool, using our own");
-        pool = gst_object_ref (obj->pool);
+        pool = gst_object_ref (obj_pool);
         size = obj->info.size;
         pushing_from_our_pool = TRUE;
       }
@@ -5041,11 +5127,11 @@ gst_v4l2_object_decide_allocation (GstV4l2Object * obj, GstQuery * query)
        * our own, so it can serve itself */
       if (pool == NULL)
         goto no_downstream_pool;
-      gst_v4l2_buffer_pool_set_other_pool (GST_V4L2_BUFFER_POOL (obj->pool),
+      gst_v4l2_buffer_pool_set_other_pool (GST_V4L2_BUFFER_POOL (obj_pool),
           pool);
       other_pool = pool;
       gst_object_unref (pool);
-      pool = gst_object_ref (obj->pool);
+      pool = gst_object_ref (obj_pool);
       size = obj->info.size;
       break;
 
@@ -5056,7 +5142,7 @@ gst_v4l2_object_decide_allocation (GstV4l2Object * obj, GstQuery * query)
       if (can_share_own_pool) {
         if (pool)
           gst_object_unref (pool);
-        pool = gst_object_ref (obj->pool);
+        pool = gst_object_ref (obj_pool);
         size = obj->info.size;
         GST_DEBUG_OBJECT (obj->dbg_obj,
             "streaming mode: using our own pool %" GST_PTR_FORMAT, pool);
@@ -5114,7 +5200,7 @@ gst_v4l2_object_decide_allocation (GstV4l2Object * obj, GstQuery * query)
     min = MAX (min, GST_V4L2_MIN_BUFFERS (obj));
 
     /* To import we need the other pool to hold at least own_min */
-    if (obj->pool == pool)
+    if (obj_pool == pool)
       min += own_min;
   }
 
@@ -5123,7 +5209,7 @@ gst_v4l2_object_decide_allocation (GstV4l2Object * obj, GstQuery * query)
     max = MAX (min, max);
 
   /* First step, configure our own pool */
-  config = gst_buffer_pool_get_config (obj->pool);
+  config = gst_buffer_pool_get_config (obj_pool);
 
   if (obj->need_video_meta || has_video_meta) {
     GST_DEBUG_OBJECT (obj->dbg_obj, "activate Video Meta");
@@ -5138,19 +5224,19 @@ gst_v4l2_object_decide_allocation (GstV4l2Object * obj, GstQuery * query)
       GST_PTR_FORMAT, config);
 
   /* Our pool often need to adjust the value */
-  if (!gst_buffer_pool_set_config (obj->pool, config)) {
-    config = gst_buffer_pool_get_config (obj->pool);
+  if (!gst_buffer_pool_set_config (obj_pool, config)) {
+    config = gst_buffer_pool_get_config (obj_pool);
 
     GST_DEBUG_OBJECT (obj->dbg_obj, "own pool config changed to %"
         GST_PTR_FORMAT, config);
 
     /* our pool will adjust the maximum buffer, which we are fine with */
-    if (!gst_buffer_pool_set_config (obj->pool, config))
+    if (!gst_buffer_pool_set_config (obj_pool, config))
       goto config_failed;
   }
 
   /* Now configure the other pool if different */
-  if (obj->pool != pool)
+  if (obj_pool != pool)
     other_pool = pool;
 
   if (other_pool) {
@@ -5201,6 +5287,9 @@ gst_v4l2_object_decide_allocation (GstV4l2Object * obj, GstQuery * query)
   if (pool)
     gst_object_unref (pool);
 
+  if (obj_pool)
+    gst_object_unref (obj_pool);
+
   return TRUE;
 
 pool_failed:
@@ -5220,6 +5309,13 @@ no_size:
         (_("Video device did not suggest any buffer size.")), (NULL));
     goto cleanup;
   }
+no_downstream_pool:
+  {
+    GST_ELEMENT_ERROR (obj->element, RESOURCE, SETTINGS,
+        (_("No downstream pool to import from.")),
+        ("When importing DMABUF or USERPTR, we need a pool to import from"));
+    goto cleanup;
+  }
 cleanup:
   {
     if (allocator)
@@ -5227,13 +5323,9 @@ cleanup:
 
     if (pool)
       gst_object_unref (pool);
-    return FALSE;
-  }
-no_downstream_pool:
-  {
-    GST_ELEMENT_ERROR (obj->element, RESOURCE, SETTINGS,
-        (_("No downstream pool to import from.")),
-        ("When importing DMABUF or USERPTR, we need a pool to import from"));
+
+    if (obj_pool)
+      gst_object_unref (obj_pool);
     return FALSE;
   }
 }
@@ -5260,9 +5352,14 @@ gst_v4l2_object_propose_allocation (GstV4l2Object * obj, GstQuery * query)
   switch (obj->mode) {
     case GST_V4L2_IO_MMAP:
     case GST_V4L2_IO_DMABUF:
-      if (need_pool && obj->pool) {
-        if (!gst_buffer_pool_is_active (obj->pool))
-          pool = gst_object_ref (obj->pool);
+      if (need_pool) {
+        GstBufferPool *obj_pool = gst_v4l2_object_get_buffer_pool (obj);
+        if (obj_pool) {
+          if (!gst_buffer_pool_is_active (obj_pool))
+            pool = gst_object_ref (obj_pool);
+
+          gst_object_unref (obj_pool);
+        }
       }
       break;
     default:
@@ -5374,4 +5471,158 @@ gst_v4l2_object_try_import (GstV4l2Object * obj, GstBuffer * buffer)
 
   /* for the remaining, only the kernel driver can tell */
   return TRUE;
+}
+
+/**
+ * gst_v4l2_object_get_buffer_pool:
+ * @src: a #GstV4l2Object
+ *
+ * Returns: (nullable) (transfer full): the instance of the #GstBufferPool used
+ * by the v4l2object; unref it after usage.
+ */
+GstBufferPool *
+gst_v4l2_object_get_buffer_pool (GstV4l2Object * v4l2object)
+{
+  GstBufferPool *ret = NULL;
+
+  g_return_val_if_fail (v4l2object != NULL, NULL);
+
+  GST_OBJECT_LOCK (v4l2object->element);
+  if (v4l2object->pool)
+    ret = gst_object_ref (v4l2object->pool);
+  GST_OBJECT_UNLOCK (v4l2object->element);
+
+  return ret;
+}
+
+/**
+ * gst_v4l2_object_poll:
+ * @v4l2object: a #GstV4l2Object
+ * @timeout: timeout of type #GstClockTime
+ *
+ * Poll the video file descriptor for read when this is a capture, write when
+ * this is an output. It will also watch for errors and source change events.
+ * If a source change event is received, %GST_V4L2_FLOW_RESOLUTION_CHANGE will
+ * be returned. If the poll was interrupted, %GST_FLOW_FLUSHING is returned.
+ * If there was no read or write indicator, %GST_V4L2_FLOW_LAST_BUFFER is
+ * returned. It may also return %GST_FLOW_ERROR if some unexpected error
+ * occured.
+ *
+ * Returns: GST_FLOW_OK if buffers are ready to be queued or dequeued.
+ */
+GstFlowReturn
+gst_v4l2_object_poll (GstV4l2Object * v4l2object, GstClockTime timeout)
+{
+  gint ret;
+
+  if (!v4l2object->can_poll_device) {
+    if (timeout != 0)
+      goto done;
+    else
+      goto no_buffers;
+  }
+
+  GST_LOG_OBJECT (v4l2object->dbg_obj, "polling device");
+
+again:
+  ret = gst_poll_wait (v4l2object->poll, timeout);
+  if (G_UNLIKELY (ret < 0)) {
+    switch (errno) {
+      case EBUSY:
+        goto stopped;
+      case EAGAIN:
+      case EINTR:
+        goto again;
+      case ENXIO:
+        GST_WARNING_OBJECT (v4l2object->dbg_obj,
+            "v4l2 device doesn't support polling. Disabling"
+            " using libv4l2 in this case may cause deadlocks");
+        v4l2object->can_poll_device = FALSE;
+        goto done;
+      default:
+        goto select_error;
+    }
+  }
+
+  if (gst_poll_fd_has_error (v4l2object->poll, &v4l2object->pollfd))
+    goto select_error;
+
+  /* PRI is used to signal that events are available */
+  if (gst_poll_fd_has_pri (v4l2object->poll, &v4l2object->pollfd)) {
+    struct v4l2_event event = { 0, };
+
+    if (!gst_v4l2_dequeue_event (v4l2object, &event))
+      goto dqevent_failed;
+
+    if (event.type != V4L2_EVENT_SOURCE_CHANGE) {
+      GST_INFO_OBJECT (v4l2object->dbg_obj,
+          "Received unhandled event, ignoring.");
+      goto again;
+    }
+
+    if ((event.u.src_change.changes & V4L2_EVENT_SRC_CH_RESOLUTION) == 0) {
+      GST_DEBUG_OBJECT (v4l2object->dbg_obj,
+          "Received non-resolution source-change, ignoring.");
+      goto again;
+    }
+
+    return GST_V4L2_FLOW_RESOLUTION_CHANGE;
+  }
+
+  if (ret == 0)
+    goto no_buffers;
+
+done:
+  return GST_FLOW_OK;
+
+  /* ERRORS */
+stopped:
+  {
+    GST_DEBUG_OBJECT (v4l2object->dbg_obj, "stop called");
+    return GST_FLOW_FLUSHING;
+  }
+select_error:
+  {
+    GST_ELEMENT_ERROR (v4l2object->element, RESOURCE, READ, (NULL),
+        ("poll error %d: %s (%d)", ret, g_strerror (errno), errno));
+    return GST_FLOW_ERROR;
+  }
+no_buffers:
+  {
+    return GST_V4L2_FLOW_LAST_BUFFER;
+  }
+dqevent_failed:
+  {
+    GST_ELEMENT_ERROR (v4l2object->element, RESOURCE, READ, (NULL),
+        ("dqevent error: %s (%d)", g_strerror (errno), errno));
+    return GST_FLOW_ERROR;
+  }
+}
+
+/**
+ * gst_v4l2_object_subscribe_event:
+ * @v4l2object: a #GstV4l2Object
+ * @event: the event ID
+ *
+ * Subscribe to an event, and enable polling for these. Note that only
+ * %V4L2_EVENT_SOURCE_CHANGE is currently supported by the poll helper.
+ *
+ * Returns: %TRUE if the driver supports this event
+ */
+gboolean
+gst_v4l2_object_subscribe_event (GstV4l2Object * v4l2object, guint32 event)
+{
+  guint32 id = 0;
+
+  g_return_val_if_fail (v4l2object != NULL, FALSE);
+  g_return_val_if_fail (GST_V4L2_IS_OPEN (v4l2object), FALSE);
+
+  v4l2object->get_in_out_func (v4l2object, &id);
+
+  if (gst_v4l2_subscribe_event (v4l2object, event, id)) {
+    gst_poll_fd_ctl_pri (v4l2object->poll, &v4l2object->pollfd, TRUE);
+    return TRUE;
+  }
+
+  return FALSE;
 }

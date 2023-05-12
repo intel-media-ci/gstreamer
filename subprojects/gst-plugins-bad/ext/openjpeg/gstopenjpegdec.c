@@ -70,7 +70,7 @@ static gboolean gst_openjpeg_dec_stop (GstVideoDecoder * decoder);
 static gboolean gst_openjpeg_dec_set_format (GstVideoDecoder * decoder,
     GstVideoCodecState * state);
 static gboolean gst_openjpeg_dec_flush (GstVideoDecoder * decoder);
-static gboolean gst_openjpeg_dec_finish (GstVideoDecoder * decoder);
+static GstFlowReturn gst_openjpeg_dec_finish (GstVideoDecoder * decoder);
 static GstFlowReturn gst_openjpeg_dec_handle_frame (GstVideoDecoder * decoder,
     GstVideoCodecFrame * frame);
 static gboolean gst_openjpeg_dec_decide_allocation (GstVideoDecoder * decoder,
@@ -80,10 +80,10 @@ static void gst_openjpeg_dec_set_property (GObject * object,
 static void gst_openjpeg_dec_get_property (GObject * object,
     guint prop_id, GValue * value, GParamSpec * pspec);
 
-static gboolean gst_openjpeg_dec_decode_frame_multiple (GstVideoDecoder *
+static GstFlowReturn gst_openjpeg_dec_decode_frame_multiple (GstVideoDecoder *
     decoder, GstVideoCodecFrame * frame);
-static gboolean gst_openjpeg_dec_decode_frame_single (GstVideoDecoder * decoder,
-    GstVideoCodecFrame * frame);
+static GstFlowReturn gst_openjpeg_dec_decode_frame_single (GstVideoDecoder *
+    decoder, GstVideoCodecFrame * frame);
 
 static void gst_openjpeg_dec_pause_loop (GstOpenJPEGDec * self,
     GstFlowReturn flow_ret);
@@ -217,10 +217,14 @@ gst_openjpeg_dec_start (GstVideoDecoder * decoder)
 
   GST_DEBUG_OBJECT (self, "Starting");
   self->available_threads = self->max_slice_threads;
-  if (self->available_threads)
-    self->decode_frame = gst_openjpeg_dec_decode_frame_multiple;
-  else
-    self->decode_frame = gst_openjpeg_dec_decode_frame_single;
+  self->decode_frame = gst_openjpeg_dec_decode_frame_single;
+  if (self->available_threads) {
+    if (gst_video_decoder_get_subframe_mode (decoder))
+      self->decode_frame = gst_openjpeg_dec_decode_frame_multiple;
+    else
+      GST_INFO_OBJECT (self,
+          "Multiple threads decoding only available in subframe mode.");
+  }
 
   return TRUE;
 }
@@ -1233,7 +1237,7 @@ static GstOpenJPEGCodecMessage *
 gst_openjpeg_decode_message_new (GstOpenJPEGDec * self,
     GstVideoCodecFrame * frame, int num_stripe)
 {
-  GstOpenJPEGCodecMessage *message = g_slice_new0 (GstOpenJPEGCodecMessage);
+  GstOpenJPEGCodecMessage *message = g_new0 (GstOpenJPEGCodecMessage, 1);
   GST_DEBUG_OBJECT (self, "message: %p", message);
   message->frame = gst_video_codec_frame_ref (frame);
   message->stripe = num_stripe;
@@ -1253,7 +1257,7 @@ gst_openjpeg_decode_message_free (GstOpenJPEGDec * self,
   gst_buffer_unref (message->input_buffer);
   gst_video_codec_frame_unref (message->frame);
   GST_DEBUG_OBJECT (self, "message: %p", message);
-  g_slice_free (GstOpenJPEGCodecMessage, message);
+  g_free (message);
   return NULL;
 }
 

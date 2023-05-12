@@ -725,15 +725,17 @@ gst_va_decoder_get_config (GstVaDecoder * self, VAProfile * profile,
 static gboolean
 _destroy_buffers (GstVaDecodePicture * pic)
 {
+  GstVaDisplay *display;
   VABufferID buffer;
   VADisplay dpy;
   VAStatus status;
   guint i;
   gboolean ret = TRUE;
 
-  g_return_val_if_fail (GST_IS_VA_DISPLAY (pic->display), FALSE);
-
-  dpy = gst_va_display_get_va_dpy (pic->display);
+  display = gst_va_buffer_peek_display (pic->gstbuffer);
+  if (!display)
+    return FALSE;
+  dpy = gst_va_display_get_va_dpy (display);
 
   if (pic->buffers) {
     for (i = 0; i < pic->buffers->len; i++) {
@@ -773,11 +775,10 @@ gst_va_decode_picture_new (GstVaDecoder * self, GstBuffer * buffer)
   g_return_val_if_fail (buffer && GST_IS_BUFFER (buffer), NULL);
   g_return_val_if_fail (self && GST_IS_VA_DECODER (self), NULL);
 
-  pic = g_slice_new (GstVaDecodePicture);
+  pic = g_new (GstVaDecodePicture, 1);
   pic->gstbuffer = gst_buffer_ref (buffer);
   pic->buffers = g_array_sized_new (FALSE, FALSE, sizeof (VABufferID), 16);
   pic->slices = g_array_sized_new (FALSE, FALSE, sizeof (VABufferID), 64);
-  pic->display = gst_object_ref (self->display);
 
   return pic;
 }
@@ -810,9 +811,8 @@ gst_va_decode_picture_free (GstVaDecodePicture * pic)
   gst_buffer_unref (pic->gstbuffer);
   g_clear_pointer (&pic->buffers, g_array_unref);
   g_clear_pointer (&pic->slices, g_array_unref);
-  gst_clear_object (&pic->display);
 
-  g_slice_free (GstVaDecodePicture, pic);
+  g_free (pic);
 }
 
 GstVaDecodePicture *
@@ -822,9 +822,8 @@ gst_va_decode_picture_dup (GstVaDecodePicture * pic)
 
   g_return_val_if_fail (pic, NULL);
 
-  dup = g_slice_new0 (GstVaDecodePicture);
+  dup = g_new0 (GstVaDecodePicture, 1);
 
-  dup->display = gst_object_ref (pic->display);
   /* dups only need gstbuffer */
   dup->gstbuffer = gst_buffer_ref (pic->gstbuffer);
   return dup;

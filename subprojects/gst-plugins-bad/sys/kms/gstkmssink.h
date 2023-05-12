@@ -27,6 +27,7 @@
 #define __GST_KMS_SINK_H__
 
 #include <gst/video/gstvideosink.h>
+#include <gst/video/video-hdr.h>
 
 G_BEGIN_DECLS
 
@@ -95,6 +96,19 @@ struct _GstKMSSink {
   gboolean reconfigure;
 
   gboolean is_internal_fd;
+  gboolean skip_vsync;
+
+#ifdef HAVE_DRM_HDR
+  /* HDR mastering related structure */
+  gboolean no_infoframe;
+  gboolean has_hdr_info;
+  gboolean has_sent_hdrif;
+  guint32 edidPropID;
+  guint32 hdrPropID;
+  gchar colorimetry;
+  GstVideoMasteringDisplayInfo hdr_minfo;
+  GstVideoContentLightLevel hdr_cll;
+#endif
 };
 
 struct _GstKMSSinkClass {

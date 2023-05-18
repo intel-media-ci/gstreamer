@@ -81,6 +81,25 @@ gst_msdkcaps_set_strings (GstCaps * caps,
 gboolean
 gst_msdkcaps_remove_structure (GstCaps * caps, const gchar * features);
 
+GstCaps *
+gst_msdkcaps_video_info_to_drm_caps (GstVideoInfo * info, guint64 modifier);
+
+gboolean
+gst_msdkcaps_video_info_from_caps (const GstCaps * caps,
+    GstVideoInfo * info, guint64 * modifier);
+
+GstCaps *
+gst_msdkcaps_intersect (GstCaps * caps, GstCaps * refer_caps);
+
+gboolean
+get_msdkcaps_fixate_format (GstCaps * caps, GstVideoFormat fmt);
+
+guint64
+get_msdkcaps_get_modifier (const GstCaps * caps);
+
+gboolean
+get_msdkcaps_remove_drm_format (GstCaps * caps);
+
 G_END_DECLS
 
 #endif /* __GST_MSDKCAPS_H__ */

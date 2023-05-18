@@ -88,6 +88,8 @@ struct _GstMsdkVPP
   gboolean add_video_meta;
   gboolean need_vpp;
   guint flags;
+  guint64 sink_modifier;
+  guint64 src_modifier;
 
   /* element properties */
   gboolean hardware;

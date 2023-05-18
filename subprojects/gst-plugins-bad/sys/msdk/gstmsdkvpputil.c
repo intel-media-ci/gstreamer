@@ -28,6 +28,9 @@
 #include "gstmsdkvpputil.h"
 #include "msdk-enums.h"
 
+#include "gstmsdkcaps.h"
+
+
 #define SWAP_GINT(a, b) do {      \
         const gint t = a; a = b; b = t; \
     } while (0)
@@ -541,8 +544,13 @@ _get_preferred_src_caps (GstMsdkVPP * thiz, GstVideoInfo * vinfo,
         1, NULL);
 
   /* Fixate the format */
-  if (!gst_structure_fixate_field (structure, "format"))
-    goto fixate_failed;
+  if (gst_video_is_dma_drm_caps (srccaps) &&
+      gst_structure_has_field (structure, "drm-format")) {
+    if (!gst_structure_fixate_field (structure, "drm-format"))
+      goto fixate_failed;
+  } else if (gst_structure_has_field (structure, "format"))
+    if (!gst_structure_fixate_field (structure, "format"))
+      goto fixate_failed;
 
   /* Fixate the frame size */
   if (!fixate_output_frame_size (thiz, vinfo, structure))
@@ -597,7 +605,23 @@ gst_msdkvpp_fixate_srccaps (GstMsdkVPP * msdkvpp,
     GstCaps * sinkcaps, GstCaps * srccaps)
 {
   GstVideoInfo vi;
-  if (!gst_video_info_from_caps (&vi, sinkcaps))
+
+#if 0
+  if (gst_video_is_dma_drm_caps (sinkcaps)) {
+    GstVideoInfoDmaDrm *drm_info =
+        gst_video_info_dma_drm_new_from_caps (sinkcaps);
+    if (!drm_info) {
+      return NULL;
+    }
+
+    vi = drm_info->vinfo;
+    gst_video_info_dma_drm_free (drm_info);
+  } else if (!gst_video_info_from_caps (&vi, sinkcaps))
     return NULL;
+#endif
+
+  if (!gst_msdkcaps_video_info_from_caps (sinkcaps, &vi, NULL))
+    return FALSE;
+
   return _get_preferred_src_caps (msdkvpp, &vi, srccaps);
 }

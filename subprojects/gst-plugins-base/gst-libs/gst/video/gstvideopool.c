@@ -22,6 +22,7 @@
 
 #include "gst/video/gstvideometa.h"
 #include "gst/video/gstvideopool.h"
+#include "gst/video/video-info-dma.h"
 
 
 GST_DEBUG_CATEGORY_STATIC (gst_video_pool_debug);
@@ -140,7 +141,15 @@ video_buffer_pool_set_config (GstBufferPool * pool, GstStructure * config)
     goto no_caps;
 
   /* now parse the caps from the config */
-  if (!gst_video_info_from_caps (&info, caps))
+  if (gst_video_is_dma_drm_caps (caps)) {
+    GstVideoInfoDmaDrm *drm_info =
+        gst_video_info_dma_drm_new_from_caps (caps);
+    if (!drm_info)
+      goto wrong_caps;
+
+    info = drm_info->vinfo;
+    gst_video_info_dma_drm_free (drm_info);
+  } else if (!gst_video_info_from_caps (&info, caps))
     goto wrong_caps;
 
   if (size < info.size)

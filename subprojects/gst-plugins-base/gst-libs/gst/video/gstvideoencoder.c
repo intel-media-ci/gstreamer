@@ -104,6 +104,7 @@
 
 #include <gst/video/gstvideometa.h>
 #include <gst/video/gstvideopool.h>
+#include <gst/video/video-info-dma.h>
 
 #include <string.h>
 
@@ -693,7 +694,13 @@ _new_input_state (GstCaps * caps)
   state = g_new0 (GstVideoCodecState, 1);
   state->ref_count = 1;
   gst_video_info_init (&state->info);
-  if (G_UNLIKELY (!gst_video_info_from_caps (&state->info, caps)))
+  if (gst_video_is_dma_drm_caps (caps)) {
+    GstVideoInfoDmaDrm *drm_info =
+        gst_video_info_dma_drm_new_from_caps (caps);
+
+    state->info = drm_info->vinfo;
+    gst_video_info_dma_drm_free (drm_info);
+  } else if (G_UNLIKELY (!gst_video_info_from_caps (&state->info, caps)))
     goto parse_fail;
   state->caps = gst_caps_ref (caps);
 
@@ -864,19 +871,25 @@ gst_video_encoder_propose_allocation_default (GstVideoEncoder * encoder,
     GstQuery * query)
 {
   GstCaps *caps;
-  GstVideoInfo info;
   GstBufferPool *pool;
-  guint size;
+  guint size = 0;
 
   gst_query_parse_allocation (query, &caps, NULL);
 
   if (caps == NULL)
     return FALSE;
 
-  if (!gst_video_info_from_caps (&info, caps))
-    return FALSE;
-
-  size = GST_VIDEO_INFO_SIZE (&info);
+ if (gst_video_is_dma_drm_caps (caps)) {
+    GstVideoInfoDmaDrm *drm_info =
+        gst_video_info_dma_drm_new_from_caps (caps);
+    size = drm_info->vinfo.size;
+    gst_video_info_dma_drm_free (drm_info);
+  } else {
+    GstVideoInfo info;
+    gst_video_info_init (&info);
+    gst_video_info_from_caps (&info, caps);
+    size = info.size;
+  }
 
   if (gst_query_get_n_allocation_pools (query) == 0) {
     GstStructure *structure;

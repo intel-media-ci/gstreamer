@@ -103,6 +103,7 @@ GST_DEBUG_CATEGORY_EXTERN (gst_msdkenc_debug);
 #define PROP_ADAPTIVE_I_DEFAULT          MFX_CODINGOPTION_UNKNOWN
 #define PROP_ADAPTIVE_B_DEFAULT          MFX_CODINGOPTION_UNKNOWN
 #define PROP_FORCE_KEYFRAME_INTERVAL_DEFAULT      0
+#define PROP_FORCE_IDR_DEFAULT           0
 
 /* External coding properties */
 #define EC_PROPS_STRUCT_NAME             "props"
@@ -1019,10 +1020,13 @@ gst_msdkenc_encode_frame (GstMsdkEnc * thiz, mfxFrameSurface1 * surface,
     /* Force the frames after certain interval as keyframes */
     if (thiz->force_keyframe_interval && input_frame->presentation_frame_number
         && (input_frame->presentation_frame_number %
-            thiz->force_keyframe_interval) == 0)
+            thiz->force_keyframe_interval) == 0) {
       thiz->enc_cntrl.FrameType = MFX_FRAMETYPE_I | MFX_FRAMETYPE_REF;
-    else
+      if (thiz->force_idr)
+        thiz->enc_cntrl.FrameType |= MFX_FRAMETYPE_IDR;
+    } else {
       thiz->enc_cntrl.FrameType = MFX_FRAMETYPE_UNKNOWN;
+    }
 
     status =
         MFXVideoENCODE_EncodeFrameAsync (session, &thiz->enc_cntrl, surface,
@@ -2004,6 +2008,7 @@ gst_msdkenc_init (GstMsdkEnc * thiz)
   thiz->adaptive_i = PROP_ADAPTIVE_I_DEFAULT;
   thiz->adaptive_b = PROP_ADAPTIVE_B_DEFAULT;
   thiz->force_keyframe_interval = PROP_FORCE_KEYFRAME_INTERVAL_DEFAULT;
+  thiz->force_idr = PROP_FORCE_IDR_DEFAULT;
 
   thiz->ext_coding_props = gst_structure_new (EC_PROPS_STRUCT_NAME,
       EC_PROPS_EXTBRC, G_TYPE_STRING, "off", NULL);
@@ -2114,6 +2119,9 @@ gst_msdkenc_set_common_property (GObject * object, guint prop_id,
       break;
     case GST_MSDKENC_PROP_FORCE_KEYFRAME_INTERVAL:
       thiz->force_keyframe_interval = g_value_get_uint (value);
+      break;
+    case GST_MSDKENC_PROP_FORCE_IDR:
+      thiz->force_idr = g_value_get_boolean (value);
       break;
     case GST_MSDKENC_PROP_EXT_CODING_PROPS:
     {
@@ -2232,6 +2240,9 @@ gst_msdkenc_get_common_property (GObject * object, guint prop_id,
       break;
     case GST_MSDKENC_PROP_FORCE_KEYFRAME_INTERVAL:
       g_value_set_uint (value, thiz->force_keyframe_interval);
+      break;
+    case GST_MSDKENC_PROP_FORCE_IDR:
+      g_value_set_boolean (value, thiz->force_idr);
       break;
     default:
       ret = FALSE;
@@ -2409,6 +2420,15 @@ gst_msdkenc_install_common_properties (GstMsdkEncClass * klass)
       0, G_MAXINT, PROP_FORCE_KEYFRAME_INTERVAL_DEFAULT,
       G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
 
+  /**
+   * GstMsdkEnc:force-idr:
+   *  
+   * Since 1.24
+   */
+  obj_properties[GST_MSDKENC_PROP_FORCE_IDR] =
+      g_param_spec_boolean ("force-idr", "Force IDR",
+      "Force I frames as IDR frames",
+      PROP_FORCE_IDR_DEFAULT, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
   /**
    * GstMsdkEnc:ext-coding-props
    *

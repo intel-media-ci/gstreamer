@@ -90,6 +90,7 @@ enum
   GST_MSDKENC_PROP_MAX_FRAME_SIZE_I,
   GST_MSDKENC_PROP_MAX_FRAME_SIZE_P,
   GST_MSDKENC_PROP_FORCE_KEYFRAME_INTERVAL,
+  GST_MSDKENC_PROP_FORCE_IDR,
   GST_MSDKENC_PROP_MAX,
 };
 
@@ -162,6 +163,7 @@ struct _GstMsdkEnc
   guint max_frame_size_p;
   gint16 lowdelay_brc;
   guint force_keyframe_interval;
+  gboolean force_idr;
 
   GstClockTime start_pts;
   GstClockTime frame_duration;

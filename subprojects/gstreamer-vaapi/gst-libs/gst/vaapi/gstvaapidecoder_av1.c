@@ -712,6 +712,7 @@ av1_fill_picture_frame_header (GstVaapiDecoderAV1 * decoder,
   pic_param->pic_info_fields.bits.uniform_tile_spacing_flag =
       frame_header->tile_info.uniform_tile_spacing_flag;
   COPY_PIC_FIELD (allow_warped_motion);
+  COPY_PIC_FIELD (large_scale_tile);
 #undef COPY_PIC_FIELD
 
   av1_fill_loop_filter_info (pic_param, frame_header);

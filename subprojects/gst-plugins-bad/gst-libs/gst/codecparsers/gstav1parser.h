@@ -1568,6 +1568,7 @@ struct _GstAV1FrameHeaderOBU {
   gboolean use_ref_frame_mvs;
   gboolean disable_frame_end_update_cdf;
   gboolean allow_warped_motion;
+  gboolean large_scale_tile;
   gboolean reduced_tx_set;
   gboolean render_and_frame_size_different;
   gboolean use_superres;

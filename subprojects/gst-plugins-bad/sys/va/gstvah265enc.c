@@ -4139,7 +4139,15 @@ _h265_setup_encoding_features (GstVaH265Enc * self)
 
   self->features.cu_qp_delta_enabled_flag =
       (self->rc.rc_ctrl_mode != VA_RC_CQP);
-  self->features.diff_cu_qp_delta_depth = features.bits.cu_qp_delta;
+
+  /* Due to Intel hardware limitations, media driver requires to set
+   * diff_cu_qp_delta_depth as 3 in low-power mode */
+  if (GST_VA_BASE_ENC_ENTRYPOINT (base) == VAEntrypointEncSliceLP &&
+      gst_va_display_is_implementation (base->display,
+          GST_VA_IMPLEMENTATION_INTEL_IHD))
+    self->features.diff_cu_qp_delta_depth = 3;
+  else
+    self->features.diff_cu_qp_delta_depth = features.bits.cu_qp_delta;
 
   /* TODO: use weighted pred */
   self->features.weighted_pred_flag = FALSE;

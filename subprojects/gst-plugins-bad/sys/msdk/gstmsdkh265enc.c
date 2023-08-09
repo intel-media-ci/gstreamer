@@ -945,8 +945,14 @@ gst_msdkh265enc_set_extra_params (GstMsdkEnc * encoder,
 {
   GstMsdkH265Enc *h265enc = GST_MSDKH265ENC (encoder);
 
-  if (h265enc->roi[0].NumROI)
-    gst_msdkenc_add_extra_param (encoder, (mfxExtBuffer *) & h265enc->roi[0]);
+  memset(&encoder->enc_cntrl.ExtParam, 0, sizeof (mfxExtBuffer));
+  encoder->enc_cntrl.NumExtParam = 0;
+
+  if (h265enc->roi[0].NumROI) {
+     encoder->roi_extra_param = (mfxExtBuffer *)&h265enc->roi[0];
+     encoder->enc_cntrl.ExtParam = &encoder->roi_extra_param;
+     encoder->enc_cntrl.NumExtParam = 1;
+  }
 }
 
 static gboolean

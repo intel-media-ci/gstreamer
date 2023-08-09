@@ -779,6 +779,7 @@ gst_msdkenc_close_encoder (GstMsdkEnc * thiz)
   g_free (thiz->tasks);
   thiz->tasks = NULL;
 
+  memset (&thiz->enc_cntrl, 0, sizeof (thiz->enc_cntrl));
   memset (&thiz->param, 0, sizeof (thiz->param));
   thiz->num_extra_params = 0;
   thiz->initialized = FALSE;
@@ -1539,7 +1540,7 @@ gst_msdkenc_handle_frame (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
   FrameData *fdata;
   GstMsdkSurface *surface;
 
-  if (thiz->reconfig || klass->need_reconfig (thiz, frame)) {
+  if (thiz->reconfig) {
     gst_msdkenc_flush_frames (thiz, FALSE);
     gst_msdkenc_close_encoder (thiz);
 
@@ -1548,6 +1549,9 @@ gst_msdkenc_handle_frame (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
     // This will reinitialized the encoder but keep same input format.
     gst_msdkenc_set_format (encoder, NULL);
   }
+
+  if (klass->need_reconfig (thiz, frame))
+    klass->set_extra_params (thiz, frame);
 
   if (G_UNLIKELY (thiz->context == NULL))
     goto not_inited;

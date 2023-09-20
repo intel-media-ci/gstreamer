@@ -1106,8 +1106,8 @@ ensure_filters (GstMsdkVPP * thiz)
   /* Color properties */
 #if (MFX_VERSION >= 2000)
   if (MFX_RUNTIME_VERSION_ATLEAST (thiz->version, 2, 0)) {
-    GstVideoInfo *in_vinfo = &thiz->sinkpad_info;
-    GstVideoInfo *out_vinfo = &thiz->srcpad_info;
+    GstVideoInfo in_vinfo = thiz->sinkpad_info;;
+    GstVideoInfo out_vinfo = thiz->srcpad_info;
     mfxExtVideoSignalInfo in_vsi, out_vsi;
     mfxExtMasteringDisplayColourVolume mdcv;
     mfxExtContentLightLevelInfo cll;
@@ -1115,20 +1115,21 @@ ensure_filters (GstMsdkVPP * thiz)
     const guint luma_den = 10000;
     gint tmap = 0;
 
-    if (in_vinfo->colorimetry.primaries || in_vinfo->colorimetry.transfer
-        || in_vinfo->colorimetry.matrix || in_vinfo->colorimetry.range) {
+
+    if (in_vinfo.colorimetry.primaries || in_vinfo.colorimetry.transfer
+        || in_vinfo.colorimetry.matrix || in_vinfo.colorimetry.range) {
       memset (&in_vsi, 0, sizeof (mfxExtVideoSignalInfo));
       in_vsi.Header.BufferId = MFX_EXTBUFF_VIDEO_SIGNAL_INFO_IN;
       in_vsi.Header.BufferSz = sizeof (in_vsi);
       in_vsi.ColourDescriptionPresent = 1;
       in_vsi.VideoFullRange =
-          (in_vinfo->colorimetry.range == GST_VIDEO_COLOR_RANGE_0_255);
+          (in_vinfo.colorimetry.range == GST_VIDEO_COLOR_RANGE_0_255);
       in_vsi.ColourPrimaries =
-          gst_video_color_primaries_to_iso (in_vinfo->colorimetry.primaries);
+          gst_video_color_primaries_to_iso (in_vinfo.colorimetry.primaries);
       in_vsi.TransferCharacteristics =
-          gst_video_transfer_function_to_iso (in_vinfo->colorimetry.transfer);
+          gst_video_transfer_function_to_iso (in_vinfo.colorimetry.transfer);
       in_vsi.MatrixCoefficients =
-          gst_video_color_matrix_to_iso (in_vinfo->colorimetry.matrix);
+          gst_video_color_matrix_to_iso (in_vinfo.colorimetry.matrix);
       gst_msdkvpp_add_extra_param (thiz, (mfxExtBuffer *) & in_vsi);
     }
 
@@ -1190,26 +1191,26 @@ ensure_filters (GstMsdkVPP * thiz)
     }
 
     if (tmap) {
-      out_vinfo->colorimetry.primaries = GST_VIDEO_COLOR_PRIMARIES_BT709;
-      out_vinfo->colorimetry.transfer = GST_VIDEO_TRANSFER_BT709;
-      out_vinfo->colorimetry.range = GST_VIDEO_COLOR_RANGE_16_235;
-      out_vinfo->colorimetry.matrix = GST_VIDEO_COLOR_MATRIX_BT709;
+      out_vinfo.colorimetry.primaries = GST_VIDEO_COLOR_PRIMARIES_BT709;
+      out_vinfo.colorimetry.transfer = GST_VIDEO_TRANSFER_BT709;
+      out_vinfo.colorimetry.range = GST_VIDEO_COLOR_RANGE_16_235;
+      out_vinfo.colorimetry.matrix = GST_VIDEO_COLOR_MATRIX_BT709;
     }
 
-    if (out_vinfo->colorimetry.primaries || out_vinfo->colorimetry.transfer
-        || out_vinfo->colorimetry.matrix || out_vinfo->colorimetry.range) {
+    if (out_vinfo.colorimetry.primaries || out_vinfo.colorimetry.transfer
+        || out_vinfo.colorimetry.matrix || out_vinfo.colorimetry.range) {
       memset (&out_vsi, 0, sizeof (mfxExtVideoSignalInfo));
       out_vsi.Header.BufferId = MFX_EXTBUFF_VIDEO_SIGNAL_INFO_OUT;
       out_vsi.Header.BufferSz = sizeof (out_vsi);
       out_vsi.ColourDescriptionPresent = 1;
       out_vsi.VideoFullRange =
-          (out_vinfo->colorimetry.range == GST_VIDEO_COLOR_RANGE_0_255);
+          (out_vinfo.colorimetry.range == GST_VIDEO_COLOR_RANGE_0_255);
       out_vsi.ColourPrimaries =
-          gst_video_color_primaries_to_iso (out_vinfo->colorimetry.primaries);
+          gst_video_color_primaries_to_iso (out_vinfo.colorimetry.primaries);
       out_vsi.TransferCharacteristics =
-          gst_video_transfer_function_to_iso (out_vinfo->colorimetry.transfer);
+          gst_video_transfer_function_to_iso (out_vinfo.colorimetry.transfer);
       out_vsi.MatrixCoefficients =
-          gst_video_color_matrix_to_iso (out_vinfo->colorimetry.matrix);
+          gst_video_color_matrix_to_iso (out_vinfo.colorimetry.matrix);
       gst_msdkvpp_add_extra_param (thiz, (mfxExtBuffer *) & out_vsi);
     }
   }

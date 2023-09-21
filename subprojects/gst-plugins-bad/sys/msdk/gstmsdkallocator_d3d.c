@@ -32,6 +32,7 @@
 
 #include <gst/d3d11/gstd3d11.h>
 #include "gstmsdkallocator.h"
+#include "msdk.h"
 
 #define GST_MSDK_FRAME_SURFACE gst_msdk_frame_surface_quark_get ()
 static GQuark
@@ -51,10 +52,27 @@ gst_msdk_frame_alloc (mfxHDL pthis, mfxFrameAllocRequest * req,
     mfxFrameAllocResponse * resp)
 {
   mfxStatus status = MFX_ERR_NONE;
+  GstMsdkContext *context = (GstMsdkContext *) pthis;
+  mfxSession session;
+  mfxVersion version;
+
+  session = gst_msdk_context_get_session (context);
+  status = MFXQueryVersion (session, &version);
+
+  if (status != MFX_ERR_NONE) {
+    GST_ERROR ("Failed to query MFX version");
+    return MFX_ERR_MEMORY_ALLOC;
+  }
+
+  /* From VPL 2.9, it starts to support dynamic frame allocation, so we don't need
+   * to do anything here */
+  if (MFX_RUNTIME_VERSION_ATLEAST (version, 2, 9)) {
+    return status;
+  }
+
   gint i;
   GstMsdkSurface *msdk_surface = NULL;
   mfxMemId *mids = NULL;
-  GstMsdkContext *context = (GstMsdkContext *) pthis;
   GstMsdkAllocResponse *msdk_resp = NULL;
   mfxU32 fourcc = req->Info.FourCC;
   mfxU16 surfaces_num = req->NumFrameSuggested;

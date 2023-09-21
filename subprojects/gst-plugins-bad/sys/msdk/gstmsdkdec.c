@@ -175,12 +175,35 @@ gst_msdkdec_free_unlocked_msdk_surfaces (GstMsdkDec * thiz,
     }
     l = next;
   }
-  /* We need to check if all surfaces are in used */
-  if (g_list_length (thiz->locked_msdk_surfaces) ==
-      thiz->alloc_resp.NumFrameActual)
-    return FALSE;
-  else
+
+  if (!(MFX_RUNTIME_VERSION_ATLEAST (thiz->version, 2, 9))) {
+    /* We need to check if all surfaces are in used */
+    if (g_list_length (thiz->locked_msdk_surfaces) ==
+        thiz->alloc_resp.NumFrameActual)
+      return FALSE;
+    else
+      return TRUE;
+  }
+
+  return TRUE;
+}
+
+static gboolean
+_get_surface_from_qdata (GstBuffer * buffer, GstMsdkSurface ** msdk_surface)
+{
+  mfxFrameSurface1 *mfx_surface = NULL;
+  GstMemory *mem = gst_buffer_peek_memory (buffer, 0);
+  GstMsdkSurface *tmp_surface = *msdk_surface;
+
+  if ((mfx_surface = gst_mini_object_get_qdata (GST_MINI_OBJECT_CAST (mem),
+              GST_MSDK_FRAME_SURFACE))) {
+    tmp_surface->surface = mfx_surface;
+    tmp_surface->from_qdata = TRUE;
+    *msdk_surface = tmp_surface;
     return TRUE;
+  } else {
+    return FALSE;
+  }
 }
 
 static GstMsdkSurface *
@@ -188,8 +211,6 @@ allocate_output_surface (GstMsdkDec * thiz)
 {
   GstMsdkSurface *msdk_surface = NULL;
   GstBuffer *out_buffer = NULL;
-  GstMemory *mem = NULL;
-  mfxFrameSurface1 *mfx_surface = NULL;
   gint n = 0;
   guint retry_times = 1000;
 #ifdef _WIN32
@@ -200,8 +221,8 @@ allocate_output_surface (GstMsdkDec * thiz)
    * surfaces will be moved from used list to available list */
   if (!gst_msdkdec_free_unlocked_msdk_surfaces (thiz, FALSE)) {
     for (n = 0; n < retry_times; n++) {
-      /* It is MediaSDK/oneVPL's requirement that only the pre-allocated
-       * surfaces can be used during the whole decoding process.
+      /* For VPL < 2.9, only the pre-allocated surfaces can be used
+       * during the whole decoding process.
        * In the case of decoder plus multi-encoders, it is possible
        * that all surfaces are used by downstreams and no more surfaces
        * available for decoder. So here we need to wait until there is at
@@ -222,30 +243,35 @@ allocate_output_surface (GstMsdkDec * thiz)
     GST_ERROR_OBJECT (thiz, "Failed to allocate output buffer");
     return NULL;
   }
+
+  msdk_surface = g_slice_new0 (GstMsdkSurface);
+
+  /* From VPL 2.9, we can dynamically allocate buffer from the pool */
+  if (MFX_RUNTIME_VERSION_ATLEAST (thiz->version, 2, 9)) {
+    if (!_get_surface_from_qdata (out_buffer, &msdk_surface)) {
+      msdk_surface = gst_msdk_import_to_msdk_surface (out_buffer, thiz->context,
+          &thiz->alloc_info, GST_MAP_WRITE);
+    }
+    if (!msdk_surface)
+      goto no_surface;
+  } else {
+    /* When VPL < 2.9, we should only use buffer with qdata means it is
+     * from preallocated buffer list */
+    if (!_get_surface_from_qdata (out_buffer, &msdk_surface))
+      goto no_surface;
+  }
 #ifdef _WIN32
   /* For d3d11 we should call gst_buffer_map with GST_MAP_WRITE |
    * GST_MAP_D3D11 flags to make sure the staging texture has been uploaded
    */
   if (!gst_buffer_map (out_buffer, &map_info, GST_MAP_WRITE | GST_MAP_D3D11)) {
     GST_ERROR ("Failed to map buffer");
-    return NULL;
-  }
-#endif
-  mem = gst_buffer_peek_memory (out_buffer, 0);
-  msdk_surface = g_slice_new0 (GstMsdkSurface);
-
-  if ((mfx_surface = gst_mini_object_get_qdata (GST_MINI_OBJECT_CAST (mem),
-              GST_MSDK_FRAME_SURFACE))) {
-    msdk_surface->surface = mfx_surface;
-    msdk_surface->from_qdata = TRUE;
-#ifdef _WIN32
-    gst_buffer_unmap (out_buffer, &map_info);
-#endif
-  } else {
-    GST_ERROR ("No available surfaces");
     g_slice_free (GstMsdkSurface, msdk_surface);
     return NULL;
   }
+
+  gst_buffer_unmap (out_buffer, &map_info);
+#endif
 
   msdk_surface->buf = out_buffer;
 
@@ -257,6 +283,11 @@ allocate_output_surface (GstMsdkDec * thiz)
       g_list_append (thiz->locked_msdk_surfaces, msdk_surface);
 
   return msdk_surface;
+
+no_surface:
+  GST_WARNING_OBJECT (thiz, "No available surfaces");
+  g_slice_free (GstMsdkSurface, msdk_surface);
+  return NULL;
 }
 
 static void
@@ -418,6 +449,13 @@ gst_msdkdec_init_decoder (GstMsdkDec * thiz)
   }
 
   session = gst_msdk_context_get_session (thiz->context);
+  status = MFXQueryVersion (session, &thiz->version);
+  if (status != MFX_ERR_NONE) {
+    GST_ERROR_OBJECT (thiz, "Video Decode Query Version failed (%s)",
+        msdk_status_to_string (status));
+    goto failed;
+  }
+
   /* validate parameters and allow MFX to make adjustments */
   status = MFXVideoDECODE_Query (session, &thiz->param, &thiz->param);
   if (status < MFX_ERR_NONE) {
@@ -1387,7 +1425,6 @@ gst_msdkdec_handle_frame (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
   GstMsdkDecClass *klass = GST_MSDKDEC_GET_CLASS (thiz);
   GstFlowReturn flow;
   GstBuffer *input_buffer = NULL;
-  GstVideoInfo alloc_info;
   MsdkDecTask *task = NULL;
   mfxBitstream bitstream;
   GstMsdkSurface *surface = NULL;
@@ -1511,27 +1548,12 @@ gst_msdkdec_handle_frame (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
     if (!thiz->initialized)
       hard_reset = TRUE;
     else {
-      GstVideoCodecState *output_state =
-          gst_video_decoder_get_output_state (GST_VIDEO_DECODER (thiz));
-      if (output_state) {
-        if (output_state->allocation_caps) {
-          if (!gst_msdkcaps_video_info_from_caps (output_state->allocation_caps,
-                  &alloc_info, NULL)) {
-            GST_ERROR_OBJECT (thiz, "Failed to get video info from caps");
-            flow = GST_FLOW_ERROR;
-            goto error;
-          }
-
-          /* Check whether we need complete reset for dynamic resolution change */
-          if (thiz->param.mfx.FrameInfo.Width >
-              GST_VIDEO_INFO_WIDTH (&alloc_info)
-              || thiz->param.mfx.FrameInfo.Height >
-              GST_VIDEO_INFO_HEIGHT (&alloc_info))
-            hard_reset = TRUE;
-        }
-        gst_video_codec_state_unref (output_state);
-      }
-
+      /* Check whether we need complete reset for dynamic resolution change */
+      if (thiz->param.mfx.FrameInfo.Width >
+          GST_VIDEO_INFO_WIDTH (&thiz->alloc_info)
+          || thiz->param.mfx.FrameInfo.Height >
+          GST_VIDEO_INFO_HEIGHT (&thiz->alloc_info))
+        hard_reset = TRUE;
     }
 
     /* if subclass requested for the force reset */
@@ -1881,6 +1903,9 @@ gst_msdkdec_decide_allocation (GstVideoDecoder * decoder, GstQuery * query)
   guint min_buffers = 0;
   guint max_buffers = 0;
   gboolean has_videometa, has_video_alignment;
+  GstVideoAlignment align;
+  GstStructure *tmp_config = NULL;
+  GstVideoFormat format;
 
   GstAllocator *allocator = NULL;
   GstAllocationParams params;
@@ -2044,6 +2069,34 @@ gst_msdkdec_decide_allocation (GstVideoDecoder * decoder, GstQuery * query)
 
     gst_video_codec_state_unref (output_state);
   }
+
+  format =
+      gst_msdk_get_video_format_from_mfx_fourcc (thiz->param.mfx.
+      FrameInfo.FourCC);
+  gst_video_info_set_format (&thiz->alloc_info, format,
+      thiz->param.mfx.FrameInfo.CropW, thiz->param.mfx.FrameInfo.CropH);
+
+  tmp_config = gst_buffer_pool_get_config (GST_BUFFER_POOL_CAST (pool));
+  gst_msdk_set_video_alignment (&thiz->alloc_info,
+      thiz->param.mfx.FrameInfo.Width, thiz->param.mfx.FrameInfo.Height,
+      &align);
+  gst_video_info_align (&thiz->alloc_info, &align);
+#ifndef _WIN32
+  gst_buffer_pool_config_set_va_alignment (tmp_config, &align);
+#else
+  GstD3D11Device *device;
+  GstD3D11AllocationParams *tmp_params;
+
+  device = gst_msdk_context_get_d3d11_device (thiz->context);
+  tmp_params = gst_d3d11_allocation_params_new (device, &thiz->alloc_info,
+      GST_D3D11_ALLOCATION_FLAG_DEFAULT,
+      D3D11_BIND_DECODER | D3D11_BIND_SHADER_RESOURCE, 0);
+  gst_d3d11_allocation_params_alignment (tmp_params, &align);
+  gst_buffer_pool_config_set_d3d11_allocation_params (tmp_config, tmp_params);
+  gst_d3d11_allocation_params_free (tmp_params);
+#endif
+  if (!gst_buffer_pool_set_config (pool, tmp_config))
+    goto error_set_config;
 
   gst_msdk_context_set_alloc_pool (thiz->context, pool);
 

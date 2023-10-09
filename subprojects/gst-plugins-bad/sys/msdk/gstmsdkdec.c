@@ -973,8 +973,12 @@ gst_msdkdec_finish_task (GstMsdkDec * thiz, MsdkDecTask * task)
 
     finish_task (thiz, task);
 
-    if (!frame)
-      return GST_FLOW_FLUSHING;
+    if (!frame) {
+      GST_WARNING_OBJECT (thiz, "Failed to find corresponding frame");
+      GST_BUFFER_PTS (surface->buf) = MFX_TO_GST_TIME (pts);
+      return gst_pad_push (GST_VIDEO_DECODER_SRC_PAD (thiz),
+          gst_buffer_ref (surface->buf));
+    }
 
     if (decode_only)
       GST_VIDEO_CODEC_FRAME_SET_DECODE_ONLY (frame);

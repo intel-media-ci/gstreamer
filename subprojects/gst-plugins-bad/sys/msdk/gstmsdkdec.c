@@ -52,7 +52,7 @@ GST_DEBUG_CATEGORY_EXTERN (gst_msdkdec_debug);
 #define GST_CAT_DEFAULT gst_msdkdec_debug
 
 #define PROP_HARDWARE_DEFAULT            TRUE
-#define PROP_ASYNC_DEPTH_DEFAULT         1
+#define PROP_ASYNC_DEPTH_DEFAULT         4
 
 #define IS_ALIGNED(i, n) (((i) & ((n)-1)) == 0)
 

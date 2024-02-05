@@ -15,8 +15,7 @@ endif
 if onnxrt_dep.found()
     gstonnx = library('gstonnx',
     'gstonnx.c',
-    'decoders/gstobjectdetectorutils.cpp',
-    'decoders/gstssdobjectdetector.cpp',
+    'decoders/gstssdobjectdetector.c',
     'gstonnxinference.cpp',
     'gstonnxclient.cpp',
     'tensor/gsttensormeta.c',
@@ -25,7 +24,7 @@ if onnxrt_dep.found()
     link_args : noseh_link_args,
     include_directories : [configinc, libsinc, cuda_stubinc],
     dependencies : [gstbase_dep, gstvideo_dep, gstanalytics_dep, onnxrt_dep,
-        libm] + extra_deps,
+        libm, gio_dep] + extra_deps,
     install : true,
     install_dir : plugins_install_dir,
   )

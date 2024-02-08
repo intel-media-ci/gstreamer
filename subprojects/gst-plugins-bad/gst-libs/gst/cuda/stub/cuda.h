@@ -39,6 +39,7 @@ typedef gint CUdevice;
 typedef enum
 {
   CUDA_SUCCESS = 0,
+  CUDA_ERROR_NO_DEVICE = 100,
   CUDA_ERROR_ALREADY_MAPPED = 208,
   CUDA_ERROR_NOT_SUPPORTED = 801,
 } CUresult;
@@ -305,6 +306,8 @@ typedef struct
 #define cuCtxPushCurrent cuCtxPushCurrent_v2
 #define cuGraphicsResourceGetMappedPointer cuGraphicsResourceGetMappedPointer_v2
 #define cuGraphicsResourceSetMapFlags cuGraphicsResourceSetMapFlags_v2
+
+#define cuStreamDestroy cuStreamDestroy_v2
 
 #define cuMemAlloc cuMemAlloc_v2
 #define cuMemAllocPitch cuMemAllocPitch_v2

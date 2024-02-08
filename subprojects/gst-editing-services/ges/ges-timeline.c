@@ -501,6 +501,8 @@ ges_timeline_handle_message (GstBin * bin, GstMessage * message)
             gst_structure_get_string (mstructure, "reason"));
       }
       GST_OBJECT_UNLOCK (timeline);
+    } else {
+      goto forward;
     }
 
     gst_message_unref (message);
@@ -514,6 +516,16 @@ forward:
   GST_BIN_CLASS (parent_class)->handle_message (bin, message);
 }
 
+static void
+ges_timeline_post_stream_collection (GESTimeline * timeline)
+{
+  gst_element_post_message ((GstElement *) timeline,
+      gst_message_new_element ((GstObject *) timeline,
+          gst_structure_new ("ges-timeline-collection", "collection",
+              GST_TYPE_STREAM_COLLECTION, timeline->priv->stream_collection,
+              NULL)));
+}
+
 static GstStateChangeReturn
 ges_timeline_change_state (GstElement * element, GstStateChange transition)
 {
@@ -524,9 +536,7 @@ ges_timeline_change_state (GstElement * element, GstStateChange transition)
       transition);
 
   if (transition == GST_STATE_CHANGE_READY_TO_PAUSED)
-    gst_element_post_message ((GstElement *) timeline,
-        gst_message_new_stream_collection ((GstObject *) timeline,
-            timeline->priv->stream_collection));
+    ges_timeline_post_stream_collection (timeline);
   return res;
 }
 
@@ -2516,7 +2526,7 @@ ges_timeline_add_track (GESTimeline * timeline, GESTrack * track)
   g_return_val_if_fail (GES_IS_TRACK (track), FALSE);
   CHECK_THREAD (timeline);
 
-  GST_DEBUG ("timeline:%p, track:%p", timeline, track);
+  GST_DEBUG_OBJECT (timeline, "Adding %" GST_PTR_FORMAT, track);
 
   /* make sure we don't already control it */
   LOCK_DYN (timeline);
@@ -2894,9 +2904,7 @@ ges_timeline_commit (GESTimeline * timeline)
   UNLOCK_DYN (timeline);
 
   if (pcollection != timeline->priv->stream_collection) {
-    gst_element_post_message ((GstElement *) timeline,
-        gst_message_new_stream_collection ((GstObject *) timeline,
-            timeline->priv->stream_collection));
+    ges_timeline_post_stream_collection (timeline);
   }
 
   ges_timeline_emit_snapping (timeline, NULL, NULL, GST_CLOCK_TIME_NONE);

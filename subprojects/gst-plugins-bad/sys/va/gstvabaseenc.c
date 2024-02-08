@@ -269,9 +269,10 @@ gst_va_base_enc_import_input_buffer (GstVaBaseEnc * base,
   return gst_va_buffer_importer_import (&importer, inbuf, buf);
 }
 
-static GstBuffer *
+GstBuffer *
 gst_va_base_enc_create_output_buffer (GstVaBaseEnc * base,
-    GstVaEncodePicture * picture)
+    GstVaEncodePicture * picture, const guint8 * prefix_data,
+    guint prefix_data_len)
 {
   guint coded_size;
   goffset offset;
@@ -300,7 +301,7 @@ gst_va_base_enc_create_output_buffer (GstVaBaseEnc * base,
     coded_size += seg->size;
 
   buf = gst_video_encoder_allocate_output_buffer (GST_VIDEO_ENCODER_CAST (base),
-      coded_size);
+      coded_size + prefix_data_len);
   if (!buf) {
     va_unmap_buffer (base->display, picture->coded_buffer);
     GST_ERROR_OBJECT (base, "Failed to allocate output buffer, size %d",
@@ -309,6 +310,12 @@ gst_va_base_enc_create_output_buffer (GstVaBaseEnc * base,
   }
 
   offset = 0;
+  if (prefix_data) {
+    g_assert (prefix_data_len > 0);
+    gst_buffer_fill (buf, offset, prefix_data, prefix_data_len);
+    offset += prefix_data_len;
+  }
+
   for (seg = seg_list; seg; seg = seg->next) {
     gsize write_size;
 
@@ -328,6 +335,53 @@ gst_va_base_enc_create_output_buffer (GstVaBaseEnc * base,
 error:
   gst_clear_buffer (&buf);
   return NULL;
+}
+
+/* Return 0 means error and -1 means not enough data. */
+gint
+gst_va_base_enc_copy_output_data (GstVaBaseEnc * base,
+    GstVaEncodePicture * picture, guint8 * data, gint size)
+{
+  guint coded_size;
+  VASurfaceID surface;
+  VACodedBufferSegment *seg, *seg_list;
+  gint ret_sz = 0;
+
+  /* Wait for encoding to finish */
+  surface = gst_va_encode_picture_get_raw_surface (picture);
+  if (!va_sync_surface (base->display, surface))
+    goto out;
+
+  seg_list = NULL;
+  if (!va_map_buffer (base->display, picture->coded_buffer,
+          GST_MAP_READ, (gpointer *) & seg_list))
+    goto out;
+
+  if (!seg_list) {
+    va_unmap_buffer (base->display, picture->coded_buffer);
+    GST_WARNING_OBJECT (base, "coded buffer has no segment list");
+    goto out;
+  }
+
+  coded_size = 0;
+  for (seg = seg_list; seg; seg = seg->next)
+    coded_size += seg->size;
+
+  if (coded_size > size) {
+    GST_DEBUG_OBJECT (base, "Not enough space for coded data");
+    ret_sz = -1;
+    goto out;
+  }
+
+  for (seg = seg_list; seg; seg = seg->next) {
+    memcpy (data + ret_sz, seg->buf, seg->size);
+    ret_sz += seg->size;
+  }
+
+  va_unmap_buffer (base->display, picture->coded_buffer);
+
+out:
+  return ret_sz;
 }
 
 static GstAllocator *
@@ -404,37 +458,38 @@ config_failed:
 static GstFlowReturn
 _push_buffer_to_downstream (GstVaBaseEnc * base, GstVideoCodecFrame * frame)
 {
-  GstVaEncodePicture *enc_picture;
   GstVaBaseEncClass *base_class = GST_VA_BASE_ENC_GET_CLASS (base);
-  GstBuffer *buf;
+  GstFlowReturn ret;
+  gboolean complete = TRUE;
 
-  if (base_class->prepare_output)
-    base_class->prepare_output (base, frame);
-
-  enc_picture =
-      *((GstVaEncodePicture **) gst_video_codec_frame_get_user_data (frame));
-
-  buf = gst_va_base_enc_create_output_buffer (base, enc_picture);
-  if (!buf) {
-    GST_ERROR_OBJECT (base, "Failed to create output buffer");
+  if (!base_class->prepare_output (base, frame, &complete)) {
+    GST_ERROR_OBJECT (base, "Failed to prepare output");
     goto error;
   }
 
-  gst_buffer_replace (&frame->output_buffer, buf);
-  gst_clear_buffer (&buf);
+  if (frame->output_buffer)
+    GST_LOG_OBJECT (base, "Push to downstream: frame system_frame_number: %d,"
+        " pts: %" GST_TIME_FORMAT ", dts: %" GST_TIME_FORMAT
+        " duration: %" GST_TIME_FORMAT ", buffer size: %" G_GSIZE_FORMAT,
+        frame->system_frame_number, GST_TIME_ARGS (frame->pts),
+        GST_TIME_ARGS (frame->dts), GST_TIME_ARGS (frame->duration),
+        gst_buffer_get_size (frame->output_buffer));
 
-  GST_LOG_OBJECT (base, "Push to downstream: frame system_frame_number: %d,"
-      " pts: %" GST_TIME_FORMAT ", dts: %" GST_TIME_FORMAT
-      " duration: %" GST_TIME_FORMAT ", buffer size: %" G_GSIZE_FORMAT,
-      frame->system_frame_number, GST_TIME_ARGS (frame->pts),
-      GST_TIME_ARGS (frame->dts), GST_TIME_ARGS (frame->duration),
-      gst_buffer_get_size (frame->output_buffer));
+  if (complete) {
+    ret = gst_video_encoder_finish_frame (GST_VIDEO_ENCODER (base), frame);
+  } else {
+    if (frame->output_buffer) {
+      ret = gst_video_encoder_finish_subframe (GST_VIDEO_ENCODER (base), frame);
+    } else {
+      /* Allow to output later and no data here. */
+      ret = GST_FLOW_OK;
+    }
+  }
 
-  return gst_video_encoder_finish_frame (GST_VIDEO_ENCODER (base), frame);
+  return ret;
 
 error:
   gst_clear_buffer (&frame->output_buffer);
-  gst_clear_buffer (&buf);
   gst_video_encoder_finish_frame (GST_VIDEO_ENCODER (base), frame);
 
   return GST_FLOW_ERROR;

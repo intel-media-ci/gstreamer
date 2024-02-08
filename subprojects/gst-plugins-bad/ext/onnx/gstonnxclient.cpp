@@ -53,7 +53,7 @@ GstOnnxClient::GstOnnxClient (GstElement *debug_parent):debug_parent(debug_paren
       dest (nullptr),
       m_provider (GST_ONNX_EXECUTION_PROVIDER_CPU),
       inputImageFormat (GST_ML_INPUT_IMAGE_FORMAT_HWC),
-      inputDatatype (GST_TENSOR_TYPE_INT8),
+      inputDatatype (GST_TENSOR_TYPE_UINT8),
       inputDatatypeSize (sizeof (uint8_t)),
       fixedInputImageSize (false),
       inputTensorOffset (0.0),
@@ -96,18 +96,21 @@ GstOnnxClient::GstOnnxClient (GstElement *debug_parent):debug_parent(debug_paren
     return inputImageFormat;
   }
 
-  void GstOnnxClient::setInputImageDatatype(GstTensorType datatype)
+  void GstOnnxClient::setInputImageDatatype(GstTensorDataType datatype)
   {
     inputDatatype = datatype;
     switch (inputDatatype) {
-      case GST_TENSOR_TYPE_INT8:
+      case GST_TENSOR_TYPE_UINT8:
         inputDatatypeSize = sizeof (uint8_t);
         break;
-      case GST_TENSOR_TYPE_INT16:
+      case GST_TENSOR_TYPE_UINT16:
         inputDatatypeSize = sizeof (uint16_t);
         break;
-      case GST_TENSOR_TYPE_INT32:
+      case GST_TENSOR_TYPE_UINT32:
         inputDatatypeSize = sizeof (uint32_t);
+        break;
+      case GST_TENSOR_TYPE_INT32:
+        inputDatatypeSize = sizeof (int32_t);
         break;
       case GST_TENSOR_TYPE_FLOAT16:
         inputDatatypeSize = 2;
@@ -115,6 +118,9 @@ GstOnnxClient::GstOnnxClient (GstElement *debug_parent):debug_parent(debug_paren
       case GST_TENSOR_TYPE_FLOAT32:
         inputDatatypeSize = sizeof (float);
         break;
+    default:
+        g_error ("Data type %d not handled", inputDatatype);
+	break;
     };
   }
 
@@ -138,7 +144,7 @@ GstOnnxClient::GstOnnxClient (GstElement *debug_parent):debug_parent(debug_paren
     return inputTensorScale;
   }
 
-  GstTensorType GstOnnxClient::getInputImageDatatype(void)
+  GstTensorDataType GstOnnxClient::getInputImageDatatype(void)
   {
     return inputDatatype;
   }
@@ -241,7 +247,7 @@ GstOnnxClient::GstOnnxClient (GstElement *debug_parent):debug_parent(debug_paren
 
       switch (elementType) {
         case ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT8:
-          setInputImageDatatype(GST_TENSOR_TYPE_INT8);
+          setInputImageDatatype(GST_TENSOR_TYPE_UINT8);
           break;
         case ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT:
           setInputImageDatatype(GST_TENSOR_TYPE_FLOAT32);
@@ -356,7 +362,7 @@ GstOnnxClient::GstOnnxClient (GstElement *debug_parent):debug_parent(debug_paren
 	tensor->data = gst_buffer_new_allocate (NULL, buffer_size, NULL);
 	gst_buffer_fill (tensor->data, 0, outputTensor.GetTensorData < float >(),
             buffer_size);
-        tensor->type = GST_TENSOR_TYPE_FLOAT32;
+        tensor->data_type = GST_TENSOR_TYPE_FLOAT32;
       } else if (tensorType == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32) {
 	size_t buffer_size = 0;
 
@@ -364,7 +370,7 @@ GstOnnxClient::GstOnnxClient (GstElement *debug_parent):debug_parent(debug_paren
 	tensor->data = gst_buffer_new_allocate (NULL, buffer_size, NULL);
 	gst_buffer_fill (tensor->data, 0, outputTensor.GetTensorData < float >(),
             buffer_size);
-        tensor->type = GST_TENSOR_TYPE_INT32;
+        tensor->data_type = GST_TENSOR_TYPE_INT32;
       } else {
 	GST_ERROR_OBJECT (debug_parent, "Output tensor is not FLOAT32 or INT32, not supported");
 	gst_buffer_remove_meta (buffer, (GstMeta*) tmeta);
@@ -450,7 +456,7 @@ GstOnnxClient::GstOnnxClient (GstElement *debug_parent):debug_parent(debug_paren
     std::vector < Ort::Value > inputTensors;
 
     switch (inputDatatype) {
-      case GST_TENSOR_TYPE_INT8:
+      case GST_TENSOR_TYPE_UINT8:
         uint8_t *src_data;
         if (inputTensorOffset == 00 && inputTensorScale == 1.0) {
           src_data = img_data;

@@ -30,6 +30,7 @@ qt6_egl = get_option('qt-egl')
 qt6_wayland = get_option('qt-wayland')
 qt6_x11 = get_option('qt-x11')
 qt6_method = get_option('qt-method')
+fs = import('fs')
 
 if qt6_option.disabled()
   subdir_done()
@@ -160,7 +161,7 @@ if host_system == 'ios'
   endif
 endif
 
-if qt6_option.require(have_qt_windowing).allowed()
+if qt6_option.require(have_qt_windowing, error_message: 'No windowing, enable one of the qt-* windowing options').allowed()
   # Build it!
   moc_files = qt6_mod.preprocess(moc_headers : moc_headers, method: qt6_method)
   # TODO: dist backup qsb shaders?
@@ -176,7 +177,7 @@ if qt6_option.require(have_qt_windowing).allowed()
     )
     shaders += [compiled_shader]
   endforeach
-  resource_file = configure_file(input: 'resources.qrc', output: 'resources.qrc', copy: true)
+  resource_file = fs.copyfile('resources.qrc')
   qresources = qt6_mod.compile_resources(sources: resource_file, method: qt6_method)
 
   gstqml6gl = library('gstqml6', sources, moc_files, qresources,

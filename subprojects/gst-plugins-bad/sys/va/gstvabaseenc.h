@@ -91,8 +91,9 @@ struct _GstVaBaseEncClass
   GstFlowReturn (*encode_frame) (GstVaBaseEnc * encoder,
                                  GstVideoCodecFrame * frame,
                                  gboolean is_last);
-  void     (*prepare_output) (GstVaBaseEnc * encoder,
-                              GstVideoCodecFrame * frame);
+  gboolean (*prepare_output) (GstVaBaseEnc * encoder,
+                              GstVideoCodecFrame * frame,
+                              gboolean * complete);
 
   GstVaCodecs codec;
   VAEntrypoint entrypoint;
@@ -136,7 +137,14 @@ gboolean              gst_va_base_enc_add_trellis_parameter (GstVaBaseEnc * base
 void                  gst_va_base_enc_add_codec_tag       (GstVaBaseEnc * base,
                                                            const gchar * codec_name);
 void                  gst_va_base_enc_reset_state         (GstVaBaseEnc * base);
-
+GstBuffer *           gst_va_base_enc_create_output_buffer (GstVaBaseEnc * base,
+                                                            GstVaEncodePicture * picture,
+                                                            const guint8 * prefix_data,
+                                                            guint prefix_data_len);
+gint                  gst_va_base_enc_copy_output_data    (GstVaBaseEnc * base,
+                                                           GstVaEncodePicture * picture,
+                                                           guint8 * data,
+                                                           gint size);
 void                  gst_va_base_enc_update_property_uint (GstVaBaseEnc * base,
                                                             guint32 * old_val,
                                                             guint32 new_val,

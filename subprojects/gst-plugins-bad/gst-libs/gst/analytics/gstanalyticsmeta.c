@@ -169,6 +169,16 @@ gst_analytics_mtd_get_size (GstAnalyticsMtd * handle)
   return rlt->size;
 }
 
+/**
+ * gst_analytics_mtd_type_get_name:
+ * @type: The type of analytics data
+ *
+ * Gets the string version of the name of this type of analytics data
+ *
+ * Returns: the name
+ *
+ * Since: 1.24
+ */
 const gchar *
 gst_analytics_mtd_type_get_name (GstAnalyticsMtdType type)
 {
@@ -176,7 +186,10 @@ gst_analytics_mtd_type_get_name (GstAnalyticsMtdType type)
 
   g_return_val_if_fail (impl != NULL, NULL);
 
-  return impl->name;
+  if (type == GST_ANALYTICS_MTD_TYPE_ANY)
+    return "ANY";
+  else
+    return impl->name;
 }
 
 /**
@@ -1008,7 +1021,6 @@ gst_analytics_relation_meta_get_direct_related (GstAnalyticsRelationMeta * meta,
       gst_analytics_mtd_type_get_name (type), an_meta_id, relation_type);
 
   g_return_val_if_fail (rmeta != NULL, FALSE);
-  g_return_val_if_fail (type != 0, FALSE);
 
   if (state) {
     if (*state) {
@@ -1037,7 +1049,8 @@ gst_analytics_relation_meta_get_direct_related (GstAnalyticsRelationMeta * meta,
       rlt_mtd_data = (GstAnalyticsRelatableMtdData *)
           (meta->mtd_data_lookup[i] + meta->analysis_results);
       rlt_mtd->id = rlt_mtd_data->id;
-      if (gst_analytics_mtd_get_mtd_type (rlt_mtd) == type) {
+      if (type == GST_ANALYTICS_MTD_TYPE_ANY
+          || gst_analytics_mtd_get_mtd_type (rlt_mtd) == type) {
         if (state) {
           *state = GSIZE_TO_POINTER (G_MINSSIZE | i);
         }

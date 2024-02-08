@@ -1,5 +1,5 @@
 /* GStreamer
- * Copyright (C) 2019 Seungha Yang <seungha.yang@navercorp.com>
+ * Copyright (C) 2024 Seungha Yang <seungha@centricular.com>
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Library General Public
@@ -17,15 +17,15 @@
  * Boston, MA 02110-1301, USA.
  */
 
-#ifndef __GST_CUDA_FILTER_H__
-#define __GST_CUDA_FILTER_H__
+#pragma once
 
-#include <gst/gst.h>
+#include <gst/cuda/gstcuda.h>
 
 G_BEGIN_DECLS
 
-void gst_cuda_filter_plugin_init (GstPlugin * plugin);
+void gst_nv_jpeg_enc_register (GstPlugin * plugin,
+                               GstCudaContext * context,
+                               guint rank,
+                               gboolean have_nvrtc);
 
 G_END_DECLS
-
-#endif /* __GST_CUDA_FILTER_H__ */

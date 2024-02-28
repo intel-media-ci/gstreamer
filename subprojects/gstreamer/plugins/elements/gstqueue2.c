@@ -264,7 +264,6 @@ static GParamSpec *obj_props[PROP_LAST] = { NULL, };
 #define SET_PERCENT(q, perc) G_STMT_START {                              \
   if (perc != q->buffering_percent) {                                    \
     q->buffering_percent = perc;                                         \
-    q->percent_changed = TRUE;                                           \
     GST_DEBUG_OBJECT (q, "buffering %d percent", perc);                  \
     get_buffering_stats (q, perc, &q->mode, &q->avg_in, &q->avg_out,     \
         &q->buffering_left);                                             \
@@ -320,8 +319,6 @@ static gboolean gst_queue2_is_filled (GstQueue2 * queue);
 
 static void update_cur_level (GstQueue2 * queue, GstQueue2Range * range);
 static void update_in_rates (GstQueue2 * queue, gboolean force);
-static GstMessage *gst_queue2_get_buffering_message (GstQueue2 * queue,
-    gint * percent);
 static void update_buffering (GstQueue2 * queue);
 static void gst_queue2_post_buffering (GstQueue2 * queue);
 
@@ -878,14 +875,15 @@ query_downstream_bitrate (GstQueue2 * queue)
 
   GST_QUEUE2_MUTEX_LOCK (queue);
   changed = queue->downstream_bitrate != downstream_bitrate;
-  queue->downstream_bitrate = downstream_bitrate;
+  if (changed) {
+    queue->downstream_bitrate = downstream_bitrate;
+    if (queue->use_buffering)
+      update_buffering (queue);
+  }
   GST_QUEUE2_MUTEX_UNLOCK (queue);
 
   if (changed) {
-    if (queue->use_buffering)
-      update_buffering (queue);
     gst_queue2_post_buffering (queue);
-
     g_object_notify_by_pspec (G_OBJECT (queue), obj_props[PROP_BITRATE]);
   }
 }
@@ -1175,38 +1173,6 @@ get_buffering_stats (GstQueue2 * queue, gint percent, GstBufferingMode * mode,
   }
 }
 
-/* Called with the lock taken */
-static GstMessage *
-gst_queue2_get_buffering_message (GstQueue2 * queue, gint * percent)
-{
-  GstMessage *msg = NULL;
-  if (queue->percent_changed) {
-    /* Don't change the buffering level if the sinkpad is waiting for
-     * space to become available.  This prevents the situation where,
-     * upstream is pushing buffers larger than our limits so only 1 buffer
-     * is ever in the queue at a time.
-     * Changing the level causes a buffering message to be posted saying that
-     * we are buffering which the application may pause to wait for another
-     * 100% buffering message which would be posted very soon after the
-     * waiting sink thread adds it's buffer to the queue */
-    /* FIXME: This situation above can still occur later if
-     * the sink pad is waiting to push a serialized event into the queue and
-     * the queue becomes empty for a short period of time. */
-    if (!queue->waiting_del
-        && queue->last_posted_buffering_percent != queue->buffering_percent) {
-      *percent = queue->buffering_percent;
-
-      GST_DEBUG_OBJECT (queue, "Going to post buffering: %d%%", *percent);
-      msg = gst_message_new_buffering (GST_OBJECT_CAST (queue), *percent);
-
-      gst_message_set_buffering_stats (msg, queue->mode, queue->avg_in,
-          queue->avg_out, queue->buffering_left);
-    }
-  }
-
-  return msg;
-}
-
 static void
 gst_queue2_post_buffering (GstQueue2 * queue)
 {
@@ -1214,21 +1180,34 @@ gst_queue2_post_buffering (GstQueue2 * queue)
   gint percent = -1;
 
   g_mutex_lock (&queue->buffering_post_lock);
+
   GST_QUEUE2_MUTEX_LOCK (queue);
-  msg = gst_queue2_get_buffering_message (queue, &percent);
+  /* Don't change the buffering level if the sinkpad is waiting for
+   * space to become available.  This prevents the situation where,
+   * upstream is pushing buffers larger than our limits so only 1 buffer
+   * is ever in the queue at a time.
+   * Changing the level causes a buffering message to be posted saying that
+   * we are buffering which the application may pause to wait for another
+   * 100% buffering message which would be posted very soon after the
+   * waiting sink thread adds it's buffer to the queue */
+  /* FIXME: This situation above can still occur later if
+   * the sink pad is waiting to push a serialized event into the queue and
+   * the queue becomes empty for a short period of time. */
+  if ((!queue->waiting_del || queue->buffering_percent == 100)
+      && queue->last_posted_buffering_percent != queue->buffering_percent) {
+    percent = queue->buffering_percent;
+
+    GST_DEBUG_OBJECT (queue, "Going to post buffering: %d%%", percent);
+    msg = gst_message_new_buffering (GST_OBJECT_CAST (queue), percent);
+
+    gst_message_set_buffering_stats (msg, queue->mode, queue->avg_in,
+        queue->avg_out, queue->buffering_left);
+  }
   GST_QUEUE2_MUTEX_UNLOCK (queue);
 
   if (msg != NULL) {
     if (gst_element_post_message (GST_ELEMENT_CAST (queue), msg)) {
-      GST_QUEUE2_MUTEX_LOCK (queue);
-      /* Set these states only if posting the message succeeded. Otherwise,
-       * this post attempt failed, and the next one won't be done, because
-       * gst_queue2_get_buffering_message() checks these states and decides
-       * based on their values that it won't produce a message. */
       queue->last_posted_buffering_percent = percent;
-      if (percent == queue->buffering_percent)
-        queue->percent_changed = FALSE;
-      GST_QUEUE2_MUTEX_UNLOCK (queue);
       GST_DEBUG_OBJECT (queue, "successfully posted %d%% buffering message",
           percent);
     } else
@@ -2248,37 +2227,12 @@ gst_queue2_create_write (GstQueue2 * queue, GstBuffer * buffer)
     update_cur_level (queue, queue->current);
 
     /* update the buffering status */
-    if (queue->use_buffering) {
-      GstMessage *msg;
-      gint percent = -1;
+    if (queue->use_buffering)
       update_buffering (queue);
-      msg = gst_queue2_get_buffering_message (queue, &percent);
-      if (msg) {
-        gboolean post_ok;
 
-        GST_QUEUE2_MUTEX_UNLOCK (queue);
-
-        g_mutex_lock (&queue->buffering_post_lock);
-        post_ok = gst_element_post_message (GST_ELEMENT_CAST (queue), msg);
-
-        GST_QUEUE2_MUTEX_LOCK (queue);
-
-        if (post_ok) {
-          /* Set these states only if posting the message succeeded. Otherwise,
-           * this post attempt failed, and the next one won't be done, because
-           * gst_queue2_get_buffering_message() checks these states and decides
-           * based on their values that it won't produce a message. */
-          queue->last_posted_buffering_percent = percent;
-          if (percent == queue->buffering_percent)
-            queue->percent_changed = FALSE;
-          GST_DEBUG_OBJECT (queue, "successfully posted %d%% buffering message",
-              percent);
-        } else {
-          GST_DEBUG_OBJECT (queue, "could not post buffering message");
-        }
-        g_mutex_unlock (&queue->buffering_post_lock);
-      }
-    }
+    GST_QUEUE2_MUTEX_UNLOCK (queue);
+    gst_queue2_post_buffering (queue);
+    GST_QUEUE2_MUTEX_LOCK (queue);
 
     GST_INFO_OBJECT (queue, "cur_level.bytes %u (max %" G_GUINT64_FORMAT ")",
         queue->cur_level.bytes, QUEUE_MAX_BYTES (queue));
@@ -3285,15 +3239,15 @@ out_flushing:
       queue->last_query = FALSE;
       g_cond_signal (&queue->query_handled);
     }
-    GST_QUEUE2_MUTEX_UNLOCK (queue);
-    GST_CAT_LOG_OBJECT (queue_dataflow, queue,
-        "pause task, reason:  %s", gst_flow_get_name (queue->srcresult));
     /* Recalculate buffering levels before stopping since the source flow
      * might cause a different buffering level (like NOT_LINKED making
      * the queue appear as full) */
     if (queue->use_buffering)
       update_buffering (queue);
+    GST_QUEUE2_MUTEX_UNLOCK (queue);
     gst_queue2_post_buffering (queue);
+    GST_CAT_LOG_OBJECT (queue_dataflow, queue,
+        "pause task, reason:  %s", gst_flow_get_name (queue->srcresult));
     /* let app know about us giving up if upstream is not expected to do so */
     /* EOS is already taken care of elsewhere */
     if (eos && (ret == GST_FLOW_NOT_LINKED || ret < GST_FLOW_EOS)) {

@@ -474,6 +474,8 @@ static GstFlowReturn gst_rtspsrc_push_backchannel_buffer (GstRTSPSrc * src,
 static GstFlowReturn gst_rtspsrc_push_backchannel_sample (GstRTSPSrc * src,
     guint id, GstSample * sample);
 
+static void gst_rtspsrc_reset_flows (GstRTSPSrc * src);
+
 typedef struct
 {
   guint8 pt;
@@ -508,7 +510,7 @@ static guint gst_rtspsrc_signals[LAST_SIGNAL] = { 0 };
 #define gst_rtspsrc_parent_class parent_class
 G_DEFINE_TYPE_WITH_CODE (GstRTSPSrc, gst_rtspsrc, GST_TYPE_BIN,
     G_IMPLEMENT_INTERFACE (GST_TYPE_URI_HANDLER, gst_rtspsrc_uri_handler_init));
-GST_ELEMENT_REGISTER_DEFINE_WITH_CODE (rtspsrc, "rtspsrc", GST_RANK_NONE,
+GST_ELEMENT_REGISTER_DEFINE_WITH_CODE (rtspsrc, "rtspsrc", GST_RANK_PRIMARY,
     GST_TYPE_RTSPSRC, rtsp_element_init (plugin));
 
 #ifndef GST_DISABLE_GST_DEBUG
@@ -2852,6 +2854,7 @@ gst_rtspsrc_flush (GstRTSPSrc * src, gboolean flush, gboolean playing)
       state = GST_STATE_PAUSED;
   }
   gst_rtspsrc_push_event (src, event);
+  gst_rtspsrc_reset_flows (src);
   gst_rtspsrc_loop_send_cmd (src, cmd, CMD_LOOP);
   gst_rtspsrc_set_state (src, state);
 }
@@ -5227,6 +5230,15 @@ gst_rtspsrc_combine_flows (GstRTSPSrc * src, GstRTSPStream * stream,
    * NOT_LINKED then */
 done:
   return ret;
+}
+
+static void
+gst_rtspsrc_reset_flows (GstRTSPSrc * src)
+{
+  for (GList * streams = src->streams; streams; streams = g_list_next (streams)) {
+    GstRTSPStream *ostream = (GstRTSPStream *) streams->data;
+    ostream->last_ret = GST_FLOW_OK;
+  }
 }
 
 static gboolean

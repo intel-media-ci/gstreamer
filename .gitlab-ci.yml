@@ -1,9 +1,9 @@
 include:
   - project: 'freedesktop/ci-templates'
-    ref: 185ede0e9b9b1924b92306ab8b882a6294e92613
+    ref: "801093be0b88f23c8dbabe9cfce7134548f7ccdc"
     file: '/templates/fedora.yml'
   - project: 'freedesktop/ci-templates'
-    ref: 185ede0e9b9b1924b92306ab8b882a6294e92613
+    ref: "801093be0b88f23c8dbabe9cfce7134548f7ccdc"
     file: '/templates/debian.yml'
   ###
   # IMPORTANT
@@ -45,6 +45,7 @@ variables:
     -Dlibnice:examples=disabled
     -Dlibnice:gupnp=disabled
     -Dopenh264:tests=disabled
+    -Dgst-plugins-good:soup-lookup-dep=true
     -Dpygobject:tests=false
     -Dpython=enabled
     -Dlibav=enabled
@@ -161,6 +162,7 @@ gst-indent amd64 docker:
     FDO_DISTRIBUTION_TAG: "$LINT_TAG-$GST_UPSTREAM_BRANCH"
     FDO_DISTRIBUTION_PACKAGES: 'python3-pip git'
     FDO_DISTRIBUTION_EXEC: 'ci/docker/lint/prepare.sh'
+    FDO_USER: "ciuser"
 
 commitlint docker:
   extends:
@@ -214,6 +216,8 @@ gst indent:
   script:
     - ./scripts/check-format-c
     - ./scripts/format-csharp --check
+    # We want both wraps to use the same version, overkill to create a separate job for this
+    - cmp subprojects/gtk-sharp.wrap subprojects/gstreamer-sharp/subprojects/gtk-sharp.wrap
   rules:
     - !reference [.upstream-branch-rules, rules]
     - if: '$CI_PROJECT_NAMESPACE != "gstreamer" || $CI_COMMIT_BRANCH != $GST_UPSTREAM_BRANCH'
@@ -242,6 +246,8 @@ commitlint:
   needs:
     - job: 'commitlint docker'
       artifacts: false
+  before_script:
+    - git config --global --add safe.directory $CI_PROJECT_DIR
   script:
     - echo $CI_MERGE_REQUEST_DIFF_BASE_SHA
     - gitlint --commits $CI_MERGE_REQUEST_DIFF_BASE_SHA..HEAD
@@ -415,7 +421,6 @@ build fedora clang:
       -Dgst-plugins-base:pango=enabled
       -Dgst-plugins-good:cairo=enabled
       -Dgst-plugins-good:soup=enabled
-      -Dgst-plugins-good:soup-lookup-dep=true
       -Dgst-plugins-bad:d3d11-wgc=enabled
   rules:
     - !reference [.upstream-branch-rules, rules]
@@ -483,9 +488,8 @@ build vs2022 amd64 full-static:
       # Setting up a cross build with MSVC is still non-trivial because
       # the --vsenv argument cannot be used to set it up
     - echo $env:MESON_CROSS_ARGS
-    - cmd.exe /C "C:\BuildTools\Common7\Tools\VsDevCmd.bat -host_arch=amd64 -arch=$env:ARCH &&
-        meson setup build $env:MESON_ARGS $env:MESON_CROSS_ARGS &&
-        meson compile -C build --jobs $env:FDO_CI_CONCURRENT"
+    - cmd.exe /C "C:\BuildTools\Common7\Tools\VsDevCmd.bat -host_arch=amd64 -arch=$env:ARCH && meson setup build $env:MESON_ARGS $env:MESON_CROSS_ARGS"
+    - cmd.exe /C "C:\BuildTools\Common7\Tools\VsDevCmd.bat -host_arch=amd64 -arch=$env:ARCH && meson compile -C build --jobs $env:FDO_CI_CONCURRENT"
 
 build vs2022 x86:
   extends: '.build windows cross'
@@ -510,7 +514,6 @@ build vs2022 arm64:
     MESON_CROSS_ARGS: >-
       -Dgst-plugins-base:pango=disabled
       -Dgst-plugins-good:cairo=disabled
-      -Dgst-plugins-good:soup-lookup-dep=false
       -Dgst-devtools:cairo=disabled
       -Dpython=disabled
       -Dintrospection=disabled
@@ -562,7 +565,6 @@ build macos:
           -Dgst-plugins-base:pango=enabled
           -Dgst-plugins-good:cairo=enabled
           -Dgst-plugins-good:soup=enabled
-          -Dgst-plugins-good:soup-lookup-dep=true
 
 # ---- Tests ----- #
 

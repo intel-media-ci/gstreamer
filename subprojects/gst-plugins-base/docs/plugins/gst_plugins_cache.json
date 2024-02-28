@@ -13010,7 +13010,7 @@
                     "GInitiallyUnowned",
                     "GObject"
                 ],
-                "klass": "Codec/Parser/Subtitle",
+                "klass": "Codec/Decoder/Subtitle",
                 "long-name": "SSA Subtitle Parser",
                 "pad-templates": {
                     "sink": {
@@ -13036,7 +13036,7 @@
                     "GInitiallyUnowned",
                     "GObject"
                 ],
-                "klass": "Codec/Parser/Subtitle",
+                "klass": "Codec/Decoder/Subtitle",
                 "long-name": "Subtitle parser",
                 "pad-templates": {
                     "sink": {
@@ -15842,6 +15842,20 @@
                     },
                     "volume": {
                         "blurb": "volume factor, 1.0=100%%",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": true,
+                        "default": "1",
+                        "max": "10",
+                        "min": "0",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gdouble",
+                        "writable": true
+                    },
+                    "volume-full-range": {
+                        "blurb": "volume factor with a full range of values, 1.0=100%%",
                         "conditionally-available": false,
                         "construct": false,
                         "construct-only": false,

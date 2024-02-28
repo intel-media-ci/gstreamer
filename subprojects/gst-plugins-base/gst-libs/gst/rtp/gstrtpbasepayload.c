@@ -114,7 +114,7 @@ static guint gst_rtp_base_payload_signals[LAST_SIGNAL] = { 0 };
 #define DEFAULT_AUTO_HEADER_EXTENSION   TRUE
 
 #define RTP_HEADER_EXT_ONE_BYTE_MAX_SIZE 16
-#define RTP_HEADER_EXT_TWO_BYTE_MAX_SIZE 256
+#define RTP_HEADER_EXT_TWO_BYTE_MAX_SIZE 255
 #define RTP_HEADER_EXT_ONE_BYTE_MAX_ID 14
 #define RTP_HEADER_EXT_TWO_BYTE_MAX_ID 255
 
@@ -1534,6 +1534,9 @@ gst_rtp_base_payload_negotiate (GstRTPBasePayload * payload)
         (GFunc) add_header_ext_to_caps, srccaps);
     GST_OBJECT_UNLOCK (payload);
 
+    g_object_notify_by_pspec (G_OBJECT (payload),
+        gst_rtp_base_payload_extensions_pspec);
+
   ext_out:
     g_ptr_array_unref (to_add);
     g_ptr_array_unref (to_remove);
@@ -1653,8 +1656,7 @@ gst_rtp_base_payload_get_extensions (GstRTPBasePayload * payload,
 
     g_value_set_object (&value, g_ptr_array_index (extensions, i));
 
-    gst_value_array_append_value (out_value, &value);
-    g_value_unset (&value);
+    gst_value_array_append_and_take_value (out_value, &value);
   }
 
   GST_OBJECT_UNLOCK (payload);

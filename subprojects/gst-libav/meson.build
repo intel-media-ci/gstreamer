@@ -1,5 +1,5 @@
 project('gst-libav', 'c',
-  version : '1.23.2.1',
+  version : '1.23.90',
   meson_version : '>= 1.1',
   default_options : [ 'warning_level=1',
                       'buildtype=debugoptimized' ])
@@ -212,7 +212,6 @@ warning_flags = [
   '-Waggregate-return',
   '-Wvla',
   '-Wpointer-arith',
-  '-Werror=deprecated-declarations' # to fail on FFmpeg deprecated usage
 ]
 
 foreach extra_arg : warning_flags

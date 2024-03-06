@@ -1,4 +1,4 @@
-GStreamer 1.23.x development series
+GStreamer 1.25.x development series
 
 WHAT IT IS
 ----------

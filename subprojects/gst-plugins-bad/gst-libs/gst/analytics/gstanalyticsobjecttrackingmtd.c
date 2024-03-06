@@ -24,6 +24,22 @@
 
 #include "gstanalyticsobjecttrackingmtd.h"
 
+/**
+ * SECTION:gstanalyticsobjecttrackingmtd
+ * @title: GstAnalyticsTrackingMtd
+ * @short_description: An analytics metadata for tracking inside a #GstAnalyticsRelationMeta
+ * @symbols:
+ * - GstAnalyticsTrackingMtd
+ * @see_also: #GstAnalyticsMtd, #GstAnalyticsRelationMeta
+ *
+ * This type of metadata holds tracking information. In many cases, it is
+ * desired to track an object across many frames. This type of metadata holds
+ * information about the tracking, for example, it can be used alongside a
+ * #GstAnalyticsODMtd to track an object.
+ *
+ * Since: 1.24
+ */
+
 typedef struct _GstAnalyticsTrackingMtdData GstAnalyticsTrackingMtdData;
 
 /**
@@ -53,6 +69,7 @@ static const GstAnalyticsMtdImpl tracking_impl = {
 
 /**
  * gst_analytics_tracking_mtd_get_mtd_type:
+ *
  * Returns: id representing the type of GstAnalyticsRelatableMtd
  *
  * Get the opaque id identifying the relatable type
@@ -189,7 +206,7 @@ gst_analytics_relation_meta_add_tracking_mtd (GstAnalyticsRelationMeta *
  *
  * Returns: TRUE if successful.
  *
- * Since 1.24
+ * Since: 1.24
  */
 gboolean
 gst_analytics_relation_meta_get_tracking_mtd (GstAnalyticsRelationMeta * meta,

@@ -893,8 +893,8 @@ _enc_create_sink_caps (GstMsdkContext * context, guint codec_id,
   GstCaps *caps, *dma_caps, *raw_caps;
 
 #ifndef _WIN32
-  caps = gst_caps_from_string
-      ("video/x-raw(memory:VAMemory), format=(string){ NV12 }");
+  caps = gst_caps_from_string ("video/x-raw(memory:VAMemory)");
+  gst_caps_set_value (caps, "format", supported_formats);
   dma_caps = _create_dma_drm_caps (context, GST_MSDK_JOB_ENCODER,
       supported_formats);
   gst_caps_append (caps, dma_caps);
@@ -1215,8 +1215,8 @@ _dec_create_src_caps (GstMsdkContext * context,
     return NULL;
 
 #ifndef _WIN32
-  caps = gst_caps_from_string
-      ("video/x-raw(memory:VAMemory), format=(string){ NV12 }");
+  caps = gst_caps_from_string ("video/x-raw(memory:VAMemory)");
+  gst_caps_set_value (caps, "format", supported_formats);
   dma_caps = _create_dma_drm_caps (context, GST_MSDK_JOB_DECODER,
       supported_formats);
   gst_caps_append (caps, dma_caps);
@@ -1462,8 +1462,8 @@ _vpp_create_caps (GstMsdkContext * context,
   GstCaps *caps, *dma_caps, *raw_caps;
 
 #ifndef _WIN32
-  caps = gst_caps_from_string ("video/x-raw(memory:VAMemory), "
-      "format=(string){ NV12, VUYA, P010_10LE }");
+  caps = gst_caps_from_string ("video/x-raw(memory:VAMemory)");
+  gst_caps_set_value (caps, "format", supported_fmts);
   dma_caps = _create_dma_drm_caps (context, GST_MSDK_JOB_VPP, supported_fmts);
   gst_caps_append (caps, dma_caps);
 #else

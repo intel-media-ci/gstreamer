@@ -29,6 +29,7 @@
  * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+// empty test
 #include "msdk.h"
 #include "gstmsdkcontext.h"
 

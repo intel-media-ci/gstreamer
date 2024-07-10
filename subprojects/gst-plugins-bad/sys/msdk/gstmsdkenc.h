@@ -98,6 +98,7 @@ enum
   GST_MSDKENC_PROP_LOWDELAY_BRC,
   GST_MSDKENC_PROP_MAX_FRAME_SIZE_I,
   GST_MSDKENC_PROP_MAX_FRAME_SIZE_P,
+  GST_MSDKENC_PROP_STRING_PARAMS,
   GST_MSDKENC_PROP_MAX,
 };
 
@@ -125,6 +126,9 @@ struct _GstMsdkEnc
 
   mfxExtBuffer *extra_params[MAX_EXTRA_PARAMS];
   guint num_extra_params;
+
+  mfxExtBuffer **extra_string_params;
+  guint num_extra_string_params;
 
   /* Additional encoder coding options */
   mfxExtCodingOption2 option2;
@@ -170,6 +174,7 @@ struct _GstMsdkEnc
   guint max_frame_size_i;
   guint max_frame_size_p;
   gint16 lowdelay_brc;
+  gchar *string_params;
 
   GstClockTime start_pts;
   GstClockTime frame_duration;

@@ -803,12 +803,8 @@ gst_msdkdec_set_src_caps (GstMsdkDec * thiz, gboolean need_allocation)
 
   if (need_allocation) {
     /* Find allocation width and height */
-    width =
-        GST_ROUND_UP_16 (thiz->param.mfx.FrameInfo.Width ? thiz->param.mfx.
-        FrameInfo.Width : GST_VIDEO_INFO_WIDTH (&thiz->output_state->info));
-    height =
-        GST_ROUND_UP_32 (thiz->param.mfx.FrameInfo.Height ? thiz->param.mfx.
-        FrameInfo.Height : GST_VIDEO_INFO_HEIGHT (&thiz->output_state->info));
+    width = GST_VIDEO_INFO_WIDTH (&thiz->output_state->info);
+    height = GST_VIDEO_INFO_HEIGHT (&thiz->output_state->info);
 
     /* set allocation width and height in allocation_caps,
      * which may or may not be similar to the output_state caps */
